@@ -1,18 +1,8 @@
 
-#include <zephyr.h>
 #include <zephyr/types.h>
-#include <sys/printk.h>
-#include <device.h>
-#include <drivers/pwm.h>
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
-#include <kernel.h>
-#include <bluetooth/services/lbs.h>
-#include <bluetooth/services/bas.h>
-#include <settings/settings.h>
+#include <zephyr/kernel.h>
+
+#include <zephyr/settings/settings.h>
 #include "common.h"
 
 
@@ -110,7 +100,7 @@ struct batteryInfo {
     uint8_t battery_value; // user-defined value to pass as input to the work-queue
 }; // work queue structure used to execute Batter level notification in a interrupt service handler initiated by a timer. 
 extern struct batteryInfo my_battery ;  // work-queue instance for batter level
- int bq274xx_command_reg_read( uint8_t reg_addr,int16_t *val);
+ int bq274xx_command_reg_read(uint8_t reg_addr, uint16_t* val);
  int bq274xx_control_reg_write(uint16_t subcommand);
  int bq274xx_command_reg_write( uint8_t command,
 				     uint8_t data);

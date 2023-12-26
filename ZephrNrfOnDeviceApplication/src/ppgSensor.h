@@ -2,11 +2,7 @@
 #define PPGSENSOR_H_
 #include "arm_const_structs.h"
 #include "arm_math.h"
-#include <zephyr.h>
-#include <drivers/spi.h>
-#include <fs/fs.h>
-#include <fs/littlefs.h>
-#include <storage/flash_map.h>
+#include <zephyr/kernel.h>
 
 #define READMASTER 0x80
 #define WRITEMASTER 0x00

@@ -4,14 +4,14 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <soc.h>
 #include "common.h"
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #define TFMICRO_DATA_LEN 66
 #define PPG_DATA_LEN 18

@@ -1,0 +1,49 @@
+
+
+This file contains a summary list of all the changes that were made when updating this project
+from MotionSense3 to MotionSense4. It should be used as a reference guide for other devlopers who may want to 
+back port additional features from 3 to 4, or vice versa; go back from 4 to 3, but keep some other code from 4. 
+
+
+NrfConnect SDK 1.4 -> NrfConnect SDK 2.5
+
+
+Simplified Cmake to use GLOB_RECURSE,
+deleted out all find cxx directories, and compiler options, since those were only necessary for tensorflow lite micro,
+which we aren't using anymore
+
+KConfigs
+Commented out all SPI1=y, SPI2=y, since these are now specified in the app overlays instead.
+
+Changed all references to <zephyr.h> to <zephyr/kernel.h>
+https://github.com/zephyrproject-rtos/zephyr/issues/49578
+as per this commit, they are equivalent, and zephyr.h was deprecated.
+
+The include directory for zephyr has now moved to be outside the folder "zephyr".
+As such, all zephyr includes have to include the zephyr folder path
+This means pretyy much everything has been renamed: bluetooth/xx.h is now
+zephyr/bluetooth/xx.h, driver/spi.h is now zephyr/driver/spi.h... etc for every
+single include file.
+
+spi_cs_control struct changed the fields. the GPIO information is now inside a seperate struct called gpio_dt_spec.
+and it is defined as:
+
+struct gpio_dt_spec {
+	/** GPIO device controlling the pin */
+	const struct device *port;
+	/** The pin's number on the device */
+	gpio_pin_t pin;
+	/** The pin's configuration flags as specified in devicetree */
+	gpio_dt_flags_t dt_flags;
+};
+
+
+the fields for both imu_cs and ppg_cs were changed to match this.
+the field for gpio_dev has changed name to 
+
+
+
+bq274xx_command_reg_read: in .h file function declaration features int16_t, however in the 
+implementation it is uint16_t. corrected to uint because that seemed to be the type it was actually called with.
+
+

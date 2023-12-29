@@ -47,3 +47,40 @@ bq274xx_command_reg_read: in .h file function declaration features int16_t, howe
 implementation it is uint16_t. corrected to uint because that seemed to be the type it was actually called with.
 
 
+
+
+changed all device object checking calls (gpioHandle_CS_ppg == NULL) to the better specified check: !device_is_ready(gpioHandle_CS_ppg)
+this was done for most device objects, ppg gpio was just used for demonstration purposes.
+
+
+Timers apparently don't work very well (crash?) when setting frequency with enums, altered code to just manually enter the 1Mhz frequency
+
+
+
+The following KConfigs were added to provide USB and Filesystem Support:
+
+
+# flash config
+CONFIG_FILE_SYSTEM=y
+CONFIG_DISK_DRIVER_FLASH=y
+CONFIG_FILE_SYSTEM_LITTLEFS=y
+#CONFIG_FAT_FILESYSTEM_ELM=y
+
+# not sure what this is
+CONFIG_MPU_ALLOW_FLASH_WRITE=y
+
+#USB related configs
+CONFIG_USB_DEVICE_STACK=y
+CONFIG_USB_DEVICE_PRODUCT="Zephyr MSC sample"
+CONFIG_USB_DEVICE_PID=0x0008
+
+CONFIG_TEST_RANDOM_GENERATOR=y
+CONFIG_TIMER_RANDOM_GENERATOR=y
+CONFIG_USB_DRIVER_LOG_LEVEL_ERR=y
+CONFIG_USB_MASS_STORAGE=y
+CONFIG_APP_MSC_STORAGE_FLASH_LITTLEFS=y
+CONFIG_USB_DEVICE_LOG_LEVEL_ERR=y
+CONFIG_USB_MASS_STORAGE_LOG_LEVEL_ERR=y
+CONFIG_USB_DEVICE_INITIALIZE_AT_BOOT=n
+
+

@@ -256,10 +256,8 @@ void spiWrite_registerPPG(uint8_t * tx_buffer, uint8_t txLen){
 void ppg_config(void){
   if (ppgConfig.isEnabled) {
     //fileOpen();
-    uint32_t dataFlash = fileRead();
-    fileClose();
-    ppgConfig.green_intensity = (dataFlash&0x0000FF00) >>8;
-    ppgConfig.infraRed_intensity = (dataFlash&0x000000FF);
+    ppgConfig.green_intensity = (0x0000FF00) >>8;
+    ppgConfig.infraRed_intensity = (0x000000FF);
     
     uint8_t rxLen,txLen; 
     // Read chip ID 
@@ -600,10 +598,8 @@ void ppg_led_currentUpdate(void){
 	}
       }
       if(adapt_counterCh2 ==adaptIterMax && adapt_counterCh2 ==adaptIterMax ){
-        fileOpen();
+        
         uint32_t dataFlash = (ppgConfig.green_intensity)<<8 + ppgConfig.infraRed_intensity;
-        fileWrite(dataFlash);
-        fileClose();
       }
     }
   }
@@ -630,22 +626,23 @@ void read_ppg_fifo_buffer(struct k_work *item){
   float channel1A_out, channel1B_out, channel2A_out, channel2B_out;
   float_cast buff_val_filtered;
   uint32_cast buff_val_raw;
-  int i;
-  uint8_t j, k;
+  
+  
   uint8_t sampleCnt[5] = {0};
 		
-  // Reading the total number of PPG samples
+  // Reading the total number of PPG samples first
   cmd_array[0] = PPG_FIFO_DATA_COUNTER;
   cmd_array[1] = READMASTER;
   txLen=3;
   rxLen=3;
   spiRead_registerPPG(cmd_array, txLen, sampleCnt, rxLen);
     
-  // Reading the PPG samples
+  // Reading the actual PPG samples
   cmd_array[0] = PPG_FIFO_DATA;
-
-  
   spiRead_registerPPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
+
+
+  int i, j, k;
   for (i=0; i<sampleCnt[2]; i++){
     for (j=0; j <= 9; j=j+3){
       tag = (read_array[i*12+j+2] & 0xF8) >>3;

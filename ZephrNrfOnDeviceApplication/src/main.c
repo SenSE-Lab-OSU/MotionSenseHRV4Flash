@@ -13,18 +13,19 @@
 #include <nrfx_timer.h>
 #include <nrfx.h>
 #include <nrfx_uarte.h>
-
+#include <zephyr/logging/log.h>
+#include <zephyr/usb/usb_device.h>
 #include "batteryMonitor.h"
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
+#include "filesystem/zephyrfilesystem.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <zephyr/settings/settings.h>
 
 
 //dfu configuration
@@ -41,8 +42,9 @@
 #endif
 #endif
 
+LOG_MODULE_REGISTER(main);
 
-
+#define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS   1000
@@ -50,22 +52,14 @@ uint8_t gyro_first_read = 0;
 uint8_t magneto_first_read = 0;  
 uint8_t ppgRead = 0;
 bool ppgTFPass = false;
+
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
-#define READMASTER 0x80
-#if DT_NODE_HAS_STATUS(LED0_NODE, okay)
-//#define LED0	DT_GPIO_LABEL(LED0_NODE, gpios)
-#define LED0 DEVICE_DT_NAME(LED0_NODE)
-#define PIN	DT_GPIO_PIN(LED0_NODE, gpios)
-#define FLAGS	DT_GPIO_FLAGS(LED0_NODE, gpios)
-#else
-/* A build error here means your board isn't set up to blink an LED. */
-#error "Unsupported board: led0 devicetree alias is not defined"
-#define LED0	""
-#define PIN	0
-#define FLAGS	0
-#endif
 
+//#define LED0	DT_GPIO_LABEL(LED0_NODE, gpios)
+//#define LED0 DEVICE_DT_NAME(LED0_NODE)
+#define LED_PIN	DT_GPIO_PIN(LED0_NODE, gpios)
+#define LED_FLAGS	DT_GPIO_FLAGS(LED0_NODE, gpios)
 
 #define WORKQUEUE_STACK_SIZE 1024
 
@@ -75,7 +69,6 @@ const struct device *gpioHandle_CS_ppg;
 struct spi_cs_control imu_cs = {
 .delay = 0, 
 .gpio = {.pin = 23, .dt_flags=GPIO_ACTIVE_LOW} 
-
 };
 
 // the gpio struct now requires a port? not sure what to do in this case
@@ -103,8 +96,7 @@ struct spi_config spi_cfg_imu = {
         .frequency = 1000000,
 	.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
 		     SPI_MODE_CPOL | SPI_MODE_CPHA,
-	.slave = 0,
-	.cs=&imu_cs,
+	.slave = 0
 };
 // SPI Mode-3 PPG
 struct spi_config spi_cfg_ppg = {
@@ -112,7 +104,11 @@ struct spi_config spi_cfg_ppg = {
 	.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
 		     SPI_MODE_CPOL | SPI_MODE_CPHA,
 	.slave = 0,
-	.cs=&ppg_cs,
+	/* only in version 2.5: .cs= {
+.delay = 0, 
+.gpio = {.pin = 15, .dt_flags=GPIO_ACTIVE_LOW, }
+},
+*/
 };
 
 struct ppg_configData ppgConfig;
@@ -188,6 +184,7 @@ struct bt_conn *my_connection;
 
 // Setting up the device information service
 static int settings_runtime_load(void){
+  #ifdef CONFIG_BOOTLOADER_MCUBOOT
   settings_runtime_set("bt/dis/model",
     DIS_MODEL,DIS_MODEL_LEN);
   settings_runtime_set("bt/dis/manuf",
@@ -196,6 +193,8 @@ static int settings_runtime_load(void){
     DIS_FW_REV_STR,DIS_FW_REV_STR_LEN);
   settings_runtime_set("bt/dis/hw",
     DIS_HW_REV_STR,DIS_HW_REV_STR_LEN);
+  #endif
+
   return 0;
 }
 
@@ -217,8 +216,9 @@ printk("timer init\n");
           .interrupt_priority = TIMER_PRIORITY,
           .p_context = NULL,
   };  
-
-  err = nrfx_timer_init(&timer_global, &timer_cfg, timer_handler);
+  uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
+  nrfx_timer_config_t config = timer_cfg; //NRFX_TIMER_DEFAULT_CONFIG(1000000);
+  err = nrfx_timer_init(&timer_global, &config, timer_handler);
   if (err != NRFX_SUCCESS) {
           printk("nrfx_timer_init failed with: %d\n", err);
   }
@@ -274,7 +274,8 @@ static void connected(struct bt_conn *conn, uint8_t err){
 static void disconnected(struct bt_conn *conn, uint8_t reason){
   // Stop timer and do all the cleanup
   printk("Disconnected (reason %u)\n", reason);
-  timer_deinit();	
+  timer_deinit();
+  //usb_enable(NULL);	
   connectedFlag=false;
 }
 
@@ -376,35 +377,41 @@ static void ble_init(void){
 // which is defined by the macro-variable TIMER_MS
 static void spi_init(void){
   uint32_t dataFlash;
-  const char* const spiName_imu = "SPI_1";
-  const char* const spiName_ppg = "SPI_4";
- 
-  spi_dev_imu = device_get_binding(spiName_imu);
-  gpioHandle_CS_IMU= device_get_binding("GPIO_0");
+  // device_get_binding is used for runtime checking of devices. We can still use it but we have to be carefull to select the right names
+  const char* const spiName_imu = "spi@9000";
+  const char* const spiName_ppg = "spi@a000";
+                
+  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi1)); //device_get_binding(spiName_imu);
+  gpioHandle_CS_IMU = DEVICE_DT_GET(DT_NODELABEL(gpio0));
         
   spi_dev_ppg = device_get_binding(spiName_ppg);
-  gpioHandle_CS_ppg= device_get_binding("GPIO_1");
+  gpioHandle_CS_ppg= DEVICE_DT_GET(DT_NODELABEL(gpio1));
                
-  if (gpioHandle_CS_IMU == NULL) {
+  if (!device_is_ready(gpioHandle_CS_IMU)) {
     printk("Could not get GPIO_0\n");
     return;
   }
 	
-  if (gpioHandle_CS_ppg == NULL) {
+  if (!device_is_ready(gpioHandle_CS_ppg)) {
     printk("Could not get GPIO_1\n");
     return;
   }
-	
-  imu_cs.gpio.port=gpioHandle_CS_IMU;
-  if (spi_dev_imu == NULL) {
+	if (spi_dev_imu == NULL || !device_is_ready(spi_dev_imu)) {
     printk("Could not get %s device\n", spiName_imu);
     return;
   }
-  ppg_cs.gpio.port=gpioHandle_CS_ppg;
-  if (spi_dev_ppg == NULL) {
+  
+  if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg)) {
     printk("Could not get %s device\n", spiName_ppg);
     return;
   }
+
+  imu_cs.gpio.port = gpioHandle_CS_IMU;
+  ppg_cs.gpio.port = gpioHandle_CS_ppg;
+  spi_cfg_imu.cs = &imu_cs;
+  spi_cfg_ppg.cs =&ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
+
+  
   ppgConfig.isEnabled = true;
   ppgConfig.sample_avg=0x08;
   ppgConfig.green_intensity = 0x28;
@@ -466,6 +473,7 @@ static void i2c_init(void){
 // which is defined by the macro-variable TIMER_MS
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
+  LOG_INF("Timer Executing");
   if(connectedFlag == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
@@ -477,14 +485,14 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
         k_work_submit(&my_motionSensor.work);
 
         // Executes every 2 seconds to send battery level
-        if(global_counter % 400 ==0) 
-          k_work_submit(&my_battery.work);
+        if(global_counter % 400 == 0) 
+          //k_work_submit(&my_battery.work);
     
         if(ppgRead  == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = gyroData1.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
-          k_work_submit(&my_ppgSensor.work);
+          //k_work_submit(&my_ppgSensor.work);
         }  
         // Executes every 8 seconds to send compressed signal
         
@@ -502,34 +510,35 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
 
 void main(void){
 
+  printk("Starting Application... \n");
+  LOG_INF("Starting Logging...\n");
+  setup_disk();
   //this initializes FOTA
   #ifdef INCLUDE_DFU
+  #ifdef CONFIG_BOOTLOADER_MCUBOOT
   os_mgmt_register_group();
   
   img_mgmt_register_group();
   smp_bt_register();
   #endif
+  #endif
 
-
-  const struct device *dev;
+  
+  
   bool led_is_on = true;
   int ret;
 
   IRQ_CONNECT(TIMER1_IRQn, TIMER_PRIORITY,
     nrfx_timer_1_irq_handler, NULL, 0);
 
-  dev = device_get_binding(LED0);
-  if (dev == NULL)
-    return;
-	
-  ret = gpio_pin_configure(dev, PIN, GPIO_OUTPUT_ACTIVE | FLAGS);
-  if (ret < 0)
-    return;
-
-  fs_mount_init();
+  
+  
+  
   spi_init();
-  uint8_t tx_buffer[4],rx_buffer[4];
+  
 
+
+  uint8_t tx_buffer[4],rx_buffer[4];
   tx_buffer[0] = READMASTER | 0x00;
   tx_buffer[1] =0xFF;
   uint8_t txLen=2,rxLen=2;
@@ -549,9 +558,9 @@ void main(void){
   motion_config();
   i2c_init(); 
   
-  k_work_q_start(&my_work_q, my_stack_area,
-    K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY);
-               
+  //k_work_q_start(&my_work_q, my_stack_area,
+  //  K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY);
+     
   k_work_init(&my_battery.work, bas_notify);     
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
@@ -559,17 +568,31 @@ void main(void){
   k_work_init(&my_magnetoSensor.work, magneto_notify);
   k_work_init(&my_orientaionSensor.work, orientation_notify);
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);
-  ble_init();
   
+  
+  //TODO: make the file system init properly
+  //k_work_init(&work_item.work, work_write);
+
+  ble_init();
 
 
+  //dev = device_get_binding(LED0);
+  //dev = DEVICE_DT_GET(LED0_NODE);
+ // if (dev == NULL || !device_is_ready(dev)){
+  ret = gpio_pin_configure(gpioHandle_CS_IMU, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
+  if (ret < 0){
+    printk("Error: Can't initialize LED");
+    //return;
+  }
+
+  
   while (1) {
     printk("%d\n", connectedFlag); 
     if(!connectedFlag)
       led_is_on = !led_is_on;
     else
-      led_is_on = 0;
-    gpio_pin_set(dev, PIN, (int)led_is_on);
+      led_is_on = 1;
+    gpio_pin_set(gpioHandle_CS_IMU, LED_PIN, (int)led_is_on);
     k_msleep(SLEEP_TIME_MS);
   }
 }

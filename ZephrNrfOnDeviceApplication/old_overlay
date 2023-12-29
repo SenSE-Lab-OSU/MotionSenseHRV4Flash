@@ -10,6 +10,9 @@
 	status = "disabled";
 	compatible = "nordic,nrf-twim";
 };
+
+
+
 &i2c0 {
 	status = "okay";
 	compatible = "nordic,nrf-twim";

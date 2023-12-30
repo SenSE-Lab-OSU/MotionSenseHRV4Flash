@@ -275,7 +275,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason){
   // Stop timer and do all the cleanup
   printk("Disconnected (reason %u)\n", reason);
   timer_deinit();
-  //usb_enable(NULL);	
+  close_all_files();
+  usb_enable(NULL);	
+  
   connectedFlag=false;
 }
 
@@ -381,7 +383,7 @@ static void spi_init(void){
   const char* const spiName_imu = "spi@9000";
   const char* const spiName_ppg = "spi@a000";
                 
-  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi1)); //device_get_binding(spiName_imu);
+  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); //device_get_binding(spiName_imu);
   gpioHandle_CS_IMU = DEVICE_DT_GET(DT_NODELABEL(gpio0));
         
   spi_dev_ppg = device_get_binding(spiName_ppg);
@@ -473,11 +475,11 @@ static void i2c_init(void){
 // which is defined by the macro-variable TIMER_MS
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
-  LOG_INF("Timer Executing");
+  LOG_DBG("Timer Executing");
   if(connectedFlag == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
-
+        
         // submit work to read gyro, acc, magnetometer and orientation
         my_motionSensor.magneto_first_read = magneto_first_read;
         my_motionSensor.pktCounter = global_counter;
@@ -499,6 +501,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
         magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
         gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
+        
         break;
 
       default:
@@ -542,8 +545,14 @@ void main(void){
   tx_buffer[0] = READMASTER | 0x00;
   tx_buffer[1] =0xFF;
   uint8_t txLen=2,rxLen=2;
+  if (device_is_ready(spi_dev_imu)){
   spiRead_registerIMU(tx_buffer, txLen, rx_buffer, rxLen);
   printk("Chip ID from motion sensor=%x\n",rx_buffer[1]);
+  }
+  else {
+    LOG_WRN("IMU not ready, setup was avoided");
+  }
+  
 	
   tx_buffer[0] = 0xFF;
   tx_buffer[1] = READMASTER;
@@ -551,9 +560,13 @@ void main(void){
 	
   txLen=3;
   rxLen=3;
+  if (device_is_ready(spi_dev_ppg)){
   spiRead_registerPPG(tx_buffer, txLen, rx_buffer, rxLen);
   printk("Chip ID from ppg sensor=%x,%x,%x\n",rx_buffer[0],rx_buffer[1],rx_buffer[2]);
-  
+  }
+  else {
+    LOG_WRN("ppg not ready, setup was avoided");
+  }
   ppg_config();
   motion_config();
   i2c_init(); 

@@ -24,25 +24,29 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION		storage_partition
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 
-#define GLOBAL_BUFFER_SIZE 500
+#define MAX_BUFFER_SIZE 500
 
 //data limit per file in bytes
-static int data_limit = GLOBAL_BUFFER_SIZE;
+static int data_limit = MAX_BUFFER_SIZE;
 static int create_newfile_limit = 500;
 
 
 typedef struct memory_container {
 	void* address;
 	size_t size;
+	enum sensor_type sensor;
 	struct k_work work;
 
 } memory_container;
 
-
+typedef struct k_sensor_upload {
+	enum sensor_type sensor;
+	struct k_work work;
+};
 
 
 typedef struct data_upload_buffer {
-	char data_upload_buffer[GLOBAL_BUFFER_SIZE];
+	char data_upload_buffer[MAX_BUFFER_SIZE];
 	size_t current_size;
 } data_upload_buffer;
 
@@ -64,6 +68,7 @@ static struct fs_file_t file;
 
 
 typedef struct MotionSenseFile {
+	int max_size;
 	int data_counter;
 	char file_name[50];
 	struct fs_file_t self_file;
@@ -78,7 +83,9 @@ static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file;
 
-MotionSenseFile accel_file;
+MotionSenseFile accel_file = {
+	.max_size = 840
+};
 
 static int current_file_count;
 
@@ -115,7 +122,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 
 
-	if (!MSenseFile->first_write){
+	if (true){
 		
 		fs_file_t_init(&MSenseFile->self_file);
 		
@@ -156,6 +163,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		//printk("sucessfully wrote file, bytes written = %i ! \n", total_written);
 		data_counter += total_written;
 	}
+	fs_close(&MSenseFile->self_file);
 }
 
 
@@ -211,19 +219,37 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	write_to_file(container->address, container->size);
+	sensor_write_to_file(container->address, container->size, container->sensor);
 
 }
 
-void submit_write(const void* data, size_t size){
+void submit_write(const void* data, size_t size, enum sensor_type type){
 	memory_container work_item;
 	work_item.address = data;
 	work_item.size = size;
+	work_item.sensor = type;
 	k_work_submit(&work_item.work);
 
 }
 
-
+void store_data(const void* data, size_t size, enum sensor_type sensor){
+	LOG_INF("Store data called");
+	MotionSenseFile* MSenseFile;
+	if (sensor == ppg){
+		MSenseFile = &ppg_file;
+	}
+	else if (sensor == accelorometer){
+		MSenseFile = &accel_file;
+	}
+	void* address_to_write = &MSenseFile->buffer.data_upload_buffer[MSenseFile->buffer.current_size];
+	void* result = memcpy(address_to_write, data, size);
+	MSenseFile->buffer.current_size += size;
+	if (MSenseFile->buffer.current_size >= MSenseFile->max_size){
+		LOG_INF("Submitting File!");
+		submit_write(MSenseFile->buffer.data_upload_buffer, MSenseFile->max_size, sensor);
+		MSenseFile->buffer.current_size = 0;
+	}
+}
 
 int close_all_files(){
 

@@ -2,6 +2,7 @@
 
 #include "imuSensor.h"
 #include "common.h"
+#include "filesystem/zephyrfilesystem.h"
 #include "BLEService.h"
 #include "ppgSensor.h"
 #include <stdio.h>
@@ -482,7 +483,7 @@ void motion_data_timeout_handler(struct k_work *item){
   uint16_t pktCounter = the_device->pktCounter;
   uint8_t magneto_first_readTemp = the_device->magneto_first_read;
   uint8_t gyro_first_readTemp = the_device->gyro_first_read;
-  
+  printk("gyro: %i \n", gyro_first_readTemp);
   uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER,SPI_FILL};	// SPI burst read holders.
   uint16_t checkMag=0;
   uint8_t burst_tx[13] = {
@@ -572,6 +573,9 @@ void motion_data_timeout_handler(struct k_work *item){
     accData1.accy_val = accelY;
     accData1.accz_val = accelZ;
 
+
+
+
     for (uint8_t i=0; i<3; i++)
       quaternionResult_1[i] = 0.0;	  
     quaternionResult_1[3] = 1.0;
@@ -584,7 +588,13 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
     blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
-   
+    
+    int16_t accel_and_gyro[6] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ};
+    int16_t accel_and_gyrotest = {1, 2, 3, 4, 5, 6};
+    store_data(accel_and_gyrotest, sizeof(accel_and_gyro), 1);
+
+
+
     //this function seperately fills blePktMotion with the desired size
     //TODO: Make sure packets are in correct size/order
     ppg_bluetooth_fill(blePktMotion);

@@ -38,3 +38,6 @@ extern uint8_t blePktTFMicro[ble_tfMicroPktLength];
 extern struct bq274xx_data batteryMonitor;
 extern struct bq274xx_config batteryMonitorConfig;
 #endif
+
+
+

@@ -13,6 +13,15 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 
+extern uint8_t gyro_first_read;
+extern uint8_t magneto_first_read;  
+extern uint8_t ppgRead;
+extern bool ppgTFPass;
+
+extern bool connectedFlag;
+extern bool collecting_data;
+
+
 #define TFMICRO_DATA_LEN 66
 #define PPG_DATA_LEN 18
 #define PPG_DATA_UNFILTER_LEN 12
@@ -130,6 +139,9 @@ struct motionSendInfo {
 }; 
 extern struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
 extern struct motionSendInfo my_motionData;  // work-queue instance for tflite notifications
+
+void connected(struct bt_conn *conn, uint8_t err);
+void disconnected(struct bt_conn *conn, uint8_t reason);
 
 int tfMicro_service_init(void);
 

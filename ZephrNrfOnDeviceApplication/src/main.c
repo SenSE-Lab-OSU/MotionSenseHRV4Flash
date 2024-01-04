@@ -10,8 +10,8 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
-#include <nrfx_timer.h>
 #include <nrfx.h>
+#include <nrfx_timer.h>
 #include <nrfx_uarte.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
@@ -48,10 +48,7 @@ LOG_MODULE_REGISTER(main);
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS   1000
-uint8_t gyro_first_read = 0;
-uint8_t magneto_first_read = 0;  
-uint8_t ppgRead = 0;
-bool ppgTFPass = false;
+
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -113,21 +110,16 @@ struct spi_config spi_cfg_ppg = {
 
 struct ppg_configData ppgConfig;
 struct ppgData ppgData1;
-static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
+
 const struct device *spi_dev_ppg,*spi_dev_imu;
 const struct device *i2c_dev;
 struct bq274xx_data batteryMonitor;
 struct bq274xx_config batteryMonitorConfig;
 
-struct ppgInfo my_ppgSensor;
-uint8_t blePktTFMicro[ble_tfMicroPktLength];
-struct batteryInfo my_battery ;  // work-queue instance for batter level
 
-struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
-struct motionInfo my_motionSensor; // work-queue instance for motion sensor
-struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
-struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
-struct ppgDataInfo my_ppgDataSensor;
+uint8_t blePktTFMicro[ble_tfMicroPktLength];
+
+
 
 struct accData accData1;
 struct gyroData gyroData1;
@@ -153,8 +145,7 @@ struct orientation_config orientationConfig;
 #define DIS_MODEL		 CONFIG_BT_DIS_MODEL
 #define DIS_MODEL_LEN		 (sizeof(DIS_MODEL))
 
-#define TIMER_MS 5
-#define TIMER_PRIORITY 1
+
 #define WORKQUEUE_PRIORITY 1
 
 #define RUN_STATUS_LED          DK_LED1
@@ -163,13 +154,13 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 struct k_work_q my_work_q;
 
-void timer_handler(nrf_timer_event_t, void*);
+
 
 static K_SEM_DEFINE(ble_init_ok, 0, 1);
 
 uint16_t global_counter;
 
-static bool connectedFlag=false;
+
 static const struct bt_data ad[] = {
   BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
   BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
@@ -198,88 +189,8 @@ static int settings_runtime_load(void){
   return 0;
 }
 
-static void timer_deinit(void){
-  nrfx_timer_disable(&timer_global);
-  nrfx_timer_uninit(&timer_global);	
-  motion_sleep();
-  ppg_sleep();
-}
-
-static void timer_init(void){
-printk("timer init\n");
-  uint32_t time_ticks;
-  nrfx_err_t          err;
-  nrfx_timer_config_t timer_cfg = {
-          .frequency = NRF_TIMER_FREQ_1MHz,
-          .mode      = NRF_TIMER_MODE_TIMER,
-          .bit_width = NRF_TIMER_BIT_WIDTH_24,
-          .interrupt_priority = TIMER_PRIORITY,
-          .p_context = NULL,
-  };  
-  uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
-  nrfx_timer_config_t config = timer_cfg; //NRFX_TIMER_DEFAULT_CONFIG(1000000);
-  err = nrfx_timer_init(&timer_global, &config, timer_handler);
-  if (err != NRFX_SUCCESS) {
-          printk("nrfx_timer_init failed with: %d\n", err);
-  }
-  else
-          printk("nrfx_timer_init success with: %d\n", err);
-  time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
-  printk("time ticks = %d\n", time_ticks);
 
 
-  nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks \ 
-   , NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
-
-  nrfx_timer_enable(&timer_global);
-  printk("timer initialized\n");
-}
-
-static void connected(struct bt_conn *conn, uint8_t err){
-  struct bt_conn_info info; 
-  char addr[BT_ADDR_LE_STR_LEN];
-
-  my_connection = conn;
-  if (err) {
-    printk("Connection failed (err %u)\n", err);
-    return;
-  }
-  else if(bt_conn_get_info(conn, &info))
-    printk("Could not parse connection info\n");
-  else{  
-  // Start the timer and stop advertising and initialize all the modules
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    printk("Connection established!		\n\
-      Connected to: %s					\n\
-      Role: %u							\n\
-      Connection interval: %u				\n\
-      Slave latency: %u					\n\
-      Connection supervisory timeout: %u	\n"
-      , addr, info.role, info.le.interval, info.le.latency, info.le.timeout);
-		
-    ppg_config();
-    motion_config();
-    
-    connectedFlag=true;
-    
-    timer_init();
-    global_counter = 0;
-    gyro_first_read = 0;
-    magneto_first_read = 0;  
-    ppgRead = 0;
-    ppgTFPass = false;
-  }
-}
-
-static void disconnected(struct bt_conn *conn, uint8_t reason){
-  // Stop timer and do all the cleanup
-  printk("Disconnected (reason %u)\n", reason);
-  timer_deinit();
-  close_all_files();
-  usb_enable(NULL);	
-  
-  connectedFlag=false;
-}
 
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param){
   //If acceptable params, return true, otherwise return false.
@@ -441,7 +352,8 @@ static void spi_init(void){
   gyroConfig.sensitivity = GYRO_FS_SEL_250;
   orientationConfig.isEnabled = true;
   orientationConfig.txPacketEnable = true;
-  magnetoConfig.isEnabled = true;
+  
+  magnetoConfig.isEnabled = false;
   magnetoConfig.txPacketEnable = true;
   tfMicroCoonfig.isEnabled = true;
   tfMicroCoonfig.txPacketEnable = true;
@@ -455,6 +367,8 @@ static void spi_init(void){
   configRead[4] = 0x12;
   configRead[5] = 0x44;
 }
+
+
 static void i2c_init(void){
   printk("The I2C Init started\n");
   i2c_dev = device_get_binding("I2C_0");
@@ -474,42 +388,6 @@ static void i2c_init(void){
 // Timer handler that periodically executes commands with a period, 
 // which is defined by the macro-variable TIMER_MS
 
-void timer_handler(nrf_timer_event_t event_type, void* p_context){
-  LOG_DBG("Timer Executing");
-  if(connectedFlag == true){
-    switch (event_type){
-      case NRF_TIMER_EVENT_COMPARE0:
-        
-        // submit work to read gyro, acc, magnetometer and orientation
-        my_motionSensor.magneto_first_read = magneto_first_read;
-        my_motionSensor.pktCounter = global_counter;
-        my_motionSensor.gyro_first_read = gyro_first_read;
-        k_work_submit(&my_motionSensor.work);
-
-        // Executes every 2 seconds to send battery level
-        if(global_counter % 400 == 0) 
-          //k_work_submit(&my_battery.work);
-    
-        if(ppgRead  == 0){
-          my_ppgSensor.pktCounter = global_counter;
-          my_ppgSensor.movingFlag = gyroData1.movingFlag;
-          my_ppgSensor.ppgTFPass = ppgTFPass;
-          //k_work_submit(&my_ppgSensor.work);
-        }  
-        // Executes every 8 seconds to send compressed signal
-        
-        ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-        magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
-        gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
-        
-        break;
-
-      default:
-              //Do nothing.
-        break;
-    }
-  }
-}
 
 void main(void){
 
@@ -530,8 +408,8 @@ void main(void){
   
   bool led_is_on = true;
   int ret;
-
-  IRQ_CONNECT(TIMER1_IRQn, TIMER_PRIORITY,
+  // the "1" is the timer priority
+  IRQ_CONNECT(TIMER1_IRQn, 1,
     nrfx_timer_1_irq_handler, NULL, 0);
 
   
@@ -577,14 +455,15 @@ void main(void){
   k_work_init(&my_battery.work, bas_notify);     
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   k_work_init(&my_motionData.work, motion_notify);
   k_work_init(&my_magnetoSensor.work, magneto_notify);
   k_work_init(&my_orientaionSensor.work, orientation_notify);
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);
-  
+  #endif
   
   //TODO: make the file system init properly
-  //k_work_init(&work_item.work, work_write);
+  k_work_init(&work_item.work, work_write);
 
   ble_init();
 
@@ -598,13 +477,26 @@ void main(void){
     //return;
   }
 
-  
+  //sys_slist_t* work_queue = &k_sys_work_q.pending;
+  uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
+  uint8_t m_rx_buf[15];                                           /**< RX buffer. */
+  int storage_update = 9;
   while (1) {
-    printk("%d\n", connectedFlag); 
+    
+    printk("%d\n", connectedFlag);
+    
     if(!connectedFlag)
       led_is_on = !led_is_on;
-    else
+    else{
+      
       led_is_on = 1;
+      storage_update++;
+      if(storage_update >= 10){ 
+        get_storage_percent_full();
+        get_current_unix_time(); 
+        storage_update = 0;
+      }
+    }
     gpio_pin_set(gpioHandle_CS_IMU, LED_PIN, (int)led_is_on);
     k_msleep(SLEEP_TIME_MS);
   }

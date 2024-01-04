@@ -9,13 +9,15 @@
 #include <soc.h>
 #include "ppgSensor.h"
 #include "imuSensor.h"
+#include "batteryMonitor.h"
+#include "filesystem/zephyrfilesystem.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/addr.h>
 #include <zephyr/bluetooth/gatt.h>
-
+#include <nrfx_timer.h>
 #include "BLEService.h"
 #define CONFIG_NAME "Configure sensor"
 #define TFMICRO_NAME "Micromarker Heart-rate"
@@ -24,6 +26,10 @@
 #define MAGNETO_NAME "Magnetometer"
 #define ORIENTATION_NAME "Orientation vector"
 
+
+
+
+LOG_MODULE_REGISTER(user_bluetooth);
 // Config Data Tx
 // B_1 B_2 - 0x0001 PPG enabled
 //         - 0x0002 IMU enabled
@@ -77,8 +83,113 @@ uint8_t accQuality[4] = {0};
 #define BT_UUID_PPG_QUALITY   (struct bt_uuid *)(&bt_uuid_ppg_quality)
 #define BT_UUID_ACC_QUALITY   (struct bt_uuid *)(&bt_uuid_acc_quality)
 
+uint8_t gyro_first_read = 0;
+uint8_t magneto_first_read = 0;  
+uint8_t ppgRead = 0;
+bool ppgTFPass = false;
+
+bool connectedFlag = false;
+bool collecting_data = false;
+
 uint16_t sampleFreq=25;
+
+
+struct ppgInfo my_ppgSensor;
+struct batteryInfo my_battery ;  // work-queue instance for batter level
+
+struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
+struct motionInfo my_motionSensor; // work-queue instance for motion sensor
+struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
+struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
+struct ppgDataInfo my_ppgDataSensor;
+
+
+static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
+#define TIMER_MS 50
+#define TIMER_PRIORITY 1
+
+static void timer_deinit(void){
+  nrfx_timer_disable(&timer_global);
+  nrfx_timer_uninit(&timer_global);	
+  motion_sleep();
+  ppg_sleep();
+}
+
+void timer_handler(nrf_timer_event_t event_type, void* p_context){
+  LOG_DBG("Timer Executing");
+  if(connectedFlag == true){
+    switch (event_type){
+      case NRF_TIMER_EVENT_COMPARE0:
+        
+        // submit work to read gyro, acc, magnetometer and orientation
+        my_motionSensor.magneto_first_read = magneto_first_read;
+        my_motionSensor.pktCounter = global_counter;
+        my_motionSensor.gyro_first_read = gyro_first_read;
+        k_work_submit(&my_motionSensor.work);
+
+        // Executes every 2 seconds to send battery level
+        if(global_counter % 400 == 0) 
+          //k_work_submit(&my_battery.work);
+    
+        if(ppgRead  == 0){
+          my_ppgSensor.pktCounter = global_counter;
+          my_ppgSensor.movingFlag = gyroData1.movingFlag;
+          my_ppgSensor.ppgTFPass = ppgTFPass;
+          //k_work_submit(&my_ppgSensor.work);
+        }  
+        // Executes every 8 seconds to send compressed signal
+        
+        ppgRead = (ppgRead+1) % ppgConfig.numCounts;
+        magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+        gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
+        
+        break;
+
+      default:
+              //Do nothing.
+        break;
+    }
+  }
+}
+
+static void timer_init(void){
+printk("timer init\n");
+  uint32_t time_ticks;
+  nrfx_err_t          err;
+  nrfx_timer_config_t timer_cfg = {
+          .frequency = NRF_TIMER_FREQ_1MHz,
+          .mode      = NRF_TIMER_MODE_TIMER,
+          .bit_width = NRF_TIMER_BIT_WIDTH_24,
+          .interrupt_priority = TIMER_PRIORITY,
+          .p_context = NULL,
+  };  
+  uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
+  nrfx_timer_config_t config = timer_cfg; //NRFX_TIMER_DEFAULT_CONFIG(1000000);
+  err = nrfx_timer_init(&timer_global, &config, timer_handler);
+  if (err != NRFX_SUCCESS) {
+          printk("nrfx_timer_init failed with: %d\n", err);
+  }
+  else
+          printk("nrfx_timer_init success with: %d\n", err);
+  time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
+  printk("time ticks = %d\n", time_ticks);
+
+
+  nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks \ 
+   , NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
+
+  nrfx_timer_enable(&timer_global);
+  printk("timer initialized\n");
+
+}
+
+
+
+
+
+
 #define MAX_TRANSMIT_SIZE 250//TODO figure this out
+
 
 uint8_t data_rx[MAX_TRANSMIT_SIZE];
 uint8_t data_tx[MAX_TRANSMIT_SIZE];
@@ -91,6 +202,111 @@ int tfMicro_service_init(void){
   return err;
 }
 
+void connected(struct bt_conn *conn, uint8_t err){
+  struct bt_conn_info info; 
+  char addr[BT_ADDR_LE_STR_LEN];
+
+  my_connection = conn;
+  if (err) {
+    printk("Connection failed (err %u)\n", err);
+    return;
+  }
+  else if(bt_conn_get_info(conn, &info))
+    printk("Could not parse connection info\n");
+  else{  
+  // Start the timer and stop advertising and initialize all the modules
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+    printk("Connection established!		\n\
+      Connected to: %s					\n\
+      Role: %u							\n\
+      Connection interval: %u				\n\
+      Slave latency: %u					\n\
+      Connection supervisory timeout: %u	\n"
+      , addr, info.role, info.le.interval, info.le.latency, info.le.timeout);
+		
+    
+    
+    connectedFlag=true;
+    
+    
+    
+  }
+}
+
+void disconnected(struct bt_conn *conn, uint8_t reason){
+  // Stop timer and do all the cleanup
+  printk("Disconnected (reason %u)\n", reason);
+  
+  
+  connectedFlag=false;
+}
+
+static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  LOG_INF("Attribute write, handle: %u, conn: %p", attr->handle,
+		(void *)conn);
+
+	
+	LOG_INF("Write length: %i", len);
+
+	if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+
+  }
+  uint8_t val = *((uint8_t *)buff);
+  LOG_INF("write: %i", val);
+
+  if (val){
+    ppg_config();
+    motion_config();
+
+    timer_init();
+    global_counter = 0;
+    gyro_first_read = 0;
+    magneto_first_read = 0;  
+    ppgRead = 0;
+
+  } 
+  else{
+    timer_deinit();
+    close_all_files();
+    usb_enable(NULL);	
+  }
+}
+
+static ssize_t bt_write_date_time(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+		(void *)conn, len);
+
+	
+	LOG_INF("Write length: %i", len);
+  if (len != 8){
+    LOG_WRN("invalid packet length for date: %i", len);
+  }
+
+  if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+
+  }
+
+  uint64_t val = *((uint64_t *)buff);
+  LOG_INF("write: %llu", val);
+  set_date_time_bt(val);
+}
+
+
+static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  
+  const char *value = attr->user_data;
+  //uint8_t space_left = storage_percent_full;
+  //LOG_INF("space full: %i", space_left);
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(storage_percent_full));
+
+  }
 /* This function is called whenever the RX Characteristic has been written to by a Client */
 ssize_t on_receive(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,
@@ -354,7 +570,7 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
   }
 }
                         
-
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE), //0
@@ -368,7 +584,9 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
     NULL, NULL, NULL),
   BT_GATT_CCC(on_cccd_changed, //6
     BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), 
-  BT_GATT_CUD(TFMICRO_NAME, BT_GATT_PERM_READ),*///7
+  BT_GATT_CUD(TFMICRO_NAME, BT_GATT_PERM_READ),
+  */
+  //7
   BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//8,9
     BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
     NULL, NULL, NULL),
@@ -400,6 +618,20 @@ BT_GATT_CCC(on_cccd_changed, //24
         BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 );
+#else
+BT_GATT_SERVICE_DEFINE(tfMicro_service,
+  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE),
+  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX,//18,19
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, write_enable_value, NULL),
+  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_QUALITY, 
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, bt_write_date_time, NULL),
+  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//18,19
+    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    read_storage_left, NULL, &storage_percent_full),
+); 
+#endif
 
 
 /* This function sends a notification to a Client with the provided data,

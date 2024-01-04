@@ -1,0 +1,5 @@
+littlefs_storage:
+  address: 0x0
+  device: MX25R64
+  region: external_flash
+  size: 0x600000

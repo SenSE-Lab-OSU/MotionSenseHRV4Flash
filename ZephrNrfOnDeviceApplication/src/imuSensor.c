@@ -370,7 +370,9 @@ static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCoun
   if(magnetoConfig.txPacketEnable == true){
     my_magnetoSensor.dataPacket = blePktMagneto;
     my_magnetoSensor.packetLength = MAGNETOMETER_DATA_LEN;
+    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     k_work_submit(&my_magnetoSensor.work);
+    #endif
   }
   else{
     blePktMagneto[0] = burst_rx_magneto[0+1];
@@ -477,14 +479,16 @@ magneto_sample_config_t magneto_smpl_config){
  */
 
 void motion_data_timeout_handler(struct k_work *item){
+
+  //start_timer();
   struct motionInfo* the_device=  ((struct motionInfo *)(((char *)(item)) 
     - offsetof(struct motionInfo, work)));
   
   uint16_t pktCounter = the_device->pktCounter;
   uint8_t magneto_first_readTemp = the_device->magneto_first_read;
   uint8_t gyro_first_readTemp = the_device->gyro_first_read;
-  printk("gyro: %i \n", gyro_first_readTemp);
-  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER,SPI_FILL};	// SPI burst read holders.
+  //printk("gyro: %i \n", gyro_first_readTemp);
+  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL};	// SPI burst read holders.
   uint16_t checkMag=0;
   uint8_t burst_tx[13] = {
     READMASTER | ACCEL_XOUT_H,SPI_FILL,
@@ -515,6 +519,7 @@ void motion_data_timeout_handler(struct k_work *item){
   if(magnetoConfig.isEnabled) {
     if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2){	
     // Checking the magnetometer status bits
+      
       while(checkMag < 40000){
         spiRead_registerIMU(burst_tx_INT_STAT, 2,burst_rx, 2);
         if((burst_rx[1] & 0x01) == 0x01){
@@ -525,15 +530,17 @@ void motion_data_timeout_handler(struct k_work *item){
         }
         checkMag = checkMag+1;
       }
-     
+      
       magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_SENSOR);
     }
+    
     else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+1)
       magnetometer_data_read_send(validMeasurement,pktCounter);
     else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+2)
       magnetometer_read_sample_config(MAGNETOMETER_SINGLE);   
     else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+3)
       magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_TOREAD);
+    
   }
 
 // Point to register bank 0 for reading the data from sensors.
@@ -590,8 +597,8 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
     
     int16_t accel_and_gyro[6] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ};
-    int16_t accel_and_gyrotest = {1, 2, 3, 4, 5, 6};
-    store_data(accel_and_gyrotest, sizeof(accel_and_gyro), 1);
+    int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
+    store_data(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
 
 
 
@@ -607,13 +614,16 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[19] = ((pktCounter) & 0xFF);
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
-    
+    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     if(accelConfig.txPacketEnable == true)
       k_work_submit(&my_motionData.work);
+      #endif
   }
   else
     gyroscope_measurement(quaternionResult_1);
-    
+  
+
+  //stop_timer();
 }
 
 void magnetometer_config(void){

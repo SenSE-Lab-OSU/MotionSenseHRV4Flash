@@ -598,7 +598,7 @@ void motion_data_timeout_handler(struct k_work *item){
     
     int16_t accel_and_gyro[6] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ};
     int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
-    store_data(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
+    submit_write(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
 
 
 

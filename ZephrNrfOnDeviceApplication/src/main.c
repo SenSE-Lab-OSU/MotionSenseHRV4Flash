@@ -58,8 +58,6 @@ LOG_MODULE_REGISTER(main);
 #define LED_PIN	DT_GPIO_PIN(LED0_NODE, gpios)
 #define LED_FLAGS	DT_GPIO_FLAGS(LED0_NODE, gpios)
 
-#define WORKQUEUE_STACK_SIZE 1024
-
 const struct device *gpioHandle_CS_IMU;
 const struct device *gpioHandle_CS_ppg;
 
@@ -146,13 +144,10 @@ struct orientation_config orientationConfig;
 #define DIS_MODEL_LEN		 (sizeof(DIS_MODEL))
 
 
-#define WORKQUEUE_PRIORITY 1
+
 
 #define RUN_STATUS_LED          DK_LED1
 
-K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
-
-struct k_work_q my_work_q;
 
 
 
@@ -389,6 +384,14 @@ static void i2c_init(void){
 // which is defined by the macro-variable TIMER_MS
 
 
+#define WORKQUEUE_PRIORITY -1
+#define WORKQUEUE_STACK_SIZE 20048
+K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
+
+void start_file_system_workqueue(){
+	
+}
+
 void main(void){
 
   printk("Starting Application... \n");
@@ -449,9 +452,10 @@ void main(void){
   motion_config();
   i2c_init(); 
   
-  //k_work_q_start(&my_work_q, my_stack_area,
-  //  K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY);
-     
+  start_file_system_workqueue();
+  k_work_queue_init(&my_work_q);
+  k_work_queue_start(&my_work_q, my_stack_area,
+    K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
   k_work_init(&my_battery.work, bas_notify);     
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);

@@ -29,9 +29,17 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 #define MAX_BUFFER_SIZE 500
 
+
+// Might need to put this and the timer in a seperate file.
+
+struct k_work_q my_work_q;
+
+
+
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
 static int create_newfile_limit = 500;
+
 
 
 // external globals
@@ -236,9 +244,9 @@ void work_write(struct k_work* item){
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
 	
-	sensor_write_to_file(container->address, container->size, container->sensor);
+	store_data(container->address, container->size, container->sensor);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
-	if (container->packet_num >= last_packet_number_processed){
+	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
 	}
 	LOG_INF("Processing packet %i", container->packet_num);
@@ -248,12 +256,13 @@ void work_write(struct k_work* item){
 
 void submit_write(const void* data, size_t size, enum sensor_type type){
 	
-	work_item.address = data;
+	memcpy(work_item.address, data, size);
 	work_item.size = size;
 	work_item.sensor = type;
 	packet_number++;
 	work_item.packet_num = packet_number;
-	k_work_submit(&work_item.work);
+	int ret = k_work_submit(&work_item.work);
+	LOG_INF("ret value: %i", ret);
 
 }
 
@@ -273,9 +282,10 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	MSenseFile->buffer.current_size += size;
 	if (MSenseFile->buffer.current_size >= MSenseFile->max_size){
 		LOG_INF("Submitting File!");
-		submit_write(MSenseFile->buffer.data_upload_buffer, MSenseFile->max_size, sensor);
+		sensor_write_to_file(MSenseFile->buffer.data_upload_buffer, MSenseFile->max_size, sensor);
 		MSenseFile->buffer.current_size = 0;
 	}
+	k_sleep(K_SECONDS(6));
 }
 
 int close_all_files(){

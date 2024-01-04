@@ -5,13 +5,15 @@ enum sensor_type {ppg,
 accelorometer, passthrough};
 
 typedef struct memory_container {
-	void* address;
+	char address[50];
 	size_t size;
 	enum sensor_type sensor;
 	int packet_num;
 	struct k_work work;
 
 } memory_container;
+
+extern struct k_work_q my_work_q;
 
 void setup_disk(void);
 

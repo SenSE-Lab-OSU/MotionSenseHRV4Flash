@@ -5,7 +5,7 @@ enum sensor_type {ppg,
 accelorometer, passthrough};
 
 typedef struct memory_container {
-	char address[50];
+	void* address;
 	size_t size;
 	enum sensor_type sensor;
 	int packet_num;
@@ -46,6 +46,8 @@ void start_timer();
 int64_t stop_timer();
 
 extern int64_t start_time;
+
+extern int patient_num;
 
 extern memory_container work_item;
 

@@ -105,7 +105,7 @@ struct ppgDataInfo my_ppgDataSensor;
 
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
-#define TIMER_MS 50
+#define TIMER_MS 5
 #define TIMER_PRIORITY 1
 
 static void timer_deinit(void){
@@ -117,7 +117,7 @@ static void timer_deinit(void){
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
   LOG_DBG("Timer Executing");
-  if(connectedFlag == true){
+  if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
         
@@ -266,12 +266,13 @@ uint16_t offset, uint8_t flags){
     gyro_first_read = 0;
     magneto_first_read = 0;  
     ppgRead = 0;
-
+    collecting_data = true;
   } 
   else{
     timer_deinit();
     close_all_files();
     usb_enable(NULL);	
+    collecting_data = false;
   }
 }
 
@@ -296,6 +297,30 @@ uint16_t offset, uint8_t flags){
   LOG_INF("write: %llu", val);
   set_date_time_bt(val);
 }
+
+
+static ssize_t bt_write_patient_num(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+		(void *)conn, len);
+
+	
+	LOG_INF("Write length: %i", len);
+  if (len != 4){
+    LOG_WRN("invalid packet length for date: %i", len);
+  }
+
+  if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+
+  }
+
+  int val = *((int *)buff);
+  LOG_INF("write: %llu", val);
+  patient_num = val;
+}
+
 
 
 static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,

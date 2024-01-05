@@ -486,7 +486,7 @@ void motion_data_timeout_handler(struct k_work *item){
   
   uint16_t pktCounter = the_device->pktCounter;
   uint8_t magneto_first_readTemp = the_device->magneto_first_read;
-  uint8_t gyro_first_readTemp = the_device->gyro_first_read;
+  
   //printk("gyro: %i \n", gyro_first_readTemp);
   uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL};	// SPI burst read holders.
   uint16_t checkMag=0;
@@ -548,7 +548,7 @@ void motion_data_timeout_handler(struct k_work *item){
   //printf("q0=%f,q1=%f,q2=%f,q3=%f\n", 
   //  quaternionResult_1[0],quaternionResult_1[1],
   //  quaternionResult_1[2],quaternionResult_1[3]);
-  if(gyro_first_readTemp == 0){
+  if (the_device->gyro_first_read == 0){
     spiRead_registerIMU(burst_tx,7, burst_rx, 7);  		  
     for(int i=0;i<6;i++)
       blePktMotion[i] = burst_rx[i+1];
@@ -598,7 +598,7 @@ void motion_data_timeout_handler(struct k_work *item){
     
     int16_t accel_and_gyro[6] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ};
     int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
-    submit_write(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
+    store_data(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
 
 
 

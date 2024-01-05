@@ -487,7 +487,7 @@ void main(void){
   int storage_update = 9;
   while (1) {
     
-    printk("%d\n", connectedFlag);
+    printk("%d %d\n", connectedFlag, collecting_data);
     
     if(!connectedFlag)
       led_is_on = !led_is_on;

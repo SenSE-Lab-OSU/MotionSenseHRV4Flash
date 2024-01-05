@@ -52,6 +52,8 @@ uint64_t last_time_update_sent;
 
 uint64_t set_date_time = 0;
 
+int patient_num = 0;
+
 int packet_number = 0;
 
 int last_packet_number_processed = 0;
@@ -93,7 +95,10 @@ typedef struct MotionSenseFile {
 	char file_name[50];
 	struct fs_file_t self_file;
 	bool first_write;
-	data_upload_buffer buffer;
+	bool switch_buffer;
+	data_upload_buffer buffer1;
+	data_upload_buffer buffer2;
+	
 } 	MotionSenseFile;
 
 
@@ -150,6 +155,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		
 		int ID = 0;
 		char IDString[5];
+		char patient_id[6];
 		if (use_random_files){
 			
 		
@@ -162,14 +168,18 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 
 		}
 		itoa(ID, IDString,  10);
-
+		
 
 		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
 		strcat(MSenseFile->file_name, mp->mnt_point);
 		strcat(MSenseFile->file_name, "/");
+		if (patient_num != 0){
+			itoa(patient_num, patient_id, 10);
+			strcat(MSenseFile->file_name, patient_id);	
+		}
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
 		strcat(MSenseFile->file_name, IDString);
-		strcat(MSenseFile->file_name, ".txt");
+		strcat(MSenseFile->file_name, ".bin");
 		//printk("file: %s \n", file_name); 
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		first_write = true;
@@ -212,7 +222,7 @@ void write_to_file(const void* data, size_t size){
 		}
 		itoa(ID, IDString,  10);
 
-
+		
 
 		strcat(file_name, mp->mnt_point);
 		strcat(file_name, "/");
@@ -244,7 +254,7 @@ void work_write(struct k_work* item){
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
 	
-	store_data(container->address, container->size, container->sensor);
+	sensor_write_to_file(container->address, container->size, container->sensor);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -256,18 +266,23 @@ void work_write(struct k_work* item){
 
 void submit_write(const void* data, size_t size, enum sensor_type type){
 	
-	memcpy(work_item.address, data, size);
+	//memcpy(work_item.address, data, size);
+	work_item.address = data;
 	work_item.size = size;
 	work_item.sensor = type;
 	packet_number++;
 	work_item.packet_num = packet_number;
-	int ret = k_work_submit(&work_item.work);
+	int ret = k_work_submit_to_queue(&my_work_q, &work_item.work);
+	if (ret != 1){
+		LOG_ERR("bad ret value: %i", ret);
+	}
 	LOG_INF("ret value: %i", ret);
 
 }
 
 void store_data(const void* data, size_t size, enum sensor_type sensor){
 	LOG_DBG("Store data called");
+	data_upload_buffer* current_buffer;
 	int16_t arr[6];
 	MotionSenseFile* MSenseFile;
 	if (sensor == ppg){
@@ -276,16 +291,27 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
 	}
-	void* address_to_write = &MSenseFile->buffer.data_upload_buffer[MSenseFile->buffer.current_size];
+
+	if (MSenseFile->switch_buffer){
+		current_buffer = &MSenseFile->buffer2;
+	}
+	else {
+		current_buffer = &MSenseFile->buffer1;
+	}
+
+	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
 	memcpy(arr, address_to_write, size);
-	MSenseFile->buffer.current_size += size;
-	if (MSenseFile->buffer.current_size >= MSenseFile->max_size){
+	current_buffer->current_size += size;
+	if (current_buffer->current_size >= MSenseFile->max_size){
+		if (current_buffer->current_size != MSenseFile->max_size){
+			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
+		}
 		LOG_INF("Submitting File!");
-		sensor_write_to_file(MSenseFile->buffer.data_upload_buffer, MSenseFile->max_size, sensor);
-		MSenseFile->buffer.current_size = 0;
+		submit_write(current_buffer->data_upload_buffer, MSenseFile->max_size, sensor);
+		current_buffer->current_size = 0;
+		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
 	}
-	k_sleep(K_SECONDS(6));
 }
 
 int close_all_files(){

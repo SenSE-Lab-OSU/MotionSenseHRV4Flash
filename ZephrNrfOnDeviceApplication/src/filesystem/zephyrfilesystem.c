@@ -27,7 +27,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION		storage_partition
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 
-#define MAX_BUFFER_SIZE 500
+#define MAX_BUFFER_SIZE 9000
 
 
 // Might need to put this and the timer in a seperate file.
@@ -38,7 +38,7 @@ struct k_work_q my_work_q;
 
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
-static int create_newfile_limit = 500;
+static int create_newfile_limit = 9000;
 
 
 
@@ -109,7 +109,7 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file;
 
 MotionSenseFile accel_file = {
-	.max_size = 840,
+	.max_size = 9000,
 	.sensor_string = "ac"
 };
 

@@ -30,6 +30,7 @@
 
 
 LOG_MODULE_REGISTER(user_bluetooth);
+
 // Config Data Tx
 // B_1 B_2 - 0x0001 PPG enabled
 //         - 0x0002 IMU enabled
@@ -319,6 +320,21 @@ uint16_t offset, uint8_t flags){
   int val = *((int *)buff);
   LOG_INF("write: %llu", val);
   patient_num = val;
+}
+
+
+static ssize_t bt_turn_off(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+		(void *)conn, len);
+
+	
+	LOG_INF("Write length: %i", len);
+  if (len != 4){
+    LOG_WRN("invalid packet length for date: %i", len);
+  }
+
+  NVIC_SystemReset();
 }
 
 
@@ -652,6 +668,9 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(BT_UUID_PPG_QUALITY, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
     NULL, bt_write_date_time, NULL),
+  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_QUALITY, 
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, bt_write_patient_num, NULL),
   BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//18,19
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     read_storage_left, NULL, &storage_percent_full),

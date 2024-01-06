@@ -484,7 +484,7 @@ void main(void){
   //sys_slist_t* work_queue = &k_sys_work_q.pending;
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];                                           /**< RX buffer. */
-  int storage_update = 9;
+  int storage_update = 14;
   while (1) {
     
     printk("%d %d\n", connectedFlag, collecting_data);
@@ -495,7 +495,7 @@ void main(void){
       
       led_is_on = 1;
       storage_update++;
-      if(storage_update >= 10){ 
+      if(storage_update >= 15){ 
         get_storage_percent_full();
         get_current_unix_time(); 
         storage_update = 0;

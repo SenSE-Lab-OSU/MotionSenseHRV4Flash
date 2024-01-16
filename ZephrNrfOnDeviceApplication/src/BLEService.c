@@ -31,6 +31,9 @@
 
 LOG_MODULE_REGISTER(user_bluetooth);
 
+
+
+//#if CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 // Config Data Tx
 // B_1 B_2 - 0x0001 PPG enabled
 //         - 0x0002 IMU enabled
@@ -62,9 +65,6 @@ LOG_MODULE_REGISTER(user_bluetooth);
 //         - 0x02 - Motion FS=100
 //         - 0x03 - Motion FS=50
 //         - 0x04 - Motion FS=25
-uint8_t configRead[6] = {0,0,0,0,0,0};
-uint8_t ppgQuality[4] = {0};
-uint8_t accQuality[4] = {0};
  struct bt_uuid_128 bt_uuid_tfmicro = BT_UUID_INIT_128(TFMICRO_SERVICE_UUID);
  struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_tfmicro_tx = BT_UUID_INIT_128(TF_HR_TX_CHARACTERISTIC_UUID);
@@ -83,6 +83,128 @@ uint8_t accQuality[4] = {0};
 #define BT_UUID_ORIENTATION_TX   (struct bt_uuid *)(&bt_uuid_orientation_tx)
 #define BT_UUID_PPG_QUALITY   (struct bt_uuid *)(&bt_uuid_ppg_quality)
 #define BT_UUID_ACC_QUALITY   (struct bt_uuid *)(&bt_uuid_acc_quality)
+//#else
+struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(TFMICRO_SERVICE_UUID);
+struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
+//#endif
+struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
+
+
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+/* TF micro Button Service Declaration and Registration */
+BT_GATT_SERVICE_DEFINE(tfMicro_service,
+  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE), //0
+  /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
+    configSet, on_receive, configRead),
+  BT_GATT_CUD(CONFIG_NAME, BT_GATT_PERM_READ),//3
+  BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_TX, //4,5
+    BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
+    NULL, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, //6
+    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), 
+  BT_GATT_CUD(TFMICRO_NAME, BT_GATT_PERM_READ),
+  */
+  //7
+  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//8,9
+    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
+    NULL, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, //10
+    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+  BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//11
+    BT_GATT_PERM_READ, read_ppg_quality,
+    NULL, ppgQuality),
+  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ),//12
+  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_GYRO_TX,//13,14
+    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
+    NULL, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, //15
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+  BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY,//16
+    BT_GATT_PERM_READ, read_acc_quality,
+    NULL, accQuality),
+  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ),//17
+  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX,//18,19
+    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
+    NULL, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, //20
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+  BT_GATT_CUD(MAGNETO_NAME, BT_GATT_PERM_READ),//21
+  BT_GATT_CHARACTERISTIC(BT_UUID_ORIENTATION_TX,//22,23
+    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
+    NULL, NULL, NULL),
+BT_GATT_CCC(on_cccd_changed, //24
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
+);
+#else
+BT_GATT_SERVICE_DEFINE(tfMicro_service,
+  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, write_enable_value, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_datetime, 
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, bt_write_date_time, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum, 
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
+    NULL, bt_write_patient_num, NULL),
+); 
+
+BT_GATT_SERVICE_DEFINE(status_service, 
+  BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
+  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//18,19
+    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    read_storage_left, NULL, &storage_percent_full),
+);
+
+#endif
+
+
+/* This function sends a notification to a Client with the provided data,
+given that the Client Characteristic Control Descripter has been set to Notify (0x1).
+It also calls the on_sent() callback if successful*/
+
+  /* 
+    The attribute for the TX characteristic is used with bt_gatt_is_subscribed 
+    to check whether notification has been enabled by the peer or not.
+    Attribute table: 0 = Service, 1 = Primary service, 2 = RX, 3 = TX, 4 = CCC,.
+  */
+
+void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
+  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_TFMICRO_CHARACTERISTIC]; 
+  struct bt_gatt_notify_params params = {
+    .uuid   = BT_UUID_TFMICRO_TX,
+    .attr   = attr,
+    .data   = data,
+    .len    = len,
+    .func   = on_sent
+  };
+    
+  // Check whether notifications are enabled or not
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    // Send the notification
+    if(bt_gatt_notify_cb(conn, &params)){
+            printk("Error, unable to send notification\n");
+    }
+  }
+  else{
+      //  printk("Warning, notification not enabled on the selected attribute\n");
+  }
+}
+
+
+
+
+
+uint8_t configRead[6] = {0,0,0,0,0,0};
+uint8_t ppgQuality[4] = {0};
+uint8_t accQuality[4] = {0};
+
 
 uint8_t gyro_first_read = 0;
 uint8_t magneto_first_read = 0;  
@@ -611,104 +733,6 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
   }
 }
                         
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-/* TF micro Button Service Declaration and Registration */
-BT_GATT_SERVICE_DEFINE(tfMicro_service,
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE), //0
-  /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
-    BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
-    configSet, on_receive, configRead),
-  BT_GATT_CUD(CONFIG_NAME, BT_GATT_PERM_READ),//3
-  BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_TX, //4,5
-    BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //6
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), 
-  BT_GATT_CUD(TFMICRO_NAME, BT_GATT_PERM_READ),
-  */
-  //7
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//8,9
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //10
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//11
-    BT_GATT_PERM_READ, read_ppg_quality,
-    NULL, ppgQuality),
-  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ),//12
-  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_GYRO_TX,//13,14
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //15
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY,//16
-    BT_GATT_PERM_READ, read_acc_quality,
-    NULL, accQuality),
-  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ),//17
-  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX,//18,19
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //20
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_CUD(MAGNETO_NAME, BT_GATT_PERM_READ),//21
-  BT_GATT_CHARACTERISTIC(BT_UUID_ORIENTATION_TX,//22,23
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-BT_GATT_CCC(on_cccd_changed, //24
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
-);
-#else
-BT_GATT_SERVICE_DEFINE(tfMicro_service,
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE),
-  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX,//18,19
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, write_enable_value, NULL),
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_QUALITY, 
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, bt_write_date_time, NULL),
-  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_QUALITY, 
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, bt_write_patient_num, NULL),
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//18,19
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
-    read_storage_left, NULL, &storage_percent_full),
-); 
-#endif
-
-
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-
-  /* 
-    The attribute for the TX characteristic is used with bt_gatt_is_subscribed 
-    to check whether notification has been enabled by the peer or not.
-    Attribute table: 0 = Service, 1 = Primary service, 2 = RX, 3 = TX, 4 = CCC,.
-  */
-
-void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_TFMICRO_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_TFMICRO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-      //  printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
 
 /* This function sends a notification to a Client with the provided data,
 given that the Client Characteristic Control Descripter has been set to Notify (0x1).

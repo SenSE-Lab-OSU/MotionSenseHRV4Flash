@@ -1,5 +1,13 @@
+# New Flash
+#littlefs_storage:
+#  address: 0x0
+#  device: MX25R64
+#  region: external_flash
+#  size: 0xee6a000
+
+# Old MX25R64
 littlefs_storage:
   address: 0x0
   device: MX25R64
   region: external_flash
-  size: 0xee6a000
+  size: 0x7ff000

@@ -114,6 +114,18 @@ extern bool collecting_data;
 #define ACC_QUALITY_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x28, 0xC9, 0x39, 0xDA   
 
+#define WRITE_ENABLE_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+  0xE2, 0x48, 0x81, 0x1D, 0x31, 0xC9, 0x39, 0xDA
+
+#define WRITE_DATE_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+  0xE2, 0x48, 0x81, 0x1D, 0x32, 0xC9, 0x39, 0xDA
+
+#define WRITE_PATIENT_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+  0xE2, 0x48, 0x81, 0x1D, 0x33, 0xC9, 0x39, 0xDA
+
+#define STATUS_SERVICE_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+  0xE2, 0x48, 0x81, 0x1D, 0x40, 0xC9, 0x39, 0xDA
+
 extern uint8_t configRead[6];
 extern uint8_t ppgQuality[4];
 extern uint8_t accQuality[4];
@@ -145,6 +157,7 @@ void disconnected(struct bt_conn *conn, uint8_t reason);
 
 int tfMicro_service_init(void);
 
+static void on_sent(struct bt_conn *conn, void *user_data);
 void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void tfMicro_notify(struct k_work *);
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
@@ -158,6 +171,20 @@ void ppgData_notify(struct k_work *item);
 static ssize_t configSet(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_ppg_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
+
+
+static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+  static ssize_t bt_turn_off(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t bt_write_patient_num(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t bt_write_date_time(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+
+
  #endif
 
 

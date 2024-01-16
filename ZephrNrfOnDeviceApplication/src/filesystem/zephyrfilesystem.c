@@ -34,7 +34,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 struct k_work_q my_work_q;
 
-
+memory_container work_item;
 
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
@@ -45,7 +45,9 @@ static int create_newfile_limit = 9000;
 // external globals
 int storage_percent_full;
 
-memory_container work_item;
+int upload_timeout_errors;
+
+
 
 
 uint64_t last_time_update_sent;
@@ -139,7 +141,10 @@ void create_test_files(){
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
-
+	if (storage_percent_full >= 99){
+		LOG_WRN("Storage is getting full, aborting write");
+		return;
+	}
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
@@ -253,8 +258,9 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	
+	start_timer();
 	sensor_write_to_file(container->address, container->size, container->sensor);
+	stop_timer();
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -275,6 +281,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	int ret = k_work_submit_to_queue(&my_work_q, &work_item.work);
 	if (ret != 1){
 		LOG_ERR("bad ret value: %i", ret);
+		upload_timeout_errors += 1;
 	}
 	LOG_INF("ret value: %i", ret);
 
@@ -472,7 +479,7 @@ int get_storage_percent_full(){
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
 	storage_percent_full = (int)storage_percent;
-	LOG_INF("storage: %f and %i", storage_percent, storage_percent_full);
+	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 
 }

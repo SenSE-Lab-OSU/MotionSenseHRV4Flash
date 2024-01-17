@@ -194,7 +194,8 @@ extern struct magneto_config magnetoConfig;
 extern struct orientation_config orientationConfig;
 
 void motion_config(void);
-void spiRead_registerIMU(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
+void getIMUID();
+void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
 void motion_data_timeout_handler(struct k_work *);
 void motionSensitivitySampling_config(void);
 void motion_data_orientation_timeout_handler(uint16_t );

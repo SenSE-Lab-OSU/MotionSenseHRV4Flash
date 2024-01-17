@@ -5,7 +5,12 @@
 #include "filesystem/zephyrfilesystem.h"
 #include "BLEService.h"
 #include "ppgSensor.h"
+#include <zephyr/logging/log.h>
 #include <stdio.h>
+
+
+LOG_MODULE_REGISTER(IMUSensor);
+
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
@@ -23,7 +28,7 @@ bool validMeasurement = false;
 bool magnoSecondReading = false;
 uint8_t burst_tx_magneto[17];	
 
-void spiRead_registerIMU(uint8_t * tx_buffer, uint8_t txLen, 
+void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, 
 uint8_t * rx_buffer, uint8_t rxLen){
   int err;
   const struct spi_buf tx_buf = {
@@ -86,7 +91,7 @@ static void gyroscope_measurement(float * quaternionResult){
   else if(gyroConfig.sensitivity == 0x06 )
     dividerGyro = 1.0/16.4;
   // SPI burst read.
-  spiRead_registerIMU(burst_tx_gyro,txLen, burst_rx,rxLen);	
+  spiReadWriteIMU(burst_tx_gyro,txLen, burst_rx,rxLen);	
   for(int i = 0; i < 6; i++)
     temp3[i] = burst_rx[i+1];
 				
@@ -351,7 +356,7 @@ static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCoun
   burst_tx_magneto[7] = SPI_FILL;
   burst_tx_magneto[8] = SPI_FILL;
   // Reading magnetometer data
-  spiRead_registerIMU(burst_tx_magneto, txLen, burst_rx_magneto, rxLen);
+  spiReadWriteIMU(burst_tx_magneto, txLen, burst_rx_magneto, rxLen);
   
   // Sort magneto data.
   if (magnoSecondReading){
@@ -467,7 +472,7 @@ magneto_sample_config_t magneto_smpl_config){
   for(int i = 0; i < magnetoConfig_length; i += 2){
     m_tx_buf[0] = tx_buf[i];
     m_tx_buf[1] = tx_buf[i+1];	
-    spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+    spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
   }
 }
 
@@ -514,14 +519,14 @@ void motion_data_timeout_handler(struct k_work *item){
     dividerAcc = 1.0/2048;
 #
 // Point to register bank 0 for reading the data from sensors.
-  spiRead_registerIMU(m_tx_buf, 2,m_rx_buf, 2);	
+  spiReadWriteIMU(m_tx_buf, 2,m_rx_buf, 2);	
   
   if(magnetoConfig.isEnabled) {
     if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2){	
     // Checking the magnetometer status bits
       
       while(checkMag < 40000){
-        spiRead_registerIMU(burst_tx_INT_STAT, 2,burst_rx, 2);
+        spiReadWriteIMU(burst_tx_INT_STAT, 2,burst_rx, 2);
         if((burst_rx[1] & 0x01) == 0x01){
         validMeasurement = true;
          checkMag = 0;
@@ -544,12 +549,12 @@ void motion_data_timeout_handler(struct k_work *item){
   }
 
 // Point to register bank 0 for reading the data from sensors.
-  spiRead_registerIMU(m_tx_buf,2, m_rx_buf, 2);	
+  spiReadWriteIMU(m_tx_buf,2, m_rx_buf, 2);	
   //printf("q0=%f,q1=%f,q2=%f,q3=%f\n", 
   //  quaternionResult_1[0],quaternionResult_1[1],
   //  quaternionResult_1[2],quaternionResult_1[3]);
   if (the_device->gyro_first_read == 0){
-    spiRead_registerIMU(burst_tx,7, burst_rx, 7);  		  
+    spiReadWriteIMU(burst_tx,7, burst_rx, 7);  		  
     for(int i=0;i<6;i++)
       blePktMotion[i] = burst_rx[i+1];
     
@@ -650,12 +655,12 @@ void magnetometer_config(void){
       I2C_SLV0_DO_IMU,0x00,
       I2C_SLV0_CTRL_IMU,I2C_SLV_EN | 0x01,
       REG_BANK_SEL, REG_BANK_0
-    };// commands for powering down magnetomete
+    }; // commands for powering down magnetomete
     
     for(int i = 0; i < sizeof(magneto_chipId); i += 2){
       m_tx_buf[0] = magneto_chipId[i];
       m_tx_buf[1] = magneto_chipId[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
       
     }
 
@@ -663,27 +668,27 @@ void magnetometer_config(void){
     // Going to the User Bank 0
     tx_buf[0] = REG_BANK_SEL;
     tx_buf[1] = REG_BANK_0;
-    spiRead_registerIMU(tx_buf, 2,rx_buf, 2);
+    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
 
     tx_buf[0] =(READMASTER | EXT_SENSE_DATA_0_IMU);
     tx_buf[1] = SPI_FILL;
-    spiRead_registerIMU(tx_buf, 2,rx_buf, 2);
+    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
     printk("magnetometer chip ID=%x,%x\n",rx_buf[0],rx_buf[1]);
     k_msleep(15);  
     // Going to the User Bank 3
     tx_buf[0] = REG_BANK_SEL;
     tx_buf[1] = REG_BANK_3;
-    spiRead_registerIMU(tx_buf, 2,rx_buf, 2);
+    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
     for(int i = 0; i < sizeof(magnetoConfig); i += 2){
       m_tx_buf[0] = magnetoConfig[i];
       m_tx_buf[1] = magnetoConfig[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
     }
 		
     for(int i = 0; i < sizeof(magnetoConfig); i += 2){
       m_tx_buf[0] = magnetoConfig[i];
       m_tx_buf[1] = magnetoConfig[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
     }
 //single mode
     tx_buf[0] = REG_BANK_SEL ;
@@ -704,7 +709,7 @@ void magnetometer_config(void){
     for(int i = 0; i < 14; i += 2){
       m_tx_buf[0] = tx_buf[i];
       m_tx_buf[1] = tx_buf[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
     }
    // Setting up External sensor data to read magnetometer 
     tx_buf[0] = REG_BANK_SEL;
@@ -721,7 +726,7 @@ void magnetometer_config(void){
     for(int i = 0; i < 10; i += 2){
       m_tx_buf[0] = tx_buf[i];
       m_tx_buf[1] = tx_buf[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
     }
     k_msleep(15);
   }
@@ -734,13 +739,14 @@ void magnetometer_config(void){
  */
 
 void motion_config(void){
+  LOG_INF("configuring imu..");
   if(gyroConfig.isEnabled){
     static uint8_t m_tx_buf[2] = {0xF5,SPI_FILL};	/**< TX buffer. */
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
 
     static uint8_t imu_config[36] = {
-      REG_BANK_SEL,REG_BANK_0,// change register bank 0
+      REG_BANK_SEL, REG_BANK_0,// change register bank 0
       USER_CTRL,I2C_MST_EN | I2C_IF_DIS, // SPI mode and enable I2c master
       PWR_MGMT_1,IMU_TEMP_DISABLE | IMU_CLK_SEL_BEST_SEL, // Disable temparature sensor and select best available clock source
       PWR_MGMT_2,ENABLE_ACC | ENABLE_GYRO, // Not disabling Gyro and accel
@@ -769,12 +775,21 @@ void motion_config(void){
     for(int i = 0; i < sizeof(imu_config); i += 2){
       m_tx_buf[0] = imu_config[i];
       m_tx_buf[1] = imu_config[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length, m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
     k_msleep(10);
     magnetometer_config();    
   }
 }
+
+void getIMUID(){
+    uint8_t m_tx_buf[2] = {0, 0};	/**< TX buffer. */
+    uint8_t m_rx_buf;  /**< RX buffer. */
+    const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
+    spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, 1);
+    LOG_INF("IMU ID: %04x", &m_rx_buf);
+}
+
 void motionSensitivitySampling_config(void){
   if(gyroConfig.isEnabled){
     static uint8_t m_tx_buf[2] = {0xF5,SPI_FILL};	/**< TX buffer. */
@@ -796,7 +811,7 @@ void motionSensitivitySampling_config(void){
     for(int i = 0; i < sizeof(imu_config); i += 2){
       m_tx_buf[0] = imu_config[i];
       m_tx_buf[1] = imu_config[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length, m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
   }
 }
@@ -823,12 +838,12 @@ void magnetometer_sleep(void){
     for(int i = 0; i < 12; i += 2){
       m_tx_buf[0] = tx_buf[i];
       m_tx_buf[1] = tx_buf[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
     }
     // Returning back to the User Bank 0
     m_tx_buf[0] = REG_BANK_SEL;
     m_tx_buf[1] = REG_BANK_0;
-    spiRead_registerIMU(m_tx_buf,2, m_rx_buf, 2);
+    spiReadWriteIMU(m_tx_buf,2, m_rx_buf, 2);
   }
 }
 
@@ -852,7 +867,7 @@ void motion_sleep(void){
     for(int i = 0; i < sizeof(imu_config); i += 2){
       m_tx_buf[0] = imu_config[i];
       m_tx_buf[1] = imu_config[i+1];
-      spiRead_registerIMU(m_tx_buf, m_length, m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }	
   }
 }

@@ -63,7 +63,7 @@ const struct device *gpioHandle_CS_ppg;
 
 struct spi_cs_control imu_cs = {
 .delay = 0, 
-.gpio = {.pin = 23, .dt_flags=GPIO_ACTIVE_LOW} 
+.gpio = {.pin = 26, .dt_flags=GPIO_ACTIVE_LOW} 
 };
 
 // the gpio struct now requires a port? not sure what to do in this case
@@ -319,7 +319,7 @@ static void spi_init(void){
   spi_cfg_imu.cs = &imu_cs;
   spi_cfg_ppg.cs =&ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
 
-  
+  getIMUID();
   ppgConfig.isEnabled = true;
   ppgConfig.sample_avg=0x08;
   ppgConfig.green_intensity = 0x28;
@@ -363,6 +363,34 @@ static void spi_init(void){
   configRead[5] = 0x44;
 }
 
+void spi_verify_id(){
+  uint8_t tx_buffer[4],rx_buffer[4];
+  tx_buffer[0] = READMASTER | 0x00;
+  tx_buffer[1] =0xFF;
+  uint8_t txLen=2, rxLen=2;
+  if (device_is_ready(spi_dev_imu)){
+  spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
+  printk("Chip ID from motion sensor=%x\n",rx_buffer[1]);
+  }
+  else {
+    LOG_WRN("IMU not ready, setup was avoided");
+  }
+  
+	
+  tx_buffer[0] = 0xFF;
+  tx_buffer[1] = READMASTER;
+  tx_buffer[2] = 0x00;
+	
+  txLen=3;
+  rxLen=3;
+  if (device_is_ready(spi_dev_ppg)){
+  spiRead_registerPPG(tx_buffer, txLen, rx_buffer, rxLen);
+  printk("Chip ID from ppg sensor=%x,%x,%x\n",rx_buffer[0],rx_buffer[1],rx_buffer[2]);
+  }
+  else {
+    LOG_WRN("ppg not ready, setup was avoided");
+  }
+}
 
 static void i2c_init(void){
   printk("The I2C Init started\n");
@@ -419,35 +447,10 @@ void main(void){
   
   
   spi_init();
-  
+  spi_verify_id();
 
 
-  uint8_t tx_buffer[4],rx_buffer[4];
-  tx_buffer[0] = READMASTER | 0x00;
-  tx_buffer[1] =0xFF;
-  uint8_t txLen=2,rxLen=2;
-  if (device_is_ready(spi_dev_imu)){
-  spiRead_registerIMU(tx_buffer, txLen, rx_buffer, rxLen);
-  printk("Chip ID from motion sensor=%x\n",rx_buffer[1]);
-  }
-  else {
-    LOG_WRN("IMU not ready, setup was avoided");
-  }
   
-	
-  tx_buffer[0] = 0xFF;
-  tx_buffer[1] = READMASTER;
-  tx_buffer[2] = 0x00;
-	
-  txLen=3;
-  rxLen=3;
-  if (device_is_ready(spi_dev_ppg)){
-  spiRead_registerPPG(tx_buffer, txLen, rx_buffer, rxLen);
-  printk("Chip ID from ppg sensor=%x,%x,%x\n",rx_buffer[0],rx_buffer[1],rx_buffer[2]);
-  }
-  else {
-    LOG_WRN("ppg not ready, setup was avoided");
-  }
   ppg_config();
   motion_config();
   i2c_init(); 

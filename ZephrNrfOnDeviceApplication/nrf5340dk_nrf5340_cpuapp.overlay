@@ -67,7 +67,7 @@ compatible = "nordic,nrf-spim";
 
 // We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
 &i2c1 {
-	status = "disabled";
+	status = "okay";
 	compatible = "nordic,nrf-twim";
 };
 
@@ -91,7 +91,7 @@ compatible = "nordic,nrf-spim";
 &spi3{
 	compatible = "nordic,nrf-spim";
 	status = "okay";
-	cs-gpios = <&gpio1 15 0>;
+	cs-gpios = <&gpio1 5 1>;
 	pinctrl-0 = < &ppg_default>;
 	pinctrl-1 = <&ppg_sleep>;
 	pinctrl-names = "default", "sleep";
@@ -136,7 +136,7 @@ compatible = "nordic,nrf-spim";
 	/* MX25R64 supports all readoc options */
 	readoc = "fastread";
 	sck-frequency = <8000000>;
-	jedec-id = [c2 25 3c];
+	jedec-id = [c2 28 17];
 	sfdp-bfp = [
 		e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
 		ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52

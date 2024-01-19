@@ -416,15 +416,16 @@ static void i2c_init(void){
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
-void start_file_system_workqueue(){
-	
-}
+
 
 void main(void){
 
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
+
+
   setup_disk();
+
   //this initializes FOTA
   #ifdef INCLUDE_DFU
   #ifdef CONFIG_BOOTLOADER_MCUBOOT
@@ -437,8 +438,7 @@ void main(void){
 
   
   
-  bool led_is_on = true;
-  int ret;
+  
   // the "1" is the timer priority
   IRQ_CONNECT(TIMER1_IRQn, 1,
     nrfx_timer_1_irq_handler, NULL, 0);
@@ -455,15 +455,15 @@ void main(void){
   motion_config();
   i2c_init(); 
   
-  start_file_system_workqueue();
+  
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
     K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
   k_work_init(&my_battery.work, bas_notify);     
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
-  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   k_work_init(&my_motionData.work, motion_notify);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   k_work_init(&my_magnetoSensor.work, magneto_notify);
   k_work_init(&my_orientaionSensor.work, orientation_notify);
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);
@@ -478,6 +478,7 @@ void main(void){
   //dev = device_get_binding(LED0);
   //dev = DEVICE_DT_GET(LED0_NODE);
  // if (dev == NULL || !device_is_ready(dev)){
+  int ret;
   ret = gpio_pin_configure(gpioHandle_CS_IMU, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
   if (ret < 0){
     printk("Error: Can't initialize LED");
@@ -488,6 +489,7 @@ void main(void){
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];                                           /**< RX buffer. */
   int storage_update = 14;
+  bool led_is_on = true;
   while (1) {
     
     printk("%d %d\n", connectedFlag, collecting_data);

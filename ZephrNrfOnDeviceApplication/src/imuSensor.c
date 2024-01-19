@@ -585,7 +585,15 @@ void motion_data_timeout_handler(struct k_work *item){
     accData1.accy_val = accelY;
     accData1.accz_val = accelZ;
 
+    // Calculate ENMO
+    
+    // Sometimes the device doesn't like parenthesis, maybe something to do with the FPU? So we just do assignments instead
+    float AccelX2 = accelX*accelX;
+    float AccelY2 = accelY*accelY;
+    float AccelZ2 = accelZ*accelZ;
+    float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
 
+    accData1.ENMO = enmo;
 
 
     for (uint8_t i=0; i<3; i++)
@@ -617,12 +625,15 @@ void motion_data_timeout_handler(struct k_work *item){
     //collect packet counter
     //blePktMotion[18] = (pktCounter&) >> 14;
     blePktMotion[19] = ((pktCounter) & 0xFF);
+    
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
-    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+
+    my_motionData.dataPacket = &accData1.ENMO;
+    my_motionData.packetLength = sizeof(accData1.ENMO);
+  
     if(accelConfig.txPacketEnable == true)
       k_work_submit(&my_motionData.work);
-      #endif
   }
   else
     gyroscope_measurement(quaternionResult_1);

@@ -92,6 +92,8 @@ struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTER
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 
+struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
+struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
@@ -162,6 +164,12 @@ BT_GATT_SERVICE_DEFINE(status_service,
     read_storage_left, NULL, &storage_percent_full),
 );
 
+
+BT_GATT_SERVICE_DEFINE(update_service,
+  BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
+    NULL, NULL, NULL)
+  );
 #endif
 
 
@@ -760,6 +768,7 @@ void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
 }
 
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
+  
   const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
   struct bt_gatt_notify_params params = {
     .uuid   = BT_UUID_ACC_GYRO_TX,
@@ -786,6 +795,21 @@ void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   }
 
 }
+
+void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
+    
+  const struct bt_gatt_attr *attr = &update_service.attrs[1];
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+      
+    int ret = bt_gatt_notify(conn, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+
+}
+
+
 void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_MAGNETO_CHARACTERISTIC]; 
   struct bt_gatt_notify_params params = {
@@ -845,7 +869,12 @@ void motion_notify(struct k_work *item){
   uint8_t packetLength = the_device->packetLength;
 
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  acc_send(my_connection, the_device->dataPacket, ACC_GYRO_DATA_LEN);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #else
+  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #endif
+
 }
 void magneto_notify(struct k_work *item){
   struct magnetoInfo* the_device=  ((struct magnetoInfo *)(((char *)(item)) - offsetof(struct magnetoInfo, work)));
@@ -874,6 +903,10 @@ void ppgData_notify(struct k_work *item){
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
 }
+
+
+
+
 
 static ssize_t configSet(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){

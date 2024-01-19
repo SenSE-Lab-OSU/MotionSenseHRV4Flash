@@ -124,6 +124,7 @@ struct accData {
   float accx_val;
   float accy_val;
   float accz_val;
+  float ENMO;
 };
 struct gyroData {
   uint16_t quaternion_1;

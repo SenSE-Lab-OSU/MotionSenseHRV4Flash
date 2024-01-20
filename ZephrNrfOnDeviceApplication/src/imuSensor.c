@@ -14,6 +14,10 @@ LOG_MODULE_REGISTER(IMUSensor);
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
+float enmo_store[25];
+float testcounter = 0;
+
+
 int16_t dataReadGyroX, dataReadGyroY,dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
@@ -476,6 +480,49 @@ magneto_sample_config_t magneto_smpl_config){
   }
 }
 
+/**@brief Function for calculating and sending the enmo when necessary.
+ *
+ * 
+ *
+ */
+void calculate_enmo(float accelX, float accelY, float accelZ){
+
+    // Calculate ENMO
+    
+    // Sometimes the device doesn't like parenthesis, maybe something to do with the FPU? So we just do assignments instead
+    float AccelX2 = accelX*accelX;
+    float AccelY2 = accelY*accelY;
+    float AccelZ2 = accelZ*accelZ;
+
+    float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
+    
+
+    // when we send the enmo, we send as an average of 25
+    enmo_store[counterAcc] = enmo;
+    counterAcc++;
+    if (counterAcc >= 25 ){
+      
+      counterAcc = 0;
+      //calculate the enmo as an average of 25 samples
+       enmo = 0;
+      for (int x = 0; x <= 24; x++){
+          enmo += enmo_store[x];
+      }
+      enmo /= 25;
+      accData1.ENMO = enmo;
+      //testcounter++;
+      //accData1.ENMO = testcounter;
+      k_work_submit(&my_motionData.work);
+    }
+
+
+    
+
+
+
+}
+
+
 
 /**@brief Function for handling the motion data timer timeout.
  *
@@ -584,18 +631,8 @@ void motion_data_timeout_handler(struct k_work *item){
     accData1.accx_val = accelX;
     accData1.accy_val = accelY;
     accData1.accz_val = accelZ;
-
-    // Calculate ENMO
+    calculate_enmo(accelX, accelY, accelZ);
     
-    // Sometimes the device doesn't like parenthesis, maybe something to do with the FPU? So we just do assignments instead
-    float AccelX2 = accelX*accelX;
-    float AccelY2 = accelY*accelY;
-    float AccelZ2 = accelZ*accelZ;
-    float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
-
-    accData1.ENMO = enmo;
-
-
     for (uint8_t i=0; i<3; i++)
       quaternionResult_1[i] = 0.0;	  
     quaternionResult_1[3] = 1.0;
@@ -631,9 +668,14 @@ void motion_data_timeout_handler(struct k_work *item){
 
     my_motionData.dataPacket = &accData1.ENMO;
     my_motionData.packetLength = sizeof(accData1.ENMO);
-  
-    if(accelConfig.txPacketEnable == true)
+    
+    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+    if(accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE){
+      if (counterAcc == -1){
       k_work_submit(&my_motionData.work);
+      }
+    }
+    #endif
   }
   else
     gyroscope_measurement(quaternionResult_1);
@@ -641,6 +683,8 @@ void motion_data_timeout_handler(struct k_work *item){
 
   //stop_timer();
 }
+
+
 
 void magnetometer_config(void){
   if (magnetoConfig.isEnabled){

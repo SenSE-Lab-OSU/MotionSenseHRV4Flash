@@ -74,5 +74,8 @@ config MSENSE3_BLUETOOTH_DATA_UPDATES
 	bool "Use MotionSenseHRV3Updates"
 	default n
 
+config BLUETOOTH_SETTINGS_OVERRIDE
+	int "Override User Set Bluetooth Settings"
+	default 1
 
 source "Kconfig.zephyr"

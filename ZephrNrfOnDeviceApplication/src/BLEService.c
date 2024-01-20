@@ -167,8 +167,9 @@ BT_GATT_SERVICE_DEFINE(status_service,
 
 BT_GATT_SERVICE_DEFINE(update_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
-    NULL, NULL, NULL)
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
+    NULL, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
   );
 #endif
 
@@ -797,10 +798,10 @@ void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
 }
 
 void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
-    
-  const struct bt_gatt_attr *attr = &update_service.attrs[1];
+
+  const struct bt_gatt_attr *attr = &update_service.attrs[2];
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-      
+    LOG_INF("sending ennmo...");
     int ret = bt_gatt_notify(conn, attr, data, len);
     if (ret != 0){
       printk("Error, unable to send notification\n");

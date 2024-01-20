@@ -91,7 +91,7 @@ struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
-
+struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
 struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
 
@@ -145,7 +145,7 @@ BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 );
 #else
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE),
+  BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
   BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
     NULL, write_enable_value, NULL),
@@ -159,7 +159,7 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
 
 BT_GATT_SERVICE_DEFINE(status_service, 
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//18,19
+  BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     read_storage_left, NULL, &storage_percent_full),
 );
@@ -205,9 +205,6 @@ void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t le
       //  printk("Warning, notification not enabled on the selected attribute\n");
   }
 }
-
-
-
 
 
 uint8_t configRead[6] = {0,0,0,0,0,0};
@@ -314,9 +311,6 @@ printk("timer init\n");
   printk("timer initialized\n");
 
 }
-
-
-
 
 
 

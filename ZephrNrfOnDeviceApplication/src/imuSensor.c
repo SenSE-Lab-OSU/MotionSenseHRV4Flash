@@ -510,8 +510,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 25;
       accData1.ENMO = enmo;
-      //testcounter++;
-      //accData1.ENMO = testcounter;
+      testcounter++;
+      accData1.ENMO = testcounter;
       k_work_submit(&my_motionData.work);
     }
 

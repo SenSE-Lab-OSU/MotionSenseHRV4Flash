@@ -490,14 +490,17 @@ void main(void)
     printk("%d %d\n", connectedFlag, collecting_data);
 
     if (!connectedFlag)
+    // blink the LED while we aren't connected.
       led_is_on = !led_is_on;
     else
     {
-
+      //When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
       led_is_on = 1;
       storage_update++;
+      // update how much storage we have left every 15 cycles 
       if (storage_update >= 15)
       {
+        led_is_on = 1;
         get_storage_percent_full();
         get_current_unix_time();
         storage_update = 0;

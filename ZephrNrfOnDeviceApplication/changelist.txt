@@ -71,3 +71,13 @@ changed qspi device to new flash specs
 
 to veiw the partitions on windows, use the below command. If the watch/lfs partition is recognized, the partition number will list as one not zero.
 wmic diskdrive list brief
+
+The littlefs partition is configured as the following:
+--read_size=16
+       --prog_size=16 
+       --block_size=4096 (I think this is one page on the hardware level of NOR) - gives 1000 hex addresses 
+       --block_count=variable depends on the size flash we are using. block_count*block_size = total storage 
+       --cache_size=64 
+       --lookahead_size=32
+	   sector size of 512
+block size is the total size of a block, read and program size are usually the same

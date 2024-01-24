@@ -12,7 +12,8 @@ if((NOT CONFIG_DISK_DRIVER_FLASH) AND
    (NOT CONFIG_DISK_DRIVER_SDMMC))
 	message(WARNING "No disk access settings detected." )
 endif()
-
+#
+#we previously used GLOB_RECURSE, but that was deprecated since we want to have control over what code is included.
 FILE(GLOB_RECURSE app_sources src/*.cc)
 FILE(GLOB_RECURSE c_app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources} 

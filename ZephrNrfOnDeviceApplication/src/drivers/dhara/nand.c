@@ -13,6 +13,7 @@ int dhara_nand_is_bad(const dhara_nand* n, dhara_block_t b)
 
 void dhara_nand_mark_bad(const dhara_nand* n, dhara_block_t b)
 {
+
 }
 
 int dhara_nand_erase(const dhara_nand* n, dhara_block_t b, dhara_error_t* err)

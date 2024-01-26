@@ -307,11 +307,12 @@ static void spi_init(void)
     printk("Could not get %s device\n", spiName_ppg);
     return;
   }
-
+  
   imu_cs.gpio.port = gpioHandle_CS_IMU;
   ppg_cs.gpio.port = gpioHandle_CS_ppg;
-  spi_cfg_imu.cs = &imu_cs;
-  spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
+  //spi_cfg_ppg.gpio.port = gpioHandle_CS_ppg;
+  //spi_cfg_imu.cs = &imu_cs;
+  //spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
 
   getIMUID();
   ppgConfig.isEnabled = true;

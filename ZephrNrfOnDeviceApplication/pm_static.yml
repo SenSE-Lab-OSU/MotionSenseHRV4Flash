@@ -8,6 +8,13 @@
 # Old MX25R64
 littlefs_storage:
   address: 0x0
-  device: MX25R64
+  affiliation:
+  - disk
+  extra_params:
+    disk_cache_size: 0x1000
+    disk_name: MX25R64
+    disk_read_only: 0x0
+    disk_sector_size: 512
+  ##device: MX25R64
   region: external_flash
   size: 0x7ff000

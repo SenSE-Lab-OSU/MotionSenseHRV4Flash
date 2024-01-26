@@ -123,7 +123,7 @@ compatible = "nordic,nrf-spim";
 
 */
 
-/* 
+
 &qspi {
 	status = "okay";
 	pinctrl-0 = <&qspi_default>;
@@ -148,8 +148,8 @@ compatible = "nordic,nrf-spim";
 	t-exit-dpd = <35000>;
 	};
 };
-*/
- 
+
+ /* 
 &qspi {
 	status = "okay";
 	pinctrl-0 = <&qspi_default>;
@@ -176,7 +176,7 @@ compatible = "nordic,nrf-spim";
 	t-exit-dpd = <35000>;
 	};
 };
-
+*/
 
 
 &pinctrl {

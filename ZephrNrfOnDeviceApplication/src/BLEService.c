@@ -7,6 +7,7 @@
 //#include <sys/byteorder.h>
 #include <zephyr/kernel.h>
 #include <soc.h>
+#include <zephyr/usb/usb_device.h>
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "batteryMonitor.h"
@@ -312,7 +313,11 @@ printk("timer init\n");
 
 }
 
+void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
+    
+  LOG_INF("USB Status: %d", status);
 
+}
 
 #define MAX_TRANSMIT_SIZE 250//TODO figure this out
 

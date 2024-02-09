@@ -167,6 +167,8 @@ extern struct motionSendInfo my_motionData;  // work-queue instance for tflite n
 void connected(struct bt_conn *conn, uint8_t err);
 void disconnected(struct bt_conn *conn, uint8_t reason);
 
+void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param);
+
 int tfMicro_service_init(void);
 
 static void on_sent(struct bt_conn *conn, void *user_data);

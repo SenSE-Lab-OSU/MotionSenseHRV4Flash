@@ -86,11 +86,19 @@ SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
 -------------------------------------------------------------------------------------
 */
 // SPI Mode-3 IMU
-struct spi_config spi_cfg_imu = {
+struct spi_config spi_cfg_imu =
+{
     .frequency = 1000000,
     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
                  SPI_MODE_CPOL | SPI_MODE_CPHA,
-    .slave = 0};
+    .slave = 0,
+    // this should work, but for some reason it doesn't. However, this might work without
+    // the cs field anyway, apparently it is auto managed, so test first
+    //.cs = SPI_CS_CONTROL_PTR_DT(DT_NODELABEL(spi2), 0)
+    };
+
+//struct spi_config spi_cfg_imu2 = SPI_CONFIG_DT(DT_NODELABEL(spi2), spi_cfg_imu.operation, 0);
+
 // SPI Mode-3 PPG
 struct spi_config spi_cfg_ppg = {
     .frequency = 4000000,
@@ -109,6 +117,7 @@ struct ppgData ppgData1;
 
 const struct device *spi_dev_ppg, *spi_dev_imu;
 const struct device *i2c_dev;
+
 struct bq274xx_data batteryMonitor;
 struct bq274xx_config batteryMonitorConfig;
 
@@ -310,6 +319,8 @@ static void spi_init(void)
   
   imu_cs.gpio.port = gpioHandle_CS_IMU;
   ppg_cs.gpio.port = gpioHandle_CS_ppg;
+  
+
   //spi_cfg_ppg.gpio.port = gpioHandle_CS_ppg;
   //spi_cfg_imu.cs = &imu_cs;
   //spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
@@ -443,7 +454,7 @@ void main(void)
   IRQ_CONNECT(TIMER1_IRQn, 1,
               nrfx_timer_1_irq_handler, NULL, 0);
 
-  // Init, verify and config sensors
+  // Init, verify ID and config sensors
   spi_init();
   spi_verify_sensor_ids();
 
@@ -485,11 +496,12 @@ void main(void)
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];                                           /**< RX buffer. */
   int storage_update = 14;
+  
   while (1)
   {
-
+    usb_enable(usb_status_cb);
     printk("%d %d\n", connectedFlag, collecting_data);
-
+    
     if (!connectedFlag)
     // blink the LED while we aren't connected.
       led_is_on = !led_is_on;

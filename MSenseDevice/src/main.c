@@ -496,10 +496,10 @@ void main(void)
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];                                           /**< RX buffer. */
   int storage_update = 14;
-  
+  usb_enable(usb_status_cb);
   while (1)
   {
-    usb_enable(usb_status_cb);
+    
     printk("%d %d\n", connectedFlag, collecting_data);
     
     if (!connectedFlag)
@@ -523,3 +523,5 @@ void main(void)
     k_msleep(SLEEP_TIME_MS);
   }
 }
+
+//SYS_INIT(setup_disk, APPLICATION, 49);

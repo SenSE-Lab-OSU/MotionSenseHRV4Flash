@@ -392,7 +392,7 @@ void spi_verify_sensor_ids()
   rxLen = 3;
   if (device_is_ready(spi_dev_ppg))
   {
-    spiRead_registerPPG(tx_buffer, txLen, rx_buffer, rxLen);
+    spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
     printk("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
   }
   else

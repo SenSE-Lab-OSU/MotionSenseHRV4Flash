@@ -211,7 +211,7 @@ arm_fir_instance_f32 S_chan1A_fil, S_chan1B_fil,
 // Channel 2A - Green 1
 // Channel 2B - Green 2
 
-void spiRead_registerPPG(uint8_t * tx_buffer, 
+void spiReadWritePPG(uint8_t * tx_buffer, 
   uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen){
   int err;
   const struct spi_buf tx_buf = {
@@ -236,7 +236,7 @@ void spiRead_registerPPG(uint8_t * tx_buffer,
     printk("SPI error: %d\n", err);
 }
 
-void spiWrite_registerPPG(uint8_t * tx_buffer, uint8_t txLen){
+void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen){
   int err;
   const struct spi_buf tx_buf = {
     .buf = tx_buffer,
@@ -265,26 +265,26 @@ void ppg_config(void){
     uint8_t read_array[5] = {0};
     txLen=3;
     rxLen=3;
-    spiRead_registerPPG(cmd_array, txLen, read_array, rxLen);
+    spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
 
     // Resetting PPG sensor
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[1] = WRITEMASTER;
     cmd_array[2] = PPG_RESET;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
 
     // Shutting down PPG sensor
     cmd_array[2] = PPG_SHUTDOWN;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
 
     // Reading interrupt status register 1
     cmd_array[0] = PPG_INT_STAT_1;
     cmd_array[1] = READMASTER;
-    spiRead_registerPPG(cmd_array, txLen, read_array, rxLen);
+    spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
 
     // Reading interrupt status register 2	
     cmd_array[0] = PPG_INT_STAT_2;
-    spiRead_registerPPG(cmd_array, txLen, read_array, rxLen);
+    spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
 
     #if  defined(LED_RED )
     //nrf_delay_ms(5);
@@ -304,24 +304,24 @@ void ppg_config(void){
       cmd_array[0] = PPG_CONFIG_1;		
       cmd_array[1] = WRITEMASTER;
       cmd_array[2] = PPG_TINT_117_3us; 
-      spiWrite_registerPPG(cmd_array, txLen);
+      spiWritePPG(cmd_array, txLen);
     #endif
 		
 // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
     cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
       
     //PPG coniguration 3- LED settling time =12us
     cmd_array[0] = PPG_CONFIG_3;
     cmd_array[1] = WRITEMASTER;
     cmd_array[2] = PPG_LED_SETLNG_12us;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
       
     // Photo-diode Bias 0 to 65pF 
     cmd_array[0] = PPG_PHOTODIODE_BIAS;
     cmd_array[2] = (uint8_t)(PPG_PDBIAS_65pF<<4) | (uint8_t)PPG_PDBIAS_65pF; 
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
       
       // Configuring LED drive 3 (Green) range 124 mA
       //            LED drive 2 (Green) range 124 mA	
@@ -329,7 +329,7 @@ void ppg_config(void){
     #if  defined(LED_GREEN )
       cmd_array[0] = PPG_LED_RANGE_1; 
       cmd_array[2] = (uint8_t)(PPG_LED_CURRENT_124mA <<4) | (uint8_t)(PPG_LED_CURRENT_124mA <<2)|PPG_LED_CURRENT_31mA; 
-      spiWrite_registerPPG(cmd_array, txLen);
+      spiWritePPG(cmd_array, txLen);
     #endif
 		
 	  #if  defined(LED_RED )
@@ -348,47 +348,47 @@ void ppg_config(void){
     // LED 1 Driver current setting (IR )
     cmd_array[0] = PPG_LED1_PA;
     cmd_array[2] = ppgConfig.infraRed_intensity; 
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
     
     // LED 2 Driver current setting (Green )
     cmd_array[0] = PPG_LED2_PA;
     cmd_array[2] = ppgConfig.green_intensity; 
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
     
     // LED 3 Driver current setting (Green )
     cmd_array[0] = PPG_LED3_PA;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
 
     // System control reqister - Low Power Mode + shutoddown 
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[2] = PPG_LP_MODE | PPG_SHUTDOWN;
-    spiWrite_registerPPG(cmd_array, txLen);    
+    spiWritePPG(cmd_array, txLen);    
     
     // FIFO configuration - 15 samples stored in FIFO
     cmd_array[0] = PPG_FIFO_CONFIG_1;
     cmd_array[2] = 0x0F; 
-    spiWrite_registerPPG(cmd_array, txLen);    
+    spiWritePPG(cmd_array, txLen);    
 
     // FIFO configuration 2 Push enable when FIFO is full
     cmd_array[0] = PPG_FIFO_CONFIG_2;
     cmd_array[2] = PPG_FIFO_PUSH_ENABLE;
-    spiWrite_registerPPG(cmd_array, txLen);    
+    spiWritePPG(cmd_array, txLen);    
 
     // Interrupt Enable A_full interrupt is enabled
     cmd_array[0] = PPG_INT_EN_1;
     cmd_array[2] = PPG_INT_A_FULL_EN;
-    spiWrite_registerPPG(cmd_array, txLen);    
+    spiWritePPG(cmd_array, txLen);    
 
     // Green LED 2 and LED 3 is pulsed simultaneously first 
     // then IR LED is pulsed next
     cmd_array[0] = PPG_LED_SEQ_1;
     cmd_array[2] = PPG_LEDC2_LED2_LED3_SIMULT | PPG_LEDC1_LED1; 
-    spiWrite_registerPPG(cmd_array, txLen);    
+    spiWritePPG(cmd_array, txLen);    
 
     // System control Dual PPG + Low power mode enabled
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[2] = PPG_LP_MODE;
-    spiWrite_registerPPG(cmd_array, txLen);  
+    spiWritePPG(cmd_array, txLen);  
     
     low_ch1 =0; up_ch1 = 0x3f;
     low_ch2 =0; up_ch2 = 0xff;
@@ -416,16 +416,16 @@ void ppg_changeIntensity(void){
    // LED 1 Driver current setting (IR )
     cmd_array[0] = PPG_LED1_PA;
     cmd_array[2] = ppgConfig.infraRed_intensity; 
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
     
     // LED 2 Driver current setting (Green )
     cmd_array[0] = PPG_LED2_PA;
     cmd_array[2] = ppgConfig.green_intensity; 
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
     
     // LED 3 Driver current setting (Green )
     cmd_array[0] = PPG_LED3_PA;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
   }
 }
 void ppg_changeSamplingRate(void){
@@ -439,7 +439,7 @@ void ppg_changeSamplingRate(void){
   // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
     cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
-    spiWrite_registerPPG(cmd_array, txLen);
+    spiWritePPG(cmd_array, txLen);
   }
 }
 
@@ -457,7 +457,7 @@ void ppg_sleep(void){
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[1] = WRITEMASTER;
     cmd_array[2] = PPG_SHUTDOWN;
-    spiWrite_registerPPG(cmd_array, txLen);  
+    spiWritePPG(cmd_array, txLen);  
     
   }
 }
@@ -566,7 +566,7 @@ void ppg_led_currentUpdate(void){
 			 
 	cmd_array[0] = PPG_LED1_PA;
 	cmd_array[2] = ppgConfig.infraRed_intensity; // changing it to 0x10 from 0x20
-        spiWrite_registerPPG(cmd_array, txLen);  
+        spiWritePPG(cmd_array, txLen);  
 				
 	adapt_counterCh1++;
 	printk("adapt counter length: %d\n", adapt_counterCh1);
@@ -585,10 +585,10 @@ void ppg_led_currentUpdate(void){
 	cmd_array[0] = PPG_LED2_PA;
         printk("new ppg intensity: %d\n", ppgConfig.green_intensity);
 	cmd_array[2] = ppgConfig.green_intensity; // Green 49.9mA
-        spiWrite_registerPPG(cmd_array, txLen);  
+        spiWritePPG(cmd_array, txLen);  
 				
 	cmd_array[0] = PPG_LED3_PA;
-        spiWrite_registerPPG(cmd_array, txLen);  
+        spiWritePPG(cmd_array, txLen);  
 	adapt_counterCh2++;
 	if(adapt_counterCh2 >adaptIterMax) {
           adapt_counterCh2=adaptIterMax;
@@ -635,11 +635,11 @@ void read_ppg_fifo_buffer(struct k_work *item){
   cmd_array[1] = READMASTER;
   txLen=3;
   rxLen=3;
-  spiRead_registerPPG(cmd_array, txLen, sampleCnt, rxLen);
+  spiReadWritePPG(cmd_array, txLen, sampleCnt, rxLen);
     
   // Reading the actual PPG samples
   cmd_array[0] = PPG_FIFO_DATA;
-  spiRead_registerPPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
+  spiReadWritePPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
 
 
   int i, j, k;
@@ -823,13 +823,13 @@ void ppg_bluetooth_fill(uint8_t* bleSendArr){
   cmd_array[1] = READMASTER;
   txLen=3;
   rxLen=3;
-  spiRead_registerPPG(cmd_array, txLen, sampleCnt, rxLen);
+  spiReadWritePPG(cmd_array, txLen, sampleCnt, rxLen);
     
   // Reading the PPG samples
   cmd_array[0] = PPG_FIFO_DATA;
 
   
-  spiRead_registerPPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
+  spiReadWritePPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
   for (i=0; i<sampleCnt[2]; i++){
     for (j=0; j <= 9; j=j+3){
       tag = (read_array[i*12+j+2] & 0xF8) >>3;
@@ -965,122 +965,3 @@ void ppg_bluetooth_fill(uint8_t* bleSendArr){
 
 }
 
-
-/*
-
-void fileOpen(){
-  int rc = fs_open(&fileData, fname, FS_O_CREATE | FS_O_RDWR);
-  if (rc < 0) 
-    printk("FAIL: open %s: %d\n", fname, rc);
-
-}
-void fileOpenAppend(void){
-
-  int rc = fs_open(&fileData, fname, FS_O_APPEND | FS_O_RDWR);
-  if (rc < 0) 
-    printk("FAIL: open for append %s: %d\n", fname, rc);
-
-}
-
-void fileClose(){
-  int rc = fs_close(&fileData);
-  getFileSysSize();
-}
-void fileOpenRead(){
-  int rc = fs_open(&fileData, fname, FS_O_CREATE | FS_O_RDWR);
- 
-  if (rc < 0) 
-    printk("FAIL: open for read %s: %d\n", fname, rc);
-}
-
-void fs_mount_init(){
-  unsigned int id = (uintptr_t)lfs_storage_mnt.storage_dev;
-  
-  struct fs_statvfs sbuf;
-  const struct flash_area *pfa;
-  int rc;
-
-
-  snprintf(fname, sizeof(fname), "%s/dataradar",lfs_storage_mnt.mnt_point);
-  printk("%s is filename\n",fname);
-  rc = flash_area_open(id, &pfa);
-  if (rc < 0) {
-    printk("FAIL: unable to find flash area %u: %d\n",id, rc);
-    return;
-  }
-
-  printk("Area %u at 0x%x on %s for %u bytes\n",
-         id, (unsigned int)pfa->fa_off, pfa->fa_dev_name,
-         (unsigned int)pfa->fa_size);
-
-  
-  printk("Erasing flash area %d... ",id);
-  rc = flash_area_erase(pfa, 0, pfa->fa_size);
-  printk("%d\n", rc);
-
-
-  flash_area_close(pfa);
-
-  rc = fs_mount(&lfs_storage_mnt);
-  if (rc < 0) {
-    printk("FAIL: mount id %u at %s: %d\n",
-           (unsigned int)lfs_storage_mnt.storage_dev, lfs_storage_mnt.mnt_point,
-           rc);
-    return;
-  }
-  printk("%s mount: %d\n", lfs_storage_mnt.mnt_point, rc);
-
-  rc = fs_statvfs(lfs_storage_mnt.mnt_point, &sbuf);
-  if (rc < 0) 
-    printk("FAIL: statvfs: %d\n", rc);
-  
-
-  printk("%s: bsize = %lu ; frsize = %lu ;"
-         " blocks = %lu ; bfree = %lu\n",
-         lfs_storage_mnt.mnt_point,
-         sbuf.f_bsize, sbuf.f_frsize,
-         sbuf.f_blocks, sbuf.f_bfree);
-
-  snprintf(fname, sizeof(fname), "%s/dataLevel",lfs_storage_mnt.mnt_point);
-
-}
-void getFileSysSize(void){
-  struct fs_statvfs sbuf;
-  int rc;
-
-  rc = fs_statvfs(lfs_storage_mnt.mnt_point, &sbuf);
-  if (rc < 0) 
-    printk("FAIL: statvfs: %d\n", rc);
-  
-
-  printk("Flie system size after closing file %s: bsize = %lu ; frsize = %lu ;"
-         " total blocks = %lu ; blocks free = %lu\n",
-         lfs_storage_mnt.mnt_point,
-         sbuf.f_bsize, sbuf.f_frsize,
-         sbuf.f_blocks, sbuf.f_bfree);
-}
-
-void fs_umountFilesys(){
-  int rc = fs_unmount(&lfs_storage_mnt);
-  printk("%s unmount: %d\n", lfs_storage_mnt.mnt_point, rc);
-  
-  
-  fs_mount_init();
-}
-
-void fileWrite(uint32_t dataFlash){
-  int rc = fs_write(&fileData, &dataFlash, sizeof(dataFlash));
-  
-  if(rc<0){
-    printk("error in file write %d\n",rc);
-  }
-}
-uint32_t fileRead(void){
-  uint32_t dataRead2;
-  int rc = fs_read(&fileData, &dataRead2, sizeof(dataRead2));
-  if(rc<0){
-    printk("error in file write %d\n",rc);
-  }
-  return dataRead2;
-}
-*/

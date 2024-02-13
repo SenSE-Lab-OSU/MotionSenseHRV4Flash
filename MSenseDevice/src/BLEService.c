@@ -287,14 +287,15 @@ printk("timer init\n");
   uint32_t time_ticks;
   nrfx_err_t          err;
   nrfx_timer_config_t timer_cfg = {
-          .frequency = NRF_TIMER_FREQ_1MHz,
+          .frequency = 1000000,
           .mode      = NRF_TIMER_MODE_TIMER,
           .bit_width = NRF_TIMER_BIT_WIDTH_24,
           .interrupt_priority = TIMER_PRIORITY,
           .p_context = NULL,
   };  
   uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
-  nrfx_timer_config_t config = timer_cfg; //NRFX_TIMER_DEFAULT_CONFIG(1000000);
+  nrfx_timer_config_t config = timer_cfg; 
+  //nrfx_timer_config_t config5_2 = NRFX_TIMER_DEFAULT_CONFIG(1000000);
   err = nrfx_timer_init(&timer_global, &config, timer_handler);
   if (err != NRFX_SUCCESS) {
           printk("nrfx_timer_init failed with: %d\n", err);
@@ -319,7 +320,7 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
-#define MAX_TRANSMIT_SIZE 250//TODO figure this out
+#define MAX_TRANSMIT_SIZE 250 //TODO figure this out
 
 
 uint8_t data_rx[MAX_TRANSMIT_SIZE];

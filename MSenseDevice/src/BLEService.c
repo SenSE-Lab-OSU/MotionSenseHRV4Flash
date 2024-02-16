@@ -392,7 +392,9 @@ uint16_t offset, uint8_t flags){
   if (val){
     ppg_config();
     motion_config();
-
+    #ifndef CONFIG_USB_ALWAYS_ON
+    usb_disable();
+    #endif
     timer_init();
     global_counter = 0;
     gyro_first_read = 0;
@@ -403,7 +405,9 @@ uint16_t offset, uint8_t flags){
   else{
     timer_deinit();
     close_all_files();
+    #ifndef CONFIG_USB_ALWAYS_ON
     usb_enable(NULL);	
+    #endif
     collecting_data = false;
   }
 }

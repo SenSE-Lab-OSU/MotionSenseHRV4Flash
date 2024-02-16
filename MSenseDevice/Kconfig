@@ -78,4 +78,7 @@ config BLUETOOTH_SETTINGS_OVERRIDE
 	int "Override User Set Bluetooth Settings"
 	default 1
 
+config USB_ALWAYS_ON
+	bool "whether the usb mass storage driver is on during bluetooth collection"
+	default n
 source "Kconfig.zephyr"

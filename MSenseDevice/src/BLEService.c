@@ -8,6 +8,7 @@
 #include <zephyr/kernel.h>
 #include <soc.h>
 #include <zephyr/usb/usb_device.h>
+#include <zephyr/drivers/flash/nrf_qspi_nor.h>
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "batteryMonitor.h"
@@ -457,8 +458,22 @@ uint16_t offset, uint8_t flags){
   patient_num = val;
 }
 
+/**
+ * @brief QSPI command structure
+ * Structure used for custom command usage.
+ *
+ * @param op_code is a command value (i.e 0x9F - get Jedec ID)
+ * @param tx_buf structure used for TX purposes. Can be NULL if not used.
+ * @param rx_buf structure used for RX purposes. Can be NULL if not used.
+ */
+struct qspi_cmd {
+	uint8_t op_code;
+	const struct qspi_buf *tx_buf;
+	const struct qspi_buf *rx_buf;
+};
 
-static ssize_t bt_turn_off(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+
+static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
 		(void *)conn, len);
@@ -468,7 +483,20 @@ uint16_t offset, uint8_t flags){
   if (len != 4){
     LOG_WRN("invalid packet length for date: %i", len);
   }
+  //reset the flash memory first
+  LOG_INF("Performing Chip Erase...\n");
+  const struct qspi_cmd chip_erase = {
+    .op_code = 0xC7 // qspi chip erase command
+  };
 
+  struct device* qspi_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  if (device_is_ready(qspi_device)){
+    LOG_INF("got qspi_device, eraseing... \n");
+    qspi_send_cmd(qspi_device, &chip_erase, true);
+    LOG_INF("Chip Erase Complete! Resetting");
+  }
+  
+  
   NVIC_SystemReset();
 }
 

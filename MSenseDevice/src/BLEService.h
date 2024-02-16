@@ -190,7 +190,7 @@ static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, vo
 
 static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-  static ssize_t bt_turn_off(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+  static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
 static ssize_t bt_write_patient_num(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);

@@ -159,9 +159,9 @@ compatible = "nordic,nrf-spim";
 		compatible = "nordic,qspi-nor";
 	reg = <0>;
 	//MX25R64 supports only pp and pp4io
-	writeoc = "pp4io";
+	writeoc = "pp";
 	//MX25R64 supports all readoc options
-	readoc = "read4io";
+	readoc = "fastread";
 	sck-frequency = <8000000>;
 	jedec-id = [c2 28 17];
 	sfdp-bfp = [

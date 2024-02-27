@@ -210,7 +210,7 @@ static void gyroscope_measurement(float * quaternionResult){
 
 // Function that converts the accumulated quarternion 
 // back to angular velocity measurements.
-static void prepare_gyros(float * quaternionResult){
+static void prepare_gyros(float* quaternionResult){
   float quantizerScale; 
   float pi =(float) 3.14159;
   float32_t rad_deg = 180.0f/pi; 

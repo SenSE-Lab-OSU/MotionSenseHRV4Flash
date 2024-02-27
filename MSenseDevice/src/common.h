@@ -8,7 +8,7 @@
 #define ble_magnetometerPktLength 8
 #define ble_orientationPktLength 18
 #define ble_tfMicroPktLength 66
-extern uint8_t timeWindow;
+extern uint32_t timeWindow;
 extern uint16_t sampleFreq;
 extern struct bt_conn *my_connection;
 typedef union{ 

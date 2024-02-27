@@ -2,10 +2,12 @@
 
 
 #include <zephyr/drivers/flash.h>
-
+#include <zephyr/logging/log.h>
 //must put this with the compatable: vnd, customflash in device tree
 
 #define DT_DRV_COMPAT vnd_customflash
+
+LOG_MODULE_REGISTER(custom_flash, 3);
 
 
 /* Define data (RAM) and configuration (ROM) structures: */
@@ -34,7 +36,7 @@ static int qspi_nor_init(const struct device *dev)
 
 
 static int custom_erase(const struct device *dev, off_t addr, size_t size){
-    
+    LOG_INF("eraseing, size %d...", size);
     return 0;
 }
 
@@ -42,13 +44,14 @@ static int custom_write(const struct device *dev, off_t addr,
 			const void *src,
 			size_t size)
 {
+        LOG_INF("writing, size %d", size);
             return 0;
 }
 
 static int custom_read(const struct device *dev, off_t addr, void *dest,
 			size_t size){
 
-
+                LOG_INF("reading, size %d", size);
                 return 0;
             }
 

@@ -56,8 +56,8 @@ LOG_MODULE_REGISTER(main);
 #define LED_PIN DT_GPIO_PIN(LED0_NODE, gpios)
 #define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
 
-const struct device *gpioHandle_CS_IMU;
-const struct device *gpioHandle_CS_ppg;
+const struct device* gpioHandle_CS_IMU;
+const struct device* gpioHandle_CS_ppg;
 
 struct spi_cs_control imu_cs = {
     .delay = 0,
@@ -491,15 +491,15 @@ void main(void)
     printk("Error: Can't initialize LED");
     // return;
   }
-
-  // sys_slist_t* work_queue = &k_sys_work_q.pending;
-  uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
-  uint8_t m_rx_buf[15];                                           /**< RX buffer. */
+  
   int storage_update = 14;
+  int update_time = SLEEP_TIME_MS;
   usb_enable(usb_status_cb);
   while (1)
   {
-    
+    if (file_lock){
+      update_time = 250;
+    }
     printk("%d %d\n", connectedFlag, collecting_data);
     
     if (!connectedFlag)
@@ -509,18 +509,21 @@ void main(void)
     {
       //When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
       led_is_on = 1;
+      if (!file_lock){
       storage_update++;
       // update how much storage we have left every 15 cycles 
       if (storage_update >= 15)
       {
         led_is_on = 1;
+        
         get_storage_percent_full();
         get_current_unix_time();
         storage_update = 0;
       }
+      }
     }
     gpio_pin_set(gpioHandle_CS_IMU, LED_PIN, (int)led_is_on);
-    k_msleep(SLEEP_TIME_MS);
+    k_msleep(update_time);
   }
 }
 

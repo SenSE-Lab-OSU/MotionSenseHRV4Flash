@@ -1,11 +1,11 @@
 
-
+extern bool file_lock;
 
 enum sensor_type {ppg, 
 accelorometer, passthrough};
 
 typedef struct memory_container {
-	void* address;
+	const void* address;
 	size_t size;
 	enum sensor_type sensor;
 	int packet_num;

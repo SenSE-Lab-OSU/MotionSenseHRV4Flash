@@ -38,7 +38,7 @@ memory_container work_item;
 
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
-static int create_newfile_limit = 9000;
+
 
 
 
@@ -47,8 +47,7 @@ int storage_percent_full;
 
 int upload_timeout_errors;
 
-
-
+bool file_lock;
 
 uint64_t last_time_update_sent;
 
@@ -187,6 +186,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		strcat(MSenseFile->file_name, ".bin");
 		//printk("file: %s \n", file_name); 
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
+		if (file_create != 0){
+			LOG_WRN("Unable to create file");
+		}
 		first_write = true;
 
 	}
@@ -197,8 +199,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	
 	int total_written = fs_write(&MSenseFile->self_file, data, size);
 	//fs_write(&file, data, size);
-	if (total_written = size){
-		//printk("sucessfully wrote file, bytes written = %i ! \n", total_written);
+	if (total_written == size){
+		LOG_INF("sucessfully wrote file, bytes written = %i ! \n", total_written);
 		data_counter += total_written;
 	}
 	fs_close(&MSenseFile->self_file);
@@ -286,6 +288,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	LOG_INF("ret value: %i", ret);
 
 }
+
 
 void store_data(const void* data, size_t size, enum sensor_type sensor){
 	LOG_DBG("Store data called");
@@ -489,7 +492,7 @@ void set_date_time_bt(uint64_t value){
 	
 	set_date_time = value;
 	last_time_update_sent = k_uptime_get() / 1000;
-	LOG_INF("new datetime sent, value is %llu, seconds uptime is %i", set_date_time, last_time_update_sent);
+	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
 	
 
 }
@@ -515,7 +518,7 @@ void start_timer(){
 int64_t stop_timer(){
 	int64_t length = k_uptime_get() - start_time;
 	start_time = 0;
-	LOG_INF("Timer Value: %i ms", length);
+	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }
 

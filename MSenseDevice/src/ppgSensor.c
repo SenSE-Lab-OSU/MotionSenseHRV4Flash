@@ -16,7 +16,7 @@
 
 #define LED_GREEN 1
 
-uint8_t timeWindow=50;
+uint32_t timeWindow=50;
 uint8_t blePktPPG_noFilter[ble_ppg_noFilter_byteLength];
 uint8_t blePktPPG_Filter[ble_ppg_Filter_byteLength];
 float32_t std_ppgThreshold_lower = 120;

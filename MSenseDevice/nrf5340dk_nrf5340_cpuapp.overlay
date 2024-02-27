@@ -69,6 +69,9 @@ compatible = "nordic,nrf-spim";
 &i2c1 {
 	status = "okay";
 	compatible = "nordic,nrf-twim";
+	pinctrl-0 = < &battery_default>;
+	pinctrl-1 = <&battery_sleep>;
+	pinctrl-names = "default", "sleep";
 };
 
 /* 
@@ -91,7 +94,7 @@ compatible = "nordic,nrf-spim";
 &spi3{
 	compatible = "nordic,nrf-spim";
 	status = "okay";
-	cs-gpios = <&gpio1 5 1>;
+	cs-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
 	pinctrl-0 = < &ppg_default>;
 	pinctrl-1 = <&ppg_sleep>;
 	pinctrl-names = "default", "sleep";
@@ -183,7 +186,7 @@ compatible = "nordic,nrf-spim";
 	//spi 1, imu sensor
     spi1_default: spi1_default {
 		group1 {
-			psels = <NRF_PSEL(SPIM_SCK, 0, 23)>,
+			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
 				<NRF_PSEL(SPIM_MOSI, 0, 24)>;
 		};
@@ -191,7 +194,7 @@ compatible = "nordic,nrf-spim";
 
 	spi1_sleep: spi1_sleep {
 		group1 {
-			psels = <NRF_PSEL(SPIM_SCK, 0, 23)>,
+			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
 				<NRF_PSEL(SPIM_MOSI, 0, 24)>;
 			low-power-enable;
@@ -213,23 +216,23 @@ compatible = "nordic,nrf-spim";
 		};
 	};
 	
-	/* 
+	 
 	//battery, on i2c0
-	i2c0_default: i2c0_default {
+	battery_default: battery_default {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SDA, 1, 2)>,
-				<NRF_PSEL(TWIM_SCL, 1, 3)>;
+			psels = <NRF_PSEL(TWIM_SDA, 1, 3)>,
+				<NRF_PSEL(TWIM_SCL, 1, 2)>;
 		};
 	};
 
-	i2c0_sleep: i2c0_sleep {
+	battery_sleep: battery_sleep {
 		group1 {
-			psels = <NRF_PSEL(TWIM_SDA, 1, 2)>,
-				<NRF_PSEL(TWIM_SCL, 1, 3)>;
+			psels = <NRF_PSEL(TWIM_SDA, 1, 3)>,
+				<NRF_PSEL(TWIM_SCL, 1, 2)>;
 			low-power-enable;
 		};
 	};
-	*/
+	
 
 };
 

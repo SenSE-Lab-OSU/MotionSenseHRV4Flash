@@ -8,7 +8,8 @@
 #include <zephyr/kernel.h>
 #include <soc.h>
 #include <zephyr/usb/usb_device.h>
-#include <zephyr/drivers/flash/nrf_qspi_nor.h>
+#include "drivers/jdec_nor/custom_qspi.h"
+#include <zephyr/drivers/flash.h>
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "batteryMonitor.h"
@@ -32,6 +33,23 @@
 
 
 LOG_MODULE_REGISTER(user_bluetooth);
+
+
+
+
+static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+  static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t bt_write_patient_num(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t bt_write_date_time(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
+
 
 
 
@@ -67,6 +85,7 @@ LOG_MODULE_REGISTER(user_bluetooth);
 //         - 0x02 - Motion FS=100
 //         - 0x03 - Motion FS=50
 //         - 0x04 - Motion FS=25
+/* Later, we should just delete these and move the defining bluetooth to the bottom. */
  struct bt_uuid_128 bt_uuid_tfmicro = BT_UUID_INIT_128(TFMICRO_SERVICE_UUID);
  struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_tfmicro_tx = BT_UUID_INIT_128(TF_HR_TX_CHARACTERISTIC_UUID);
@@ -91,6 +110,7 @@ struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUI
 struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_reset = BT_UUID_INIT_128(WRITE_RESET_CHARACTERISTIC_UUID);
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
@@ -146,6 +166,8 @@ BT_GATT_CCC(on_cccd_changed, //24
 BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 );
 #else
+
+/* Write Service: Enable device, reset device, Write date time, patient num characteristics*/
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
   BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
@@ -157,8 +179,12 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
     NULL, bt_write_patient_num, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
+    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
+    NULL, bt_reset, NULL),
 ); 
 
+/* status service: read storage capacity, potentially battery later on*/
 BT_GATT_SERVICE_DEFINE(status_service, 
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
@@ -166,7 +192,7 @@ BT_GATT_SERVICE_DEFINE(status_service,
     read_storage_left, NULL, &storage_percent_full),
 );
 
-
+/* update service: read ENMO updates */
 BT_GATT_SERVICE_DEFINE(update_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
@@ -374,6 +400,38 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
   connectedFlag=false;
 }
 
+
+
+
+void reset_device(){
+
+  // disconnect bluetooth
+  LOG_INF("disabling bluetooth.. \n");
+  
+  bt_disable();
+    //reset the flash memory first
+  LOG_INF("Performing Chip Erase...\n");
+  const struct qspi_cmd chip_erase = {
+    .op_code = 0xC7 // qspi chip erase command
+  };
+
+  struct device* qspi_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  if (device_is_ready(qspi_device)){
+    LOG_INF("got qspi_device, eraseing... \n");
+    file_lock = true;
+    const struct qspi_nor_config* params = qspi_device->config;
+    flash_erase(qspi_device, 0, params->size);
+    //custom_qspi_send_cmd(qspi_device, &chip_erase, true);
+    LOG_INF("Chip Erase Complete! Resetting");
+    k_sleep(K_SECONDS(2));
+  }
+  
+  
+  NVIC_SystemReset();
+
+}
+
+
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p", attr->handle,
@@ -433,6 +491,7 @@ uint16_t offset, uint8_t flags){
   uint64_t val = *((uint64_t *)buff);
   LOG_INF("write: %llu", val);
   set_date_time_bt(val);
+  return val;
 }
 
 
@@ -454,23 +513,11 @@ uint16_t offset, uint8_t flags){
   }
 
   int val = *((int *)buff);
-  LOG_INF("write: %llu", val);
+  LOG_INF("write: %d", val);
   patient_num = val;
+  return patient_num;
 }
 
-/**
- * @brief QSPI command structure
- * Structure used for custom command usage.
- *
- * @param op_code is a command value (i.e 0x9F - get Jedec ID)
- * @param tx_buf structure used for TX purposes. Can be NULL if not used.
- * @param rx_buf structure used for RX purposes. Can be NULL if not used.
- */
-struct qspi_cmd {
-	uint8_t op_code;
-	const struct qspi_buf *tx_buf;
-	const struct qspi_buf *rx_buf;
-};
 
 
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
@@ -480,24 +527,28 @@ uint16_t offset, uint8_t flags){
 
 	
 	LOG_INF("Write length: %i", len);
-  if (len != 4){
+  if (len != 1){
     LOG_WRN("invalid packet length for date: %i", len);
   }
-  //reset the flash memory first
-  LOG_INF("Performing Chip Erase...\n");
-  const struct qspi_cmd chip_erase = {
-    .op_code = 0xC7 // qspi chip erase command
-  };
+  
+  if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+  }
 
-  struct device* qspi_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
-  if (device_is_ready(qspi_device)){
-    LOG_INF("got qspi_device, eraseing... \n");
-    qspi_send_cmd(qspi_device, &chip_erase, true);
-    LOG_INF("Chip Erase Complete! Resetting");
+  uint8_t val = *((uint8_t *)buff);
+  LOG_INF("entered code: %i", val);
+  if (val == 68 && !collecting_data){
+    LOG_INF("Correct Code Entered, Resetting Device");
+    bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    connectedFlag=false;
+    k_sleep(K_SECONDS(2));
+    
+    reset_device();
+    return NRFX_SUCCESS;  
   }
   
-  
-  NVIC_SystemReset();
+  return -1;
 }
 
 

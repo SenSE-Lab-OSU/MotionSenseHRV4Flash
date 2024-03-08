@@ -1,0 +1,100 @@
+
+
+
+&spi1 {
+	status = "disabled";
+};
+
+
+&spi2 {
+	compatible = "nordic,nrf-spim";
+		status = "okay";
+		cs-gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&spi1_default>;
+		pinctrl-1 = <&spi1_sleep>;
+		pinctrl-names = "default", "sleep";
+	
+};
+	
+	// We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
+	&i2c1 {
+		status = "okay";
+		compatible = "nordic,nrf-twim";
+		pinctrl-0 = < &battery_default>;
+		pinctrl-1 = <&battery_sleep>;
+		pinctrl-names = "default", "sleep";
+	};
+	
+
+
+	//uart cannot also be in operation, however, this means we have to use segger RTT, because uart is used for console output
+	&uart0 {
+		status = "okay";
+	};
+	
+	
+	  
+	&spi3{
+		compatible = "nordic,nrf-spim";
+		status = "okay";
+		cs-gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+		pinctrl-0 = < &spi4_default>;
+		pinctrl-1 = <&spi4_sleep>;
+		pinctrl-names = "default", "sleep";
+	};
+
+
+
+&pinctrl {
+	//spi 1, ppg
+    spi1_default: spi1_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MISO, 0, 11)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 12)>;
+		};
+	};
+
+	spi1_sleep: spi1_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 15)>,
+				<NRF_PSEL(SPIM_MISO, 0, 11)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 12)>;
+			low-power-enable;
+		};
+	};
+
+	
+	//spi 4, imu
+	spi4_default: spi4_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 0, 7)>, <NRF_PSEL(SPIM_MISO, 0, 6)>, <NRF_PSEL(SPIM_SCK, 0, 5)>;
+		};
+	};
+
+	spi4_sleep: spi4_sleep {
+		group1{
+			psels = <NRF_PSEL(SPIM_MOSI, 0, 7)>, <NRF_PSEL(SPIM_MISO, 0, 6)>, <NRF_PSEL(SPIM_SCK, 0, 5)>;
+			low-power-enable;
+		};
+	};
+	
+	 
+	//battery, on i2c0
+	battery_default: battery_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 9)>,
+				<NRF_PSEL(TWIM_SCL, 0, 10)>;
+		};
+	};
+
+	battery_sleep: battery_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 9)>,
+				<NRF_PSEL(TWIM_SCL, 0, 10)>;
+			low-power-enable;
+		};
+	};
+	
+};
+

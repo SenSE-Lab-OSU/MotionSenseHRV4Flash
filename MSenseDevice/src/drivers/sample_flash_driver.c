@@ -2,6 +2,7 @@
 
 
 #include <zephyr/drivers/flash.h>
+#include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
 //must put this with the compatable: vnd, customflash in device tree
 

@@ -1,6 +1,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
+#include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/random/rand32.h>
 #include <time.h>

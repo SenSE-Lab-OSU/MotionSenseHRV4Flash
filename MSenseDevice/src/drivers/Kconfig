@@ -1,0 +1,10 @@
+# Copyright (c) 2022 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2019, Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+config QSPI_CUSTOM_DRIVER
+	bool "custom sensor"
+	select FLASH_HAS_DRIVER_ENABLED
+	select NRFX_QSPI
+	select FLASH_JESD21

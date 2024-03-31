@@ -8,6 +8,9 @@
 
 #define CONFIG_NORDIC_QSPI_NOR_STACK_WRITE_BUFFER_SIZE 4
 
+#define USE_MANUAL_OPS true
+
+
 #include <errno.h>
 #include <zephyr/drivers/flash.h>
 #include <zephyr/init.h>
@@ -18,7 +21,7 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/irq.h>
-LOG_MODULE_REGISTER(custom_qspi_nor, CONFIG_FLASH_LOG_LEVEL);
+LOG_MODULE_REGISTER(custom_qspi_nor, LOG_LEVEL_DBG);
 
 #include "spi_nor.h"
 #include "jesd216.h"
@@ -45,6 +48,14 @@ struct qspi_nor_data {
 #endif /* CONFIG_MULTITHREADING */
 	bool xip_enabled;
 };
+
+int qspi_nand_current_page_address = 0;
+
+
+int current_writes = 0;
+int current_reads = 0;
+int current_erases = 0;
+
 
 struct qspi_nor_config {
 	nrfx_qspi_config_t nrfx_cfg;
@@ -832,6 +843,106 @@ static int qspi_read_jedec_id(const struct device *dev,
 	return ret;
 }
 
+
+static int qspi_custom_read(const struct device *dev, 
+			  void *data, size_t len, off_t offset)
+{
+	current_reads++;
+	LOG_DBG("reading %d bytes at address %d", len, offset);
+	LOG_DBG("current reads: %i, writes: %i, erases %i", current_reads, current_writes, current_erases);
+	nrfx_err_t res = NRFX_SUCCESS;
+
+	if (!USE_MANUAL_OPS){
+		nrfx_qspi_read(data, len, offset);
+		qspi_wait_for_completion(dev, res);
+		goto out;
+	}
+
+
+	__ASSERT(data != NULL, "null destination");
+
+	uint8_t addr_buf[] = {
+		offset >> 16,
+		offset >> 8,
+		offset,
+		0,		/* wait state */
+	};
+	nrf_qspi_cinstr_conf_t cinstr_cfg = {
+		.opcode = SPI_NOR_CMD_READ_FAST,
+		.length = NRF_QSPI_CINSTR_LEN_1B,
+		.io2_level = true,
+		.io3_level = true,
+	};
+
+
+	
+
+	res = nrfx_qspi_lfm_start(&cinstr_cfg);
+	if (res != NRFX_SUCCESS) {
+		LOG_DBG("lfm_start: %x", res);
+		goto out;
+	}
+
+	res = nrfx_qspi_lfm_xfer(addr_buf, NULL, sizeof(addr_buf), false);
+	if (res != NRFX_SUCCESS) {
+		LOG_DBG("lfm_xfer addr: %x", res);
+		goto out;
+	}
+
+	res = nrfx_qspi_lfm_xfer(NULL, data, len, true);
+	if (res != NRFX_SUCCESS) {
+		LOG_DBG("lfm_xfer read: %x", res);
+		goto out;
+	}
+
+out:
+	LOG_DBG("finished read!");
+	return res;
+}
+
+static int qspi_custom_write(const struct device* dev, void* data, size_t len, 
+	off_t address){
+	current_writes++;
+	LOG_DBG("writing %d bytes at address %d", len, address);
+	nrfx_err_t res = NRFX_SUCCESS;
+	if (!USE_MANUAL_OPS){
+	res = nrfx_qspi_write(data, len, address);
+	qspi_wait_for_completion(dev, res);
+	return res;
+	}
+
+
+	uint8_t addr_buf[] = {
+	address >> 16,
+	address >> 8,
+	address,	/* wait state */
+	};
+	nrf_qspi_cinstr_conf_t cinstr_cfg = {
+		.opcode = SPI_NOR_CMD_PP,
+		.length = NRF_QSPI_CINSTR_LEN_1B,
+		.io2_level = true,
+		.io3_level = true,
+		.wren = true,
+	};
+
+	res = nrfx_qspi_lfm_start(&cinstr_cfg);
+	if (res != NRFX_SUCCESS) {
+		LOG_DBG("lfm_start: %x", res);
+		return res;
+	}
+
+	res = nrfx_qspi_lfm_xfer(addr_buf, NULL, sizeof(addr_buf), false);
+	if (res != NRFX_SUCCESS) {
+		LOG_DBG("lfm_xfer addr: %x", res);
+		return res;
+	}
+
+	res = nrfx_qspi_lfm_xfer(data, NULL, len, true);
+	LOG_DBG("write completed!");
+	return res;
+	}
+
+
 #if defined(CONFIG_FLASH_JESD216_API)
 
 static int qspi_sfdp_read(const struct device *dev, off_t offset,
@@ -932,6 +1043,11 @@ static inline int qspi_nor_read_id(const struct device *dev)
 			qnc->id[0], qnc->id[1], qnc->id[2]);
 		return -ENODEV;
 	}
+	else {
+		LOG_INF("id [%02x %02x %02x] matches [%02x %02x %02x]",
+			id[0], id[1], id[2],
+			qnc->id[0], qnc->id[1], qnc->id[2]);
+	}
 
 	return 0;
 }
@@ -969,9 +1085,11 @@ static inline nrfx_err_t read_non_aligned(const struct device *dev,
 
 	/* read from aligned flash to aligned memory */
 	if (flash_middle != 0) {
-		res = nrfx_qspi_read(dptr + dest_prefix, flash_middle,
+		
+		res = qspi_custom_read(dev, dptr + dest_prefix, flash_middle,
 				     addr + flash_prefix);
-		qspi_wait_for_completion(dev, res);
+
+		
 		if (res != NRFX_SUCCESS) {
 			return res;
 		}
@@ -984,9 +1102,8 @@ static inline nrfx_err_t read_non_aligned(const struct device *dev,
 
 	/* read prefix */
 	if (flash_prefix != 0) {
-		res = nrfx_qspi_read(buf, WORD_SIZE, addr -
+		res = qspi_custom_read(dev, buf, WORD_SIZE, addr -
 				     (WORD_SIZE - flash_prefix));
-		qspi_wait_for_completion(dev, res);
 		if (res != NRFX_SUCCESS) {
 			return res;
 		}
@@ -995,9 +1112,8 @@ static inline nrfx_err_t read_non_aligned(const struct device *dev,
 
 	/* read suffix */
 	if (flash_suffix != 0) {
-		res = nrfx_qspi_read(buf, WORD_SIZE * 2,
+		res = qspi_custom_read(dev, buf, WORD_SIZE * 2,
 				     addr + flash_prefix + flash_middle);
-		qspi_wait_for_completion(dev, res);
 		if (res != NRFX_SUCCESS) {
 			return res;
 		}
@@ -1010,6 +1126,7 @@ static inline nrfx_err_t read_non_aligned(const struct device *dev,
 static int qspi_nor_read(const struct device *dev, off_t addr, void *dest,
 			 size_t size)
 {
+	
 	if (!dest) {
 		return -EINVAL;
 	}
@@ -1059,13 +1176,12 @@ static inline nrfx_err_t write_sub_word(const struct device *dev, off_t addr,
 	/* read out the whole word so that unchanged data can be
 	 * written back
 	 */
-	res = nrfx_qspi_read(buf, sizeof(buf), addr);
+	res = qspi_custom_read(dev, buf, sizeof(buf), addr);
 	qspi_wait_for_completion(dev, res);
 
 	if (res == NRFX_SUCCESS) {
 		memcpy(buf, sptr, slen);
-		res = nrfx_qspi_write(buf, sizeof(buf), addr);
-		qspi_wait_for_completion(dev, res);
+		res = qspi_custom_write(dev, buf, sizeof(buf), addr);
 	}
 
 	return res;
@@ -1092,8 +1208,7 @@ static inline nrfx_err_t write_from_nvmc(const struct device *dev, off_t addr,
 			size_t len = MIN(slen, sizeof(buf));
 
 			memcpy(buf, sp, len);
-			res = nrfx_qspi_write(buf, sizeof(buf), addr);
-			qspi_wait_for_completion(dev, res);
+			res = qspi_custom_write(dev, buf, sizeof(buf), addr);
 
 			if (res == NRFX_SUCCESS) {
 				slen -= len;
@@ -1153,8 +1268,7 @@ static int qspi_nor_write(const struct device *dev, off_t addr,
 		} else if (!nrfx_is_in_ram(src)) {
 			res = write_from_nvmc(dev, addr, src, size);
 		} else {
-			res = nrfx_qspi_write(src, size, addr);
-			qspi_wait_for_completion(dev, res);
+			res = qspi_custom_write(dev, src, size, addr);
 		}
 	}
 	qspi_unlock(dev);
@@ -1174,6 +1288,7 @@ out:
 
 static int qspi_nor_erase(const struct device *dev, off_t addr, size_t size)
 {
+	current_erases++;
 	const struct qspi_nor_config *params = dev->config;
 
 	/* affected region should be within device */

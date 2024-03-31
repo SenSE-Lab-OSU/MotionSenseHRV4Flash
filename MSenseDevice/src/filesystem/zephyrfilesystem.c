@@ -208,7 +208,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	fs_close(&MSenseFile->self_file);
 }
 
-
+// writes data to a single file named 'test.txt' future TODO: make an extra string parameter so that the file name is customizable
 void write_to_file(const void* data, size_t size){
 	struct fs_mount_t* mp = &fs_mnt;
 	if (!first_write ){

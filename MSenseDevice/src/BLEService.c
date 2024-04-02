@@ -513,7 +513,7 @@ uint16_t offset, uint8_t flags){
   }
 
   int val = *((int *)buff);
-  LOG_INF("write: %d", val);
+  LOG_INF("new patient id write: %d", val);
   patient_num = val;
   return patient_num;
 }

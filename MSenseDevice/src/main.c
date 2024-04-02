@@ -511,8 +511,8 @@ void main(void)
       led_is_on = 1;
       if (!file_lock){
       storage_update++;
-      // update how much storage we have left every 15 cycles 
-      if (storage_update >= 15)
+      // update how much storage we have left every 40 cycles 
+      if (storage_update >= 40)
       {
         led_is_on = 1;
         

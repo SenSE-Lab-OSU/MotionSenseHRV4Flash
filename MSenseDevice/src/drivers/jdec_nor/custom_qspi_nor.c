@@ -21,7 +21,7 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/irq.h>
-LOG_MODULE_REGISTER(custom_qspi_nor, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(custom_qspi_nor, LOG_LEVEL_INF);
 
 #include "spi_nor.h"
 #include "jesd216.h"

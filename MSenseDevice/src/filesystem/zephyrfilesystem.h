@@ -49,5 +49,7 @@ extern int64_t start_time;
 
 extern int patient_num;
 
+extern uint64_t set_date_time;
+
 extern memory_container work_item;
 

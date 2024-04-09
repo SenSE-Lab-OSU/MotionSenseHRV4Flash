@@ -37,7 +37,11 @@ LOG_MODULE_REGISTER(user_bluetooth);
 
 
 
-static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+  static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
   static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
@@ -171,14 +175,14 @@ BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
   BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, write_enable_value, NULL),
+    BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
+    read_generic_one, write_enable_value, &collecting_data),
   BT_GATT_CHARACTERISTIC(&bt_uuid_datetime, 
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, bt_write_date_time, NULL),
+    BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
+    read_generic_eight, bt_write_date_time, &set_date_time),
   BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum, 
-    BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE,
-    NULL, bt_write_patient_num, NULL),
+    BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
+    read_generic_four, bt_write_patient_num, &patient_num),
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
@@ -189,7 +193,7 @@ BT_GATT_SERVICE_DEFINE(status_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
-    read_storage_left, NULL, &storage_percent_full),
+    read_generic_four, NULL, &storage_percent_full),
 );
 
 /* update service: read ENMO updates */
@@ -469,6 +473,7 @@ uint16_t offset, uint8_t flags){
     #endif
     collecting_data = false;
   }
+  return len;
 }
 
 static ssize_t bt_write_date_time(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
@@ -491,7 +496,7 @@ uint16_t offset, uint8_t flags){
   uint64_t val = *((uint64_t *)buff);
   LOG_INF("write: %llu", val);
   set_date_time_bt(val);
-  return val;
+  return len;
 }
 
 
@@ -515,7 +520,7 @@ uint16_t offset, uint8_t flags){
   int val = *((int *)buff);
   LOG_INF("new patient id write: %d", val);
   patient_num = val;
-  return patient_num;
+  return len;
 }
 
 
@@ -553,15 +558,36 @@ uint16_t offset, uint8_t flags){
 
 
 
-static ssize_t read_storage_left(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   
-  const char *value = attr->user_data;
+  const char* value = attr->user_data;
   //uint8_t space_left = storage_percent_full;
   //LOG_INF("space full: %i", space_left);
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(storage_percent_full));
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, 1);
 
-  }
+}
+
+static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  
+  const char* value = attr->user_data;
+  //uint8_t space_left = storage_percent_full;
+  //LOG_INF("space full: %i", space_left);
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(int));
+
+}
+
+static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  
+  const char* value = attr->user_data;
+  //uint8_t space_left = storage_percent_full;
+  //LOG_INF("space full: %i", space_left);
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(uint64_t));
+
+}
+
 /* This function is called whenever the RX Characteristic has been written to by a Client */
 ssize_t on_receive(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,

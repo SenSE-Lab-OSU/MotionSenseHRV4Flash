@@ -12,6 +12,82 @@
 // You can also visit the nRF DeviceTree extension documentation at https://nrfconnect.github.io/vscode-nrf-connect/devicetree/nrfdevicetree.html
 
 
+/* Begin dk trim section, that removes all dev kit specific nodes. */
+
+
+&spi1 {
+    status = "disabled";
+};
+
+&spi4 {
+	status = "disabled";
+};
+
+&qspi {
+	status = "disabled";
+};
+
+
+&uart0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
+
+
+&led0 {
+    status = "okay";
+	gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+};
+
+
+&led1 {
+    status = "okay";
+    gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
+};
+
+&led2 {
+    status = "okay";
+	gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+};
+
+
+
+&led3 {
+    status = "disabled";
+};
+
+
+
+&button0 {
+    status = "disabled";
+};
+
+&button1 {
+    status = "disabled";
+};
+
+&button2 {
+    status = "disabled";
+};
+
+&button3 {
+    status = "disabled";
+};
+
+&gpio_fwd {
+	status = "disabled";
+};
+
+/* End dev kit trim section */
+
+
 &timer0 {
     status = "okay";
 };
@@ -237,4 +313,5 @@ compatible = "nordic,nrf-spim";
 	
 
 };
+
 

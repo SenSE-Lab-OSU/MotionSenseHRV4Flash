@@ -485,6 +485,7 @@ uint16_t offset, uint8_t flags){
 	LOG_INF("Write length: %i", len);
   if (len != 8){
     LOG_WRN("invalid packet length for date: %i", len);
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
 
   if (offset != 0) {
@@ -509,6 +510,7 @@ uint16_t offset, uint8_t flags){
 	LOG_INF("Write length: %i", len);
   if (len != 4){
     LOG_WRN("invalid packet length for date: %i", len);
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
 
   if (offset != 0) {

@@ -125,9 +125,15 @@ void create_test_files(){
 	struct fs_file_t test_file;
 	fs_file_t_init(&test_file);
 	char destination[50] = "";
+	int ID = 0;
+	ID = sys_rand32_get() % 900;
+	char IDString[5];
+	itoa(ID, IDString,  10);
 	struct fs_mount_t* mp = &fs_mnt;
 	strcat(destination, mp->mnt_point);
-	strcat(destination, "/test.txt"); 
+	strcat(destination, "/");
+	strcat(destination, IDString);
+	strcat(destination, "test.txt"); 
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
 	if (file_create == 0){
 		char a[] = "hello world";

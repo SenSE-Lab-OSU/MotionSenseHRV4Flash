@@ -50,14 +50,18 @@ LOG_MODULE_REGISTER(main);
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
+#define PPG_POWER_NODE DT_ALIAS(led2) 
 
 // #define LED0	DT_GPIO_LABEL(LED0_NODE, gpios)
 // #define LED0 DEVICE_DT_NAME(LED0_NODE)
 #define LED_PIN DT_GPIO_PIN(LED0_NODE, gpios)
 #define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
 
-const struct device* gpioHandle_CS_IMU;
-const struct device* gpioHandle_CS_ppg;
+#define PPG_POWER_PIN DT_GPIO_PIN(PPG_POWER_NODE, gpios)
+#define PPG_POWER_FLAGS DT_GPIO_FLAGS(PPG_POWER_NODE, gpios)
+
+const struct device* gpio0_device;
+const struct device* gpio1_device;
 
 struct spi_cs_control imu_cs = {
     .delay = 0,
@@ -289,18 +293,18 @@ static void spi_init(void)
   const char *const spiName_ppg = "spi@a000";
 
   spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); // device_get_binding(spiName_imu);
-  gpioHandle_CS_IMU = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+  gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
   spi_dev_ppg = device_get_binding(spiName_ppg);
-  gpioHandle_CS_ppg = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+  gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 
-  if (!device_is_ready(gpioHandle_CS_IMU))
+  if (!device_is_ready(gpio0_device))
   {
     printk("Could not get GPIO_0\n");
     return;
   }
 
-  if (!device_is_ready(gpioHandle_CS_ppg))
+  if (!device_is_ready(gpio1_device))
   {
     printk("Could not get GPIO_1\n");
     return;
@@ -317,13 +321,13 @@ static void spi_init(void)
     return;
   }
   
-  imu_cs.gpio.port = gpioHandle_CS_IMU;
-  ppg_cs.gpio.port = gpioHandle_CS_ppg;
+  imu_cs.gpio.port = gpio0_device;
+  ppg_cs.gpio.port = gpio1_device;
   
 
-  //spi_cfg_ppg.gpio.port = gpioHandle_CS_ppg;
+  //spi_cfg_ppg.gpio.port = gpio1_device;
   //spi_cfg_imu.cs = &imu_cs;
-  //spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpioHandle_CS_ppg;
+  //spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
   getIMUID();
   ppgConfig.isEnabled = true;
@@ -485,7 +489,9 @@ void main(void)
   // dev = DEVICE_DT_GET(LED0_NODE);
   // if (dev == NULL || !device_is_ready(dev)){
   int ret;
-  ret = gpio_pin_configure(gpioHandle_CS_IMU, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
+  ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
+  ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+
   if (ret < 0)
   {
     printk("Error: Can't initialize LED");
@@ -522,7 +528,7 @@ void main(void)
       }
       }
     }
-    gpio_pin_set(gpioHandle_CS_IMU, LED_PIN, (int)led_is_on);
+    gpio_pin_set(gpio0_device, LED_PIN, (int)led_is_on);
     k_msleep(update_time);
   }
 }

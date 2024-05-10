@@ -29,7 +29,7 @@
 
 
 &uart0 {
-	status = "disabled";
+	status = "okay";
 };
 
 &i2c1 {
@@ -106,7 +106,7 @@
 / {
     aliases {
         customspi = &spi1;
-		spi-flash0 = &mx25r64;
+		spi-flash0 = &mx66u;
     };
 };
 
@@ -114,7 +114,7 @@
 / {
 	chosen {
 	
-		nordic,pm-ext-flash = &mx25r64;
+		nordic,pm-ext-flash = &mx66u;
 	
 		};
 	};
@@ -123,9 +123,10 @@
 /delete-node/ &storage_partition;
 
 
-
-
-
+//uart cannot also be in operation with spi0, however, this means we have to use segger RTT, because uart is used for console output
+&uart0 {
+	status = "okay";
+};
 
 &spi2 {
 compatible = "nordic,nrf-spim";
@@ -141,7 +142,7 @@ compatible = "nordic,nrf-spim";
 &i2c1 {
 	status = "okay";
 	compatible = "nordic,nrf-twim";
-	pinctrl-0 = < &battery_default>;
+	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
 	pinctrl-names = "default", "sleep";
 };
@@ -156,20 +157,56 @@ compatible = "nordic,nrf-spim";
 };
 */
 
-//uart cannot also be in operation, however, this means we have to use segger RTT, because uart is used for console output
-&uart0 {
-	status = "okay";
-};
 
-
-  
 &spi3{
 	compatible = "nordic,nrf-spim";
 	status = "okay";
-	cs-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
-	pinctrl-0 = < &ppg_default>;
+	cs-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&ppg_default>;
 	pinctrl-1 = <&ppg_sleep>;
 	pinctrl-names = "default", "sleep";
+};
+
+/* 
+&spi4 {
+	status = "okay";
+	pinctrl-0 = < &spi_flash_default>;
+	pinctrl-1 = <&spi_flash_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>;
+	mt29: mt29f8g01ad@0 {
+		compatible = "senselab,nanddisk";
+		//size = <4194304000>;
+		// size needs to be in bytes
+		//size = <1073725440>;
+		size = <2147450880>;
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [00 2c 47];
+		status = "okay";
+	};
+
+};
+*/
+
+&spi4 {
+	status = "okay";
+	pinctrl-0 = < &spi_flash_default>;
+	pinctrl-1 = <&spi_flash_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>;
+	mx66u: mx66u2g45g@0 {
+		compatible = "jedec,spi-nor";
+		//size = <4194304000>;
+		// size needs to be in bytes
+		//size = <1073725440>;
+		size = <2147450880>;
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [c2 25 3c];
+		status = "okay";
+	};
+
 };
 
 
@@ -196,25 +233,26 @@ compatible = "nordic,nrf-spim";
 	
 }; 
 
-*/
+
 
   
 
 
 &qspi {
-	status = "okay";
+	status = "disabled";
 	pinctrl-0 = <&qspi_default>;
 	pinctrl-1 = <&qspi_sleep>;
 	pinctrl-names = "default", "sleep";
 	mx25r64: mx25r6435f@0 {
-		//compatible = "nordic,qspi-nor";
+		status = "disabled";
+		compatible = "nordic,qspi-nor";
 		//compatible = "vnd,customflash";
-		compatible = "senselab,qspinor";
+		//compatible = "senselab,qspinor";
 	reg = <0>;
 	//MX25R64 supports only pp and pp4io
-	writeoc = "pp4io";
+	writeoc = "pp";
 	//MX25R64 supports all readoc options
-	readoc = "read4io";
+	readoc = "fastread";
 	sck-frequency = <8000000>;
 	jedec-id = [c2 25 3c];
 	sfdp-bfp = [
@@ -230,7 +268,7 @@ compatible = "nordic,nrf-spim";
 	};
 };
 
-
+*/
 
 &pinctrl {
 	//spi 1, imu sensor
@@ -282,7 +320,25 @@ compatible = "nordic,nrf-spim";
 			low-power-enable;
 		};
 	};
+
 	
+	spi_flash_default: spi_flash_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 13)>,
+				<NRF_PSEL(SPIM_MISO, 0, 14)>;
+				
+		};
+	};
+	
+	spi_flash_sleep: spi_flash_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+			<NRF_PSEL(SPIM_MOSI, 0, 13)>,
+			<NRF_PSEL(SPIM_MISO, 0, 14)>;
+			low-power-enable;
+		};
+	};
 
 };
 

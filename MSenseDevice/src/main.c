@@ -20,7 +20,7 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
-#include "filesystem/zephyrfilesystem.h"
+#include "zephyrfilesystem.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
@@ -288,14 +288,14 @@ static void ble_init(void)
 static void spi_init(void)
 {
   uint32_t dataFlash;
-  // device_get_binding is used for runtime checking of devices. We can still use it but we have to be carefull to select the right names
+  // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
   const char *const spiName_imu = "spi@9000";
-  const char *const spiName_ppg = "spi@a000";
+  const char *const spiName_ppg = "spi@c000";
 
   spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); // device_get_binding(spiName_imu);
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-
-  spi_dev_ppg = device_get_binding(spiName_ppg);
+  spi_dev_ppg = DEVICE_DT_GET(DT_NODELABEL(spi3));
+  //spi_dev_ppg = device_get_binding(spiName_ppg);
   gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 
   if (!device_is_ready(gpio0_device))
@@ -381,7 +381,7 @@ void spi_verify_sensor_ids()
   if (device_is_ready(spi_dev_imu))
   {
     spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
-    printk("Chip ID from motion sensor=%x\n", rx_buffer[1]);
+    LOG_INF("Chip ID from motion sensor=%x\n", rx_buffer[1]);
   }
   else
   {
@@ -394,10 +394,11 @@ void spi_verify_sensor_ids()
 
   txLen = 3;
   rxLen = 3;
+  k_sleep(K_SECONDS(1));
   if (device_is_ready(spi_dev_ppg))
   {
     spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
-    printk("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
+    LOG_INF("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
   }
   else
   {
@@ -439,6 +440,9 @@ void main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
 
+  // Setup LEDs and Power Pins
+  
+
   // Setup our Flash Filesystem
   setup_disk();
 
@@ -458,8 +462,13 @@ void main(void)
   IRQ_CONNECT(TIMER1_IRQn, 1,
               nrfx_timer_1_irq_handler, NULL, 0);
 
+
   // Init, verify ID and config sensors
   spi_init();
+  int ret;
+  ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
+  ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+
   spi_verify_sensor_ids();
 
   ppg_config();
@@ -467,6 +476,8 @@ void main(void)
 
   i2c_init();
 
+
+  // Start Threads for all our sensor tasks
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
@@ -488,9 +499,7 @@ void main(void)
   // dev = device_get_binding(LED0);
   // dev = DEVICE_DT_GET(LED0_NODE);
   // if (dev == NULL || !device_is_ready(dev)){
-  int ret;
-  ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
-  ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+  
 
   if (ret < 0)
   {

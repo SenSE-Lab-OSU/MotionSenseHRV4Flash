@@ -13,7 +13,7 @@
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "batteryMonitor.h"
-#include "filesystem/zephyrfilesystem.h"
+#include "zephyrfilesystem.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>

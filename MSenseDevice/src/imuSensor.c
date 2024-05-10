@@ -2,7 +2,7 @@
 
 #include "imuSensor.h"
 #include "common.h"
-#include "filesystem/zephyrfilesystem.h"
+#include "zephyrfilesystem.h"
 #include "BLEService.h"
 #include "ppgSensor.h"
 #include <zephyr/logging/log.h>
@@ -18,7 +18,7 @@ float enmo_store[25];
 float testcounter = 0;
 
 
-int16_t dataReadGyroX, dataReadGyroY,dataReadGyroZ;
+int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
 uint8_t blePktMagneto[ble_magnetometerPktLength];
@@ -510,8 +510,13 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 25;
       accData1.ENMO = enmo;
+      
+      
+      // Testing: Make Enmo a random counter that increments instead.
       testcounter++;
-      accData1.ENMO = testcounter;
+      //accData1.ENMO = testcounter;
+
+      // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
     }
 
@@ -552,7 +557,7 @@ void motion_data_timeout_handler(struct k_work *item){
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0};		/**< TX buffer. */
   uint8_t m_rx_buf[15];  /**< RX buffer. */
 
-  int16_t dataReadAccX, dataReadAccY,dataReadAccZ;
+  int16_t dataReadAccX, dataReadAccY, dataReadAccZ;
   float accelX,accelY,accelZ;
   float dividerAcc=0;
 
@@ -602,7 +607,7 @@ void motion_data_timeout_handler(struct k_work *item){
   //  quaternionResult_1[2],quaternionResult_1[3]);
   if (the_device->gyro_first_read == 0){
     spiReadWriteIMU(burst_tx,7, burst_rx, 7);  		  
-    for(int i=0;i<6;i++)
+    for(int i=0; i<6; i++)
       blePktMotion[i] = burst_rx[i+1];
     
     
@@ -621,6 +626,8 @@ void motion_data_timeout_handler(struct k_work *item){
     dataReadAccZ = (burst_rx[5] << 8) | burst_rx[6];
     if((burst_rx[5] & 0x80) == 0x80)
       dataReadAccZ = -(~(dataReadAccZ) + 1);
+
+    LOG_DBG("AccelX: %i, AccelY: %i, AccelZ: %i", dataReadAccX, dataReadAccY, dataReadAccZ);
     accData1.accx = dataReadAccX;
     accData1.accy = dataReadAccY;
     accData1.accz = dataReadAccZ;

@@ -11,7 +11,7 @@
 #include "zephyrfilesystem.h"
 
 
-LOG_MODULE_REGISTER(zephyrfilesystem);
+LOG_MODULE_REGISTER(zephyrfilesystem, 1);
 
 #if CONFIG_DISK_DRIVER_FLASH
 #include <zephyr/storage/flash_map.h>
@@ -351,7 +351,7 @@ static int setup_flash(struct fs_mount_t *mnt)
 	id = STORAGE_PARTITION_ID;
 
 	rc = flash_area_open(id, &pfa);
-	printk("Area %u at 0x%x on %s for %u bytes\n",
+	LOG_INF("Area %u at 0x%x on %s for %u bytes\n",
 	       id, (unsigned int)pfa->fa_off, pfa->fa_dev->name,
 	       (unsigned int)pfa->fa_size);
 
@@ -426,7 +426,7 @@ void setup_disk(void)
 	/* Allow log messages to flush to avoid interleaved output */
 	k_sleep(K_MSEC(50));
 
-	printk("Mount %s: %d\n", fs_mnt.mnt_point, rc);
+	LOG_INF("Mount %s: %d\n", fs_mnt.mnt_point, rc);
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
@@ -434,14 +434,14 @@ void setup_disk(void)
 		return;
 	}
 
-	printk("%s: bsize = %lu ; frsize = %lu ;"
+	LOG_INF("%s: bsize = %lu ; frsize = %lu ;"
 	       " blocks = %lu ; bfree = %lu\n",
 	       mp->mnt_point,
 	       sbuf.f_bsize, sbuf.f_frsize,
 	       sbuf.f_blocks, sbuf.f_bfree);
 
 	rc = fs_opendir(&dir, mp->mnt_point);
-	printk("%s opendir: %d\n", mp->mnt_point, rc);
+	LOG_INF("%s opendir: %d\n", mp->mnt_point, rc);
 
 	if (rc < 0) {
 		LOG_ERR("Failed to open directory");
@@ -456,10 +456,10 @@ void setup_disk(void)
 			break;
 		}
 		if (ent.name[0] == 0) {
-			printk("End of files\n");
+			LOG_INF("End of files\n");
 			break;
 		}
-		printk("  %c %u %s\n",
+		LOG_INF("  %c %u %s\n",
 		       (ent.type == FS_DIR_ENTRY_FILE) ? 'F' : 'D',
 		       ent.size,
 		       ent.name);

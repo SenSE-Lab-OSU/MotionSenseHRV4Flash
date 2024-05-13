@@ -54,7 +54,7 @@ uint8_t * rx_buffer, uint8_t rxLen){
   };
 
   //there's some area where we might be able to use spi_transceive_dt, with SPI_DT_SPEC_GET to simplify code, but for now, we will just use the previous version.
-
+  
   err = spi_transceive(spi_dev_imu, &spi_cfg_imu, &tx, &rx);
   if (err) 
     printk("SPI error: %d\n", err);

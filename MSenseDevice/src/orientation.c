@@ -1,4 +1,4 @@
-#include <zephyr/kernel.h>
+ #include <zephyr/kernel.h>
 #include <stdio.h>
 #include "common.h"
 #include "imuSensor.h"

@@ -71,7 +71,7 @@ struct spi_cs_control imu_cs = {
 struct spi_cs_control ppg_cs = {
     .delay = 0,
     .gpio = {
-        .pin = 15,
+        .pin = 9,
         .dt_flags = GPIO_ACTIVE_LOW,
     }};
 /*
@@ -324,10 +324,10 @@ static void spi_init(void)
   imu_cs.gpio.port = gpio0_device;
   ppg_cs.gpio.port = gpio1_device;
   
-
+  struct spi_config* spi_test_config = spi_dev_imu->config;
   //spi_cfg_ppg.gpio.port = gpio1_device;
-  //spi_cfg_imu.cs = &imu_cs;
-  //spi_cfg_ppg.cs = &ppg_cs; // version 2.5: .gpio.port = gpio1_device;
+  spi_cfg_imu.cs = imu_cs;
+  spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
   getIMUID();
   ppgConfig.isEnabled = true;
@@ -509,7 +509,7 @@ void main(void)
   
   int storage_update = 14;
   int update_time = SLEEP_TIME_MS;
-  usb_enable(usb_status_cb);
+  //usb_enable(usb_status_cb);
   while (1)
   {
     if (file_lock){

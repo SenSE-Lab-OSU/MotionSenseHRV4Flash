@@ -296,7 +296,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = gyroData1.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
-          //k_work_submit(&my_ppgSensor.work);
+          k_work_submit(&my_ppgSensor.work);
         }  
         // Executes every 8 seconds to send compressed signal
         

@@ -9,10 +9,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <zephyr/drivers/spi.h>
+#include <zephyr/logging/log.h> 
 #include <zephyr/fs/fs.h>
-#include <zephyr/storage/flash_map.h>
 
 
+LOG_MODULE_REGISTER(ppg_sensor);
 
 #define LED_GREEN 1
 

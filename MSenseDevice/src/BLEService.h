@@ -4,14 +4,9 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <zephyr/kernel.h>
 #include <soc.h>
 #include "common.h"
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/hci.h>
-#include <zephyr/bluetooth/conn.h>
-#include <zephyr/bluetooth/uuid.h>
-#include <zephyr/bluetooth/gatt.h>
+
 
 extern uint8_t gyro_first_read;
 extern uint8_t magneto_first_read;  

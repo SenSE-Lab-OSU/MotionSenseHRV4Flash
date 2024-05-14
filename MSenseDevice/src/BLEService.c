@@ -22,6 +22,8 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <nrfx_timer.h>
 #include "BLEService.h"
+
+
 #define CONFIG_NAME "Configure sensor"
 #define TFMICRO_NAME "Micromarker Heart-rate"
 #define PPG_NAME "PPG Sensor"
@@ -269,12 +271,6 @@ static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1
 #define TIMER_MS 5
 #define TIMER_PRIORITY 1
 
-static void timer_deinit(void){
-  nrfx_timer_disable(&timer_global);
-  nrfx_timer_uninit(&timer_global);	
-  motion_sleep();
-  ppg_sleep();
-}
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
   LOG_DBG("Timer Executing");
@@ -313,6 +309,16 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   }
 }
 
+
+static void timer_deinit(void){
+  nrfx_timer_disable(&timer_global);
+  nrfx_timer_uninit(&timer_global);	
+  motion_sleep();
+  ppg_sleep();
+}
+
+
+
 static void timer_init(void){
 printk("timer init\n");
   uint32_t time_ticks;
@@ -337,8 +343,8 @@ printk("timer init\n");
   printk("time ticks = %d\n", time_ticks);
 
 
-  nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks \ 
-   , NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
+  nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks, 
+  NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
 
   nrfx_timer_enable(&timer_global);
   printk("timer initialized\n");

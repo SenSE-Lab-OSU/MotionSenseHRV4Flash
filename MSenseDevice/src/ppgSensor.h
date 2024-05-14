@@ -1,7 +1,6 @@
 #ifndef PPGSENSOR_H_
 #define PPGSENSOR_H_
-#include "arm_const_structs.h"
-#include "arm_math.h"
+
 #include <zephyr/kernel.h>
 
 #define READMASTER 0x80
@@ -94,11 +93,6 @@
 #define PPG2_LEDC1_DATA    0x07
 #define PPG2_LEDC2_DATA    0x08
 
-// FIR Filter Globabl variables
-#define NUM_TAPS  222
-#define BLOCK_SIZE  1 
-#define NUM_TAPS_MA_FIL  200
-#define FLOAT_CON_16UA   (16000.0/524287.0)
 
 
 // these structs are responsible for sending

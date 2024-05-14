@@ -99,7 +99,7 @@ void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen){
 void ppg_config(void){
   if (ppgConfig.isEnabled) {
     //fileOpen();
-    ppgConfig.green_intensity = (0x0000FF00) >>8;
+    ppgConfig.green_intensity = 0;//(0x0000FF00) >>8;
     ppgConfig.infraRed_intensity = (0x000000FF);
     
     uint8_t rxLen,txLen; 
@@ -496,6 +496,7 @@ void read_ppg_fifo_buffer(struct k_work *item){
   uint32_t led1B[32];
   uint32_t led2A[32];
   uint32_t led2B[32];
+  
   uint8_t tag1A, tag1B, tag2A, tag2B, tag;
   float channel1A_in, channel1B_in, channel2A_in, channel2B_in;
   float meanChannel1A, meanChannel1B, meanChannel2A, meanChannel2B;
@@ -503,7 +504,10 @@ void read_ppg_fifo_buffer(struct k_work *item){
   float channel1A_out, channel1B_out, channel2A_out, channel2B_out;
   float_cast buff_val_filtered;
   
-  
+  counterCheck++;
+  if(counterCheck > timeWindow) {
+    counterCheck =0;
+  }
   
   uint8_t sampleCount[5] = {0};
 		
@@ -598,6 +602,9 @@ void read_ppg_fifo_buffer(struct k_work *item){
 
 /* This function reads and fills bleSendArr with unfiltered ppg according
 to the desired packet format */
+
+/* NOTE: DEPRECATED, because this is theoretically the same function as ppg_read_fifo
+TODO: figure out one solution for all */
 void ppg_bluetooth_fill(uint8_t* bleSendArr){
 
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};

@@ -332,7 +332,7 @@ static void spi_init(void)
   getIMUID();
   ppgConfig.isEnabled = true;
   ppgConfig.sample_avg = 0x08;
-  ppgConfig.green_intensity = 0x28;
+  ppgConfig.green_intensity = 0;//0x28;
   ppgConfig.infraRed_intensity = 0x28;
   ppgConfig.sampling_time = 0x28;
   ppgConfig.numCounts = 8;

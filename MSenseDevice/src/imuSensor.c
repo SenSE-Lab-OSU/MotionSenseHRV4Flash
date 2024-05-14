@@ -661,7 +661,7 @@ void motion_data_timeout_handler(struct k_work *item){
 
     //this function seperately fills blePktMotion with the desired size
     //TODO: Make sure packets are in correct size/order
-    ppg_bluetooth_fill(blePktMotion);
+    //ppg_bluetooth_fill(blePktMotion);
     
 
     blePktMotion[18] = blePktMotion[18] | ((pktCounter >> 8) & 0x03);

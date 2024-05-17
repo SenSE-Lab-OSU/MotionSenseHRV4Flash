@@ -509,7 +509,7 @@ void main(void)
   
   int storage_update = 14;
   int update_time = SLEEP_TIME_MS;
-  //usb_enable(usb_status_cb);
+  usb_enable(usb_status_cb);
   while (1)
   {
     if (file_lock){

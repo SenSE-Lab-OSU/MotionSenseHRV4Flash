@@ -11,7 +11,7 @@
 #include "zephyrfilesystem.h"
 
 
-LOG_MODULE_REGISTER(zephyrfilesystem, 1);
+LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 
 #if CONFIG_DISK_DRIVER_FLASH
 #include <zephyr/storage/flash_map.h>
@@ -19,15 +19,18 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 1);
 
 #if CONFIG_FAT_FILESYSTEM_ELM
 #include <ff.h>
+#define STORAGE_PARTITION_ID FIXED_PARTITION_ID(PM_LITTLEFS_STORAGE_NAME)
 #endif
 
 #if CONFIG_FILE_SYSTEM_LITTLEFS
 #include <zephyr/fs/littlefs.h>
 FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
-#endif
 
 #define STORAGE_PARTITION		storage_partition
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
+#endif
+
+
 
 #define MAX_BUFFER_SIZE 9000
 
@@ -63,6 +66,8 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
+const int max_writes = 4;
+
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;
 	struct k_work work;
@@ -91,13 +96,14 @@ static bool first_write = false;
 static struct fs_file_t file;
 
 
+
 typedef struct MotionSenseFile {
-	int max_size;
+	int write_size;
+	int current_writes;
 	int data_counter;
 	char sensor_string[3];
 	char file_name[50];
 	struct fs_file_t self_file;
-	bool first_write;
 	bool switch_buffer;
 	data_upload_buffer buffer1;
 	data_upload_buffer buffer2;
@@ -112,7 +118,7 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file;
 
 MotionSenseFile accel_file = {
-	.max_size = 9000,
+	.write_size = 9000,
 	.sensor_string = "ac"
 };
 
@@ -144,6 +150,10 @@ void create_test_files(){
 	}
 }
 
+void create_sensor_file(MotionSenseFile* MSenseFile){
+
+}
+
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
@@ -160,8 +170,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 
 
-	if (true){
-		
+	if (MSenseFile->current_writes == 0){
+		// Create a new file, with given sensor type, patient name, and date
 		fs_file_t_init(&MSenseFile->self_file);
 		
 		
@@ -197,7 +207,6 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		if (file_create != 0){
 			LOG_WRN("Unable to create file");
 		}
-		first_write = true;
 
 	}
 	else if (data_counter >= data_limit){
@@ -206,12 +215,17 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 	
 	int total_written = fs_write(&MSenseFile->self_file, data, size);
+	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote file, bytes written = %i ! \n", total_written);
+		LOG_INF("sucessfully wrote to file, bytes written = %i ! \n", total_written);
 		data_counter += total_written;
 	}
-	fs_close(&MSenseFile->self_file);
+	if (MSenseFile->current_writes >= max_writes){
+		fs_close(&MSenseFile->self_file);
+		LOG_INF("closing file\n");
+		MSenseFile->current_writes = 0;
+	}
 }
 
 // writes data to a single file named 'test.txt' future TODO: make an extra string parameter so that the file name is customizable
@@ -321,12 +335,12 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	void* result = memcpy(address_to_write, data, size);
 	memcpy(arr, address_to_write, size);
 	current_buffer->current_size += size;
-	if (current_buffer->current_size >= MSenseFile->max_size){
-		if (current_buffer->current_size != MSenseFile->max_size){
+	if (current_buffer->current_size >= MSenseFile->write_size){
+		if (current_buffer->current_size != MSenseFile->write_size){
 			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
 		}
 		LOG_INF("Submitting File!");
-		submit_write(current_buffer->data_upload_buffer, MSenseFile->max_size, sensor);
+		submit_write(current_buffer->data_upload_buffer, MSenseFile->write_size, sensor);
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
 	}
@@ -379,7 +393,7 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	mnt->fs_data = &fat_fs;
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
-	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC)) {
+	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) || IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
 		mnt->mnt_point = "/SD:";
 	} else {
 		mnt->mnt_point = "/NAND:";

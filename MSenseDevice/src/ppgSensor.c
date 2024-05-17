@@ -574,7 +574,7 @@ void read_ppg_fifo_buffer(struct k_work *item){
   runningMeanCh2b = runningMeanCh2b +led2B[0]*1.0f/timeWindow;
 		
   
-  LOG_INF("sample tick");
+  LOG_DBG("sample tick");
   #ifdef CONFIG_MSENSE3
   // Transmitting the un-filtered data on BLE 
   if(ppgConfig.txPacketEnable == true){

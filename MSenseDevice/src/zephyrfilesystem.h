@@ -45,6 +45,8 @@ void start_timer();
 
 int64_t stop_timer();
 
+void enable_read_only(bool enable);
+
 extern int64_t start_time;
 
 extern int patient_num;

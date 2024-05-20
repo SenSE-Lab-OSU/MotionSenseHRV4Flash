@@ -20,6 +20,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/addr.h>
 #include <zephyr/bluetooth/gatt.h>
+#include "zephyr/bluetooth/services/bas.h"
 #include <nrfx_timer.h>
 #include "BLEService.h"
 
@@ -173,6 +174,10 @@ BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 );
 #else
 
+/* See bas.c for more information, but essentially, the battery service in configured in this exact same way as here,
+ with the same macros and everything.
+*/
+
 /* Write Service: Enable device, reset device, Write date time, patient num characteristics*/
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
@@ -253,12 +258,12 @@ bool ppgTFPass = false;
 
 bool connectedFlag = false;
 bool collecting_data = false;
-
+bool host_wants_collection = false;
 uint16_t sampleFreq=25;
 
 
 struct ppgInfo my_ppgSensor;
-struct batteryInfo my_battery ;  // work-queue instance for batter level
+struct ble_battery_info my_battery ;  // work-queue instance for batter level
 
 struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
@@ -287,7 +292,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
         // Executes every 2 seconds to send battery level
         if(global_counter % 400 == 0) 
           //k_work_submit(&my_battery.work);
-    
+          bt_bas_set_battery_level(100);
         if(ppgRead  == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = gyroData1.movingFlag;
@@ -441,6 +446,34 @@ void reset_device(){
 
 }
 
+void start_stop_device_collection(uint8_t val){
+
+  if (val){
+    ppg_config();
+    motion_config();
+    #ifndef CONFIG_USB_ALWAYS_ON
+    usb_disable();
+    #endif
+    timer_init();
+    global_counter = 0;
+    gyro_first_read = 0;
+    magneto_first_read = 0;  
+    ppgRead = 0;
+    host_wants_collection = true;
+    collecting_data = true;
+  } 
+  else{
+    timer_deinit();
+    close_all_files();
+    #ifndef CONFIG_USB_ALWAYS_ON
+    usb_enable(NULL);	
+    #endif
+    collecting_data = false;
+    
+  }
+
+}
+
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -457,28 +490,8 @@ uint16_t offset, uint8_t flags){
   }
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
-
-  if (val){
-    ppg_config();
-    motion_config();
-    #ifndef CONFIG_USB_ALWAYS_ON
-    usb_disable();
-    #endif
-    timer_init();
-    global_counter = 0;
-    gyro_first_read = 0;
-    magneto_first_read = 0;  
-    ppgRead = 0;
-    collecting_data = true;
-  } 
-  else{
-    timer_deinit();
-    close_all_files();
-    #ifndef CONFIG_USB_ALWAYS_ON
-    usb_enable(NULL);	
-    #endif
-    collecting_data = false;
-  }
+  host_wants_collection = val;
+  start_stop_device_collection(val);
   return len;
 }
 

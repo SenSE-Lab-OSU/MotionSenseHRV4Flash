@@ -419,7 +419,7 @@ int bq274xx_gauge_init(struct bq274xx_config* config){
   }
 
   status = i2c_reg_write_byte(i2c_dev, BATTERY_MONITOR_ADDR,
-    BQ274XX_EXTENDED_BLOCKDATA_DESIGN_CAP_LOW,designcap_lsb);
+    BQ274XX_EXTENDED_BLOCKDATA_DESIGN_CAP_LOW, designcap_lsb);
   if (status < 0) {
     printk("Failed to erite designCAP LSB");
     return status;

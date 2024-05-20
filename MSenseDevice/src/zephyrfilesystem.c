@@ -123,7 +123,19 @@ MotionSenseFile accel_file = {
 };
 
 
-
+void enable_read_only(bool enable){
+	struct fs_mount_t* mp = &fs_mnt;
+	if (mp->type == FS_FATFS){
+		#if CONFIG_FAT_FILESYSTEM_ELM
+		if (enable){
+			f_chmod(mp->mnt_point, AM_RDO, AM_RDO);
+		}
+		else{
+			f_chmod(mp->mnt_point, 0, AM_RDO);
+		}
+		#endif
+	}
+}
 
 
 void create_test_files(){
@@ -154,6 +166,13 @@ void create_sensor_file(MotionSenseFile* MSenseFile){
 
 }
 
+void reset_sensor_file(MotionSenseFile* MSenseFile){
+	fs_close(&MSenseFile->self_file);
+	MSenseFile->buffer1.current_size = 0;
+	MSenseFile->buffer2.current_size = 0;
+	MSenseFile->switch_buffer = false;
+	MSenseFile->current_writes = 0;
+}
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
@@ -349,6 +368,9 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 int close_all_files(){
 
 	int code = fs_close(&file);
+	reset_sensor_file(&accel_file);
+	reset_sensor_file(&ppg_file);
+	
 	return code;
 
 }

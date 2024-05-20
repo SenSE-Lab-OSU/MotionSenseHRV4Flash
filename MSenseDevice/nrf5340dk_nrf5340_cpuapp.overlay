@@ -142,10 +142,21 @@ compatible = "nordic,nrf-spim";
 &i2c1 {
 	status = "okay";
 	compatible = "nordic,nrf-twim";
+	clock-frequency = <I2C_BITRATE_FAST>;
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
 	pinctrl-names = "default", "sleep";
+	bq27441@55 {
+		compatible = "ti,bq274xx";
+		reg = <0x55>;
+		design-voltage = <3700>;
+		design-capacity = <1800>;
+		taper-current = <45>;
+		terminate-voltage = <3000>;
+	};
 };
+
+
 
 /* 
 &i2c0 {

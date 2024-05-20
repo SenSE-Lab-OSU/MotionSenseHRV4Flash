@@ -74,6 +74,7 @@
 
 #define BQ274XX_DELAY 1000
 extern const struct device *i2c_dev;
+
 struct bq274xx_data {
 	uint16_t voltage;
 	uint16_t avg_current;
@@ -95,11 +96,11 @@ struct bq274xx_config {
 	uint16_t terminate_voltage;
 };
 
-struct batteryInfo {
+struct ble_battery_info {
     struct k_work work;
     uint8_t battery_value; // user-defined value to pass as input to the work-queue
 }; // work queue structure used to execute Batter level notification in a interrupt service handler initiated by a timer. 
-extern struct batteryInfo my_battery ;  // work-queue instance for batter level
+extern struct ble_battery_info my_battery ;  // work-queue instance for batter level
  int bq274xx_command_reg_read(uint8_t reg_addr, uint16_t* val);
  int bq274xx_control_reg_write(uint16_t subcommand);
  int bq274xx_command_reg_write( uint8_t command,

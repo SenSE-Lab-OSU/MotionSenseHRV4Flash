@@ -26,6 +26,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/services/bas.h>
 
 // dfu configuration
 #define INCLUDE_DFU
@@ -430,8 +431,19 @@ static void i2c_init(void)
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
-void start_file_system_workqueue()
+void battery_maintenance()
 {
+  int battery_lvl;
+  battery_lvl = bt_bas_get_battery_level();
+  if (collecting_data || host_wants_collection){
+        if (battery_lvl < 10 && collecting_data){
+            start_stop_device_collection(false);
+        }
+        else if (battery_lvl > 15 && host_wants_collection && !collecting_data){
+            start_stop_device_collection(true);
+        }
+  }
+    
 }
 
 void main(void)
@@ -506,9 +518,9 @@ void main(void)
     printk("Error: Can't initialize LED");
     // return;
   }
-  
   int storage_update = 14;
   int update_time = SLEEP_TIME_MS;
+  enable_read_only(true);
   usb_enable(usb_status_cb);
   while (1)
   {
@@ -516,7 +528,10 @@ void main(void)
       update_time = 250;
     }
     printk("%d %d\n", connectedFlag, collecting_data);
+    battery_maintenance();
     
+
+
     if (!connectedFlag)
     // blink the LED while we aren't connected.
       led_is_on = !led_is_on;

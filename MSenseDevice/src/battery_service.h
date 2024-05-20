@@ -16,11 +16,11 @@
 #include <settings/settings.h>
 #include "common.h"
 
-struct batteryInfo {
+struct ble_battery_info {
     struct k_work work;
     uint8_t battery_value; // user-defined value to pass as input to the work-queue
 }; // work queue structure used to execute Batter level notification in a interrupt service handler initiated by a timer. 
-extern struct batteryInfo my_device ;  // work-queue instance for batter level
+extern struct ble_battery_info my_device ;  // work-queue instance for batter level
 
 static void bas_notify(struct k_work *);
 static void battery_config(void)
@@ -31,7 +31,7 @@ static void battery_config(void)
 // Function that periodically extracts the battery level and needs to be called in a timer routine 
 static void bas_notify(struct k_work *item)
 {
-    	struct batteryInfo* the_device=  ((struct batteryInfo *)(((char *)(item)) - offsetof(struct batteryInfo, work)));
+    	struct ble_battery_info* the_device=  ((struct ble_battery_info *)(((char *)(item)) - offsetof(struct ble_battery_info, work)));
         	
     	////printk("Battery value =%u\n", the_device->battery_value);
 	uint8_t battery_level = the_device->battery_value;

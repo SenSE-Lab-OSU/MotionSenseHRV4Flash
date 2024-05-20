@@ -49,6 +49,7 @@ uint8_t binarySteps=0;
 //static float ppg_num[400];
 
 
+int ppg_print_counter;
 // Channel 1A - IR 1
 // Channel 1B - IR 2
 // Channel 2A - Green 1
@@ -99,8 +100,7 @@ void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen){
 void ppg_config(void){
   if (ppgConfig.isEnabled) {
     //fileOpen();
-    ppgConfig.green_intensity = 0;//(0x0000FF00) >>8;
-    ppgConfig.infraRed_intensity = (0x000000FF);
+    
     
     uint8_t rxLen,txLen; 
     // Read chip ID 
@@ -264,11 +264,11 @@ void ppg_changeIntensity(void){
     // LED 2 Driver current setting (Green )
     cmd_array[0] = PPG_LED2_PA;
     cmd_array[2] = ppgConfig.green_intensity; 
-    spiWritePPG(cmd_array, txLen);
+    spiReadWritePPG(cmd_array, txLen, NULL, 0);
     
     // LED 3 Driver current setting (Green )
     cmd_array[0] = PPG_LED3_PA;
-    spiWritePPG(cmd_array, txLen);
+    spiReadWritePPG(cmd_array, txLen, NULL, 0);
   }
 }
 void ppg_changeSamplingRate(void){
@@ -572,9 +572,12 @@ void read_ppg_fifo_buffer(struct k_work *item){
   runningMeanCh1b = runningMeanCh1b +led1B[0]*1.0f/timeWindow;
   runningMeanCh2a = runningMeanCh2a +led2A[0]*1.0f/timeWindow;
   runningMeanCh2b = runningMeanCh2b +led2B[0]*1.0f/timeWindow;
-		
   
-  LOG_DBG("sample tick");
+  // TODO: Add log level define
+  ppg_print_counter++;
+  if (ppg_print_counter >= 12){
+    LOG_INF("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
+  }
   #ifdef CONFIG_MSENSE3
   // Transmitting the un-filtered data on BLE 
   if(ppgConfig.txPacketEnable == true){

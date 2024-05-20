@@ -115,7 +115,8 @@
 	chosen {
 	
 		nordic,pm-ext-flash = &mx66u;
-	
+		//zephyr,console = &cdc_acm_uart0;
+        //zephyr,shell-uart = &cdc_acm_uart0;
 		};
 	};
 	
@@ -128,6 +129,13 @@
 	status = "okay";
 };
 
+/* 
+&zephyr_udc0 {
+    cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};
+*/
 &spi2 {
 compatible = "nordic,nrf-spim";
 	status = "okay";

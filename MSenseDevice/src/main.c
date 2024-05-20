@@ -117,7 +117,16 @@ struct spi_config spi_cfg_ppg = {
   */
 };
 
-struct ppg_configData ppgConfig;
+struct ppg_configData ppgConfig = {
+  .isEnabled = true,
+  .sample_avg = 0x08,
+  .green_intensity = 0x28,
+  .infraRed_intensity = 0x28,
+  .sampling_time = 0x28,
+  .numCounts = 8,
+  .txPacketEnable = false,
+};
+
 struct ppgData ppgData1;
 
 const struct device *spi_dev_ppg, *spi_dev_imu;
@@ -331,13 +340,7 @@ static void spi_init(void)
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
   getIMUID();
-  ppgConfig.isEnabled = true;
-  ppgConfig.sample_avg = 0x08;
-  ppgConfig.green_intensity = 0;//0x28;
-  ppgConfig.infraRed_intensity = 0x28;
-  ppgConfig.sampling_time = 0x28;
-  ppgConfig.numCounts = 8;
-  ppgConfig.txPacketEnable = true;
+  
   // high_pass_filter_init_25();
 
   // fileOpen();
@@ -483,8 +486,7 @@ void main(void)
 
   spi_verify_sensor_ids();
 
-  ppg_config();
-  motion_config();
+  
 
   i2c_init();
 

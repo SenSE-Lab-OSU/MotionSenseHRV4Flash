@@ -128,10 +128,10 @@ void enable_read_only(bool enable){
 	if (mp->type == FS_FATFS){
 		#if CONFIG_FAT_FILESYSTEM_ELM
 		if (enable){
-			f_chmod(mp->mnt_point, AM_RDO, AM_RDO);
+			//f_chmod(mp->mnt_point, AM_RDO, AM_RDO);
 		}
 		else{
-			f_chmod(mp->mnt_point, 0, AM_RDO);
+			//f_chmod(mp->mnt_point, 0, AM_RDO);
 		}
 		#endif
 	}

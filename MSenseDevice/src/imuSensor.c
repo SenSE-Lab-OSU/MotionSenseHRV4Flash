@@ -9,14 +9,14 @@
 #include <stdio.h>
 
 
-LOG_MODULE_REGISTER(IMUSensor);
+LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[25];
 float testcounter = 0;
-
+int log_counter = 0;
 
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
@@ -627,7 +627,13 @@ void motion_data_timeout_handler(struct k_work *item){
     if((burst_rx[5] & 0x80) == 0x80)
       dataReadAccZ = -(~(dataReadAccZ) + 1);
 
+    #if LOG_LEVEL_DATA_COLLECTION >= 4
+    log_counter++;
+    if (log_counter > 10){
     LOG_DBG("AccelX: %i, AccelY: %i, AccelZ: %i", dataReadAccX, dataReadAccY, dataReadAccZ);
+      log_counter = 0;
+    }
+    #endif
     accData1.accx = dataReadAccX;
     accData1.accy = dataReadAccY;
     accData1.accz = dataReadAccZ;
@@ -846,7 +852,7 @@ void motion_config(void){
 
 void getIMUID(){
     uint8_t m_tx_buf[2] = {0, 0};	/**< TX buffer. */
-    uint8_t m_rx_buf;  /**< RX buffer. */
+    uint8_t m_rx_buf[1] = {1};  /**< RX buffer. */
     const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
     spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, 1);
     LOG_INF("IMU ID: %04x", &m_rx_buf);

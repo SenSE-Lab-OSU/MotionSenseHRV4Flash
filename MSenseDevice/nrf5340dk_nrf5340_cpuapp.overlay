@@ -115,8 +115,8 @@
 	chosen {
 	
 		nordic,pm-ext-flash = &mx66u;
-		//zephyr,console = &cdc_acm_uart0;
-        //zephyr,shell-uart = &cdc_acm_uart0;
+		zephyr,console = &cdc_acm_uart0;
+        zephyr,shell-uart = &cdc_acm_uart0;
 		};
 	};
 	
@@ -129,13 +129,13 @@
 	status = "okay";
 };
 
-/* 
+ 
 &zephyr_udc0 {
     cdc_acm_uart0: cdc_acm_uart0 {
         compatible = "zephyr,cdc-acm-uart";
     };
 };
-*/
+
 &spi2 {
 compatible = "nordic,nrf-spim";
 	status = "okay";
@@ -313,13 +313,13 @@ compatible = "nordic,nrf-spim";
 	//spi 4, ppg sensor
 	ppg_default: ppg_default {
 		group1 {
-			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 1, 7)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
 		};
 	};
 
 	ppg_sleep: ppg_sleep {
 		group1{
-			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 1, 7)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
 			low-power-enable;
 		};
 	};

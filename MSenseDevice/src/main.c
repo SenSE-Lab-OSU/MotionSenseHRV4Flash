@@ -392,7 +392,7 @@ void spi_verify_sensor_ids()
     LOG_WRN("IMU not ready, setup was avoided");
   }
 
-  tx_buffer[0] = 0xFF;
+  tx_buffer[0] = PPG_CHIP_ID_1;
   tx_buffer[1] = READMASTER;
   tx_buffer[2] = 0x00;
 
@@ -454,7 +454,7 @@ void main(void)
 
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
-
+  
   // Setup LEDs and Power Pins
   
 
@@ -514,7 +514,7 @@ void main(void)
   // dev = DEVICE_DT_GET(LED0_NODE);
   // if (dev == NULL || !device_is_ready(dev)){
   
-
+  
   if (ret < 0)
   {
     printk("Error: Can't initialize LED");
@@ -532,7 +532,7 @@ void main(void)
     printk("%d %d\n", connectedFlag, collecting_data);
     battery_maintenance();
     
-
+    
 
     if (!connectedFlag)
     // blink the LED while we aren't connected.
@@ -556,6 +556,7 @@ void main(void)
     }
     gpio_pin_set(gpio0_device, LED_PIN, (int)led_is_on);
     k_msleep(update_time);
+    
   }
 }
 

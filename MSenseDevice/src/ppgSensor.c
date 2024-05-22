@@ -13,7 +13,7 @@
 #include <zephyr/fs/fs.h>
 
 
-LOG_MODULE_REGISTER(ppg_sensor);
+LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
 
 #define LED_GREEN 1
 
@@ -573,11 +573,12 @@ void read_ppg_fifo_buffer(struct k_work *item){
   runningMeanCh2a = runningMeanCh2a +led2A[0]*1.0f/timeWindow;
   runningMeanCh2b = runningMeanCh2b +led2B[0]*1.0f/timeWindow;
   
-  // TODO: Add log level define
+  
   ppg_print_counter++;
-  if (ppg_print_counter >= 12){
-    LOG_INF("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
+  if (ppg_print_counter >= 24){
+    LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
   }
+  
   #ifdef CONFIG_MSENSE3
   // Transmitting the un-filtered data on BLE 
   if(ppgConfig.txPacketEnable == true){

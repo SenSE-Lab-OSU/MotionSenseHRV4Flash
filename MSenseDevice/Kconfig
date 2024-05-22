@@ -81,4 +81,8 @@ config BLUETOOTH_SETTINGS_OVERRIDE
 config USB_ALWAYS_ON
 	bool "whether the usb mass storage driver is on during bluetooth collection"
 	default n
+
+config LOG_LEVEL_DATA_COLLECTION
+	int "whether data from sensors is printed in logs"
+	default 3
 source "Kconfig.zephyr"

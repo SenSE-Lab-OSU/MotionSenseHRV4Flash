@@ -430,12 +430,21 @@ void reset_device(){
     .op_code = 0xC7 // qspi chip erase command
   };
 
-  struct device* qspi_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
-  if (device_is_ready(qspi_device)){
+  struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  if (device_is_ready(flash_device)){
     LOG_INF("got qspi_device, eraseing... \n");
     file_lock = true;
-    const struct qspi_nor_config* params = qspi_device->config;
-    flash_erase(qspi_device, 0, params->size);
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+
+    #else
+    #if !DT_NODE_HAS_PROP(DT_ALIAS(spi_flash0), size)
+    #error "flash needs size property in order to be erased"
+    #endif 
+    LOG_INF("eraseing nor flash");
+    int size = DT_PROP(DT_ALIAS(spi_flash0), size) / 8;
+    flash_erase(flash_device, 0, size);
+    #endif
+    
     //custom_qspi_send_cmd(qspi_device, &chip_erase, true);
     LOG_INF("Chip Erase Complete! Resetting");
     k_sleep(K_SECONDS(2));
@@ -452,7 +461,7 @@ void start_stop_device_collection(uint8_t val){
     ppg_config();
     motion_config();
     #ifndef CONFIG_USB_ALWAYS_ON
-    usb_disable();
+      usb_disable();
     #endif
     timer_init();
     global_counter = 0;

@@ -115,10 +115,13 @@ typedef struct MotionSenseFile {
 //File Objects
 static MotionSenseFile current_file;
 
-MotionSenseFile ppg_file;
+MotionSenseFile ppg_file = {
+	.write_size = 8196,
+	.sensor_string = "ppg"
+};
 
 MotionSenseFile accel_file = {
-	.write_size = 9000,
+	.write_size = 8196,
 	.sensor_string = "ac"
 };
 
@@ -334,7 +337,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 void store_data(const void* data, size_t size, enum sensor_type sensor){
 	LOG_DBG("Store data called");
 	data_upload_buffer* current_buffer;
-	int16_t arr[6];
+	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
@@ -352,7 +355,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
-	memcpy(arr, address_to_write, size);
+	//memcpy(arr, address_to_write, size);
 	current_buffer->current_size += size;
 	if (current_buffer->current_size >= MSenseFile->write_size){
 		if (current_buffer->current_size != MSenseFile->write_size){

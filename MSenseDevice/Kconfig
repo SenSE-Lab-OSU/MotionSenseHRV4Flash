@@ -85,4 +85,13 @@ config USB_ALWAYS_ON
 config LOG_LEVEL_DATA_COLLECTION
 	int "whether data from sensors is printed in logs"
 	default 3
+
+config LOG_LEVEL_IMU_COLLECTION
+	int "whether data from sensors is printed in logs"
+	default 3
+
+config LOG_LEVEL_PPG_COLLECTION
+	int "whether data from sensors is printed in logs"
+	default 3
+
 source "Kconfig.zephyr"

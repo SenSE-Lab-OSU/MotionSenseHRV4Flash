@@ -431,7 +431,7 @@ static void i2c_init(void)
 // which is defined by the macro-variable TIMER_MS
 
 #define WORKQUEUE_PRIORITY -1
-#define WORKQUEUE_STACK_SIZE 20048
+#define WORKQUEUE_STACK_SIZE 40048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 void battery_maintenance()

@@ -573,7 +573,7 @@ uint16_t offset, uint8_t flags){
 
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
-  if (val == 68 && !collecting_data){
+  if ((val == 68 || val == 121) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     connectedFlag=false;

@@ -13,7 +13,7 @@
 #include <zephyr/fs/fs.h>
 
 
-LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
+LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 #define LED_GREEN 1
 
@@ -584,7 +584,7 @@ void read_ppg_fifo_buffer(struct k_work *item){
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
   ppg_samples[4] = ppg_packet_counter;
-  store_data(ppg_samples, size_of(ppg_samples), 0);
+  store_data(ppg_samples, sizeof(ppg_samples), 0);
   
   #ifdef CONFIG_MSENSE3
   // Transmitting the un-filtered data on BLE 

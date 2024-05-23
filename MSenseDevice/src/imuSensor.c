@@ -627,7 +627,7 @@ void motion_data_timeout_handler(struct k_work *item){
     if((burst_rx[5] & 0x80) == 0x80)
       dataReadAccZ = -(~(dataReadAccZ) + 1);
 
-    #if LOG_LEVEL_DATA_COLLECTION >= 4
+    #if CONFIG_LOG_LEVEL_IMU_COLLECTION >= 4
     log_counter++;
     if (log_counter > 10){
     LOG_DBG("AccelX: %i, AccelY: %i, AccelZ: %i", dataReadAccX, dataReadAccY, dataReadAccZ);

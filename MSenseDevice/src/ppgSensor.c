@@ -5,7 +5,7 @@
 #include "imuSensor.h"
 #include "BLEService.h"
 #include "common.h"
-
+#include "zephyrfilesystem.h"
 #include <math.h>
 #include <stdio.h>
 #include <zephyr/drivers/spi.h>
@@ -481,7 +481,8 @@ void ppg_bluetooth_preprocessing_raw(uint32_t* led1A, uint32_t* led1B, uint32_t*
 }
 
 
-
+uint32_t ppg_samples[5];
+uint8_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item){
   struct ppgInfo* the_device=  ((struct ppgInfo *)(((char *)(item)) 
     - offsetof(struct ppgInfo, work)));
@@ -578,6 +579,12 @@ void read_ppg_fifo_buffer(struct k_work *item){
   if (ppg_print_counter >= 24){
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
   }
+  ppg_samples[0] = led1A[0];
+  ppg_samples[1] = led1B[0];
+  ppg_samples[2] = led2A[0];
+  ppg_samples[3] = led2B[0];
+  ppg_samples[4] = ppg_packet_counter;
+  store_data(ppg_samples, size_of(ppg_samples), 0);
   
   #ifdef CONFIG_MSENSE3
   // Transmitting the un-filtered data on BLE 

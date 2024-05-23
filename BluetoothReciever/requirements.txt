@@ -1,6 +1,0 @@
-PyQt5
-bleak
-numpy
-pylsl
-matplotlib
-scipy

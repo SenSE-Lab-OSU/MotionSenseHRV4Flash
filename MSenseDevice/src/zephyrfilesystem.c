@@ -101,7 +101,7 @@ typedef struct MotionSenseFile {
 	int write_size;
 	int current_writes;
 	int data_counter;
-	char sensor_string[3];
+	char sensor_string[5];
 	char file_name[50];
 	struct fs_file_t self_file;
 	bool switch_buffer;
@@ -116,12 +116,12 @@ typedef struct MotionSenseFile {
 static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file = {
-	.write_size = 8196,
+	.write_size = 8192,
 	.sensor_string = "ppg"
 };
 
 MotionSenseFile accel_file = {
-	.write_size = 8196,
+	.write_size = 8192,
 	.sensor_string = "ac"
 };
 

@@ -117,15 +117,6 @@ struct spi_config spi_cfg_ppg = {
   */
 };
 
-struct ppg_configData ppgConfig = {
-  .isEnabled = true,
-  .sample_avg = 0x08,
-  .green_intensity = 0x28,
-  .infraRed_intensity = 0x28,
-  .sampling_time = 0x28,
-  .numCounts = 8,
-  .txPacketEnable = false,
-};
 
 struct ppgData ppgData1;
 

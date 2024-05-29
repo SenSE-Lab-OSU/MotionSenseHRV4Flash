@@ -102,14 +102,14 @@ struct ppgInfo {
   uint16_t pktCounter;
   bool ppgTFPass;
 }; 
-struct ppgDataInfo {
+struct ppg_ble_packet {
   struct k_work work;
   //this is the pointer to the actual packets being sent
   uint8_t* dataPacket;
   uint8_t packetLength;
 }; 
 extern struct ppgInfo my_ppgSensor;
-extern struct ppgDataInfo my_ppgDataSensor;
+extern struct ppg_ble_packet my_ppgDataSensor;
 
 extern const struct device *spi_dev_ppg;
 extern struct spi_config spi_cfg_ppg;
@@ -167,7 +167,8 @@ void ppg_changeSamplingRate(void);
 void read_ppg_fifo_buffer(struct k_work *item);
 void ppg_sleep(void);
 void ppg_bluetooth_fill(uint8_t* buffer_array);
-
+void ppg_turn_off();
+void ppg_turn_on();
 
 void fs_umountFilesys(void);
 void getFileSysSize(void);

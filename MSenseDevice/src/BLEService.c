@@ -269,7 +269,7 @@ struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notif
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
 struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
 struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
-struct ppgDataInfo my_ppgDataSensor;
+struct ppg_ble_packet my_ppgDataSensor;
 
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
@@ -1035,7 +1035,7 @@ void orientation_notify(struct k_work *item){
   orientation_send(my_connection, the_device->dataPacket, ORIENTATION_DATA_LEN);
 }
 void ppgData_notify(struct k_work *item){
-  struct ppgDataInfo* the_device=  ((struct ppgDataInfo *)(((char *)(item)) - offsetof(struct ppgDataInfo, work)));
+  struct ppg_ble_packet* the_device=  ((struct ppg_ble_packet *)(((char *)(item)) - offsetof(struct ppg_ble_packet, work)));
   
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;

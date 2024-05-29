@@ -17,6 +17,44 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 #define LED_GREEN 1
 
+
+struct ppg_configData ppgConfig = {
+  .isEnabled = true,
+  .sample_avg = 0x08,
+  .green_intensity = 0x28,
+  .infraRed_intensity = 0x28,
+  .sampling_time = 0x28,
+  .numCounts = 8,
+  .txPacketEnable = false,
+};
+
+// struct that is used to store the saved value of the ppg sensor brightness
+struct ppg_configData ppg_saved_config = {
+  .isEnabled = true,
+  .sample_avg = 0x08,
+  .sampling_time = 0x28,
+  .numCounts = 8,
+  .txPacketEnable = false,
+};
+
+const struct ppg_configData ppg_default_config = {
+  .isEnabled = true,
+  .sample_avg = 0x08,
+  .green_intensity = 0x28,
+  .infraRed_intensity = 0x28,
+  .sampling_time = 0x28,
+  .numCounts = 8,
+  .txPacketEnable = false,
+};
+
+const struct ppg_configData ppg_off_config = {
+  .isEnabled = false,
+  .green_intensity = 0,
+  .infraRed_intensity = 0,
+  .txPacketEnable = false
+};
+
+
 uint32_t timeWindow=50;
 
 float32_t std_ppgThreshold_lower = 120;
@@ -150,7 +188,7 @@ void ppg_config(void){
       spiWritePPG(cmd_array, txLen);
     #endif
 		
-// Change Sampling rate PPG
+    // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
     cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
     spiWritePPG(cmd_array, txLen);
@@ -248,6 +286,8 @@ void ppg_config(void){
     ppgData1.bufferIndex=0;
   }
 }
+
+
 void ppg_changeIntensity(void){
   if (ppgConfig.isEnabled) {
     uint8_t rxLen,txLen; 
@@ -271,6 +311,17 @@ void ppg_changeIntensity(void){
     spiReadWritePPG(cmd_array, txLen, NULL, 0);
   }
 }
+
+void ppg_turn_off(){
+  ppgConfig = ppg_off_config;
+  ppg_config();
+}
+
+void ppg_turn_on(){
+  ppgConfig = ppg_default_config;
+  ppg_config();
+}
+
 void ppg_changeSamplingRate(void){
   if (ppgConfig.isEnabled) {
     uint8_t rxLen,txLen; 
@@ -337,7 +388,7 @@ uint8_t* low_ch,uint8_t* up_ch, uint8_t midVal,uint8_t stepSize)
 return midVal;
 }
 
-void ppg_led_currentUpdate(void){
+void ppg_led_update(void){
   //Ch1a - IR1, Ch1b - IR2, Ch2a - G1, Ch2b - G2 
   float meanCh1=0,meanCh2=0;	
   float stdCh1_fil=0,stdCh2_fil=0; 
@@ -450,7 +501,6 @@ void ppg_led_currentUpdate(void){
 
 
 void ppg_bluetooth_preprocessing_raw(uint32_t* led1A, uint32_t* led1B, uint32_t* led2A, uint32_t* led2B, uint16_t pktCounter){
-
 
   uint32_cast buff_val_raw;
 
@@ -606,122 +656,27 @@ void read_ppg_fifo_buffer(struct k_work *item){
   #endif
 
 
-  ppg_led_currentUpdate();
+  ppg_led_update();
 }
-
-
 
 /* This function reads and fills bleSendArr with unfiltered ppg according
 to the desired packet format */
-
-/* NOTE: DEPRECATED, because this is theoretically the same function as ppg_read_fifo
-TODO: figure out one solution for all */
 void ppg_bluetooth_fill(uint8_t* bleSendArr){
 
-  uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
-  uint8_t read_array[128*2*2*3] = {0};
   uint8_t txLen,rxLen;
   uint32_t led1A[32];
   uint32_t led1B[32];
   uint32_t led2A[32];
   uint32_t led2B[32];
-  uint8_t tag1A, tag1B, tag2A, tag2B, tag;
-  float channel1A_in, channel1B_in, channel2A_in, channel2B_in;
-  float meanChannel1A, meanChannel1B, meanChannel2A, meanChannel2B;
+  uint16_t packet_counter;
 
-  float channel1A_out, channel1B_out, channel2A_out, channel2B_out;
+
   float_cast buff_val_filtered;
   uint32_cast buff_val_raw;
-  int i;
-  uint8_t j, k;
-  uint8_t sampleCnt[5] = {0};
-		
-  // Reading the total number of PPG samples
-  cmd_array[0] = PPG_FIFO_DATA_COUNTER;
-  cmd_array[1] = READMASTER;
-  txLen=3;
-  rxLen=3;
-  spiReadWritePPG(cmd_array, txLen, sampleCnt, rxLen);
-    
-  // Reading the PPG samples
-  cmd_array[0] = PPG_FIFO_DATA;
-
-  
-  spiReadWritePPG(cmd_array, txLen, read_array,sampleCnt[2]*3+2);
-  for (i=0; i<sampleCnt[2]; i++){
-    for (j=0; j <= 9; j=j+3){
-      tag = (read_array[i*12+j+2] & 0xF8) >>3;
-      switch(tag){
-        case PPG1_LEDC1_DATA: // IR 1
-          led1A[i] = ((read_array[i*12+j+2]<<16) | (read_array[i*12+j+1+2]<<8)
-           | (read_array[i*12+j+2+2])) & 0x7ffff;
-          break;
-        case PPG1_LEDC2_DATA: // Green 1
-          led2A[i] = ((read_array[i*12+j+2]<<16) | (read_array[i*12+j+1+2]<<8)
-           | (read_array[i*12+j+2+2])) & 0x7ffff;
-          break;
-        case PPG2_LEDC1_DATA: // IR 2
-          led1B[i] = ((read_array[i*12+j+2]<<16) | (read_array[i*12+j+1+2]<<8)
-           | (read_array[i*12+j+2+2])) & 0x7ffff;
-          break;
-        case PPG2_LEDC2_DATA: // Green 2
-          led2B[i] = ((read_array[i*12+j+2]<<16) | (read_array[i*12+j+1+2]<<8)
-           | (read_array[i*12+j+2+2])) & 0x7ffff;
-          break;
-      }
-    }
-    k = i;
-    k = 0;
-    tag1A = (read_array[k*12+0+2] & 0xF8) >>3;
-    tag1B = (read_array[k*12+3+2] & 0xF8) >>3;
-    tag2A = (read_array[k*12+6+2] & 0xF8) >>3;
-    tag2B = (read_array[k*12+9+2] & 0xF8) >>3;
-  }
-
-  if(counterCheck ==0){
-    runningMeanCh1a=0.0f;
-    runningMeanCh1b=0.0f;
-    runningMeanCh2a=0.0f;
-    runningMeanCh2b=0.0f;
-    runningMeanCh1aFil= 0.0f;
-    runningMeanCh1bFil =0.0f;
-    runningMeanCh2aFil =0.0f;
-    runningMeanCh2bFil =0.0f;
-    runningSquaredMeanCh1aFil= 0.0f;
-    runningSquaredMeanCh1bFil =0.0f;
-    runningSquaredMeanCh2aFil =0.0f;
-    runningSquaredMeanCh2bFil =0.0f;
-  }
-  runningMeanCh1a = runningMeanCh1a +led1A[0]*1.0f/timeWindow;
-  runningMeanCh1b = runningMeanCh1b +led1B[0]*1.0f/timeWindow;
-  runningMeanCh2a = runningMeanCh2a +led2A[0]*1.0f/timeWindow;
-  runningMeanCh2b = runningMeanCh2b +led2B[0]*1.0f/timeWindow;
-  /*	
-  buff_val_raw.integer = led1A[0];
-  blePktPPG_noFilter[0] = (|((buff_val_raw.intcast[1])&0xF8)>>3;
-  blePktPPG_noFilter[1] = ((buff_val_raw.intcast[1]&0x07)<<5)|((buff_val_raw.intcast[0]&0xF8)>>3)
-  blePktPPG_noFilter[2] =  (buff_val_raw.intcast[0]&0x07)<<5;
-        
-  buff_val_raw.integer = led1B[0];
-  blePktPPG_noFilter[2] = blePktPPG_noFilter[2] | ((buff_val_raw.intcast[2]&0x07)<<2) |((buff_val_raw.intcast[1]&0xC0)>>6);
-  blePktPPG_noFilter[3] = ((buff_val_raw.intcast[1]&0x3F)<<2) | ((buff_val_raw.intcast[0]&0xC0) >>6);
-  blePktPPG_noFilter[4] = ((buff_val_raw.intcast[0]&0x3F) <<2) ;
-        
-  buff_val_raw.integer = led2A[0];
-  blePktPPG_noFilter[4] = blePktPPG_noFilter[4] | ((buff_val_raw.intcast[2]&0x06)>>1);
-  blePktPPG_noFilter[5] = ((buff_val_raw.intcast[2]&0x01)<<7) | ((buff_val_raw.intcast[1]&0xFE)>>1);
-  blePktPPG_noFilter[6] = ((buff_val_raw.intcast[1]&0x01)<<7) | ((buff_val_raw.intcast[0]&0xFE)>>1);
-  blePktPPG_noFilter[7] = ((buff_val_raw.intcast[0]&0x01)<<7);
-        
-  buff_val_raw.integer = led2B[0];
-  blePktPPG_noFilter[7] = blePktPPG_noFilter[7] | ((buff_val_raw.intcast[2]&0x07) <<4)|((buff_val_raw.intcast[1]&0xF0) >>4);
-  blePktPPG_noFilter[8] = ((buff_val_raw.intcast[1]&0x0F) <<4) | ((buff_val_raw.intcast[0]&0xF0)>>4);
-  blePktPPG_noFilter[9] =  (buff_val_raw.intcast[0]&0x0F) <<4;
-  */
-  //blePktPPG_noFilter[10] = (pktCounter&0xFF00) >> 8;
-  //blePktPPG_noFilter[11] = (pktCounter&0x00FF);
-   
   // Transmitting the un-filtered data on BLE 
+  ppg_bluetooth_preprocessing_raw(&led1A, &led1B, &led2A, &led2B, packet_counter);
+   
+    //creating a compressed signal to send here
     
     //We are sending 18 bit values here that come from 24 bit values (we just chop off 1 from LSB)
     // additionally, these 24 bit values have five zeros, so we treat them as 19 bit values
@@ -731,9 +686,7 @@ void ppg_bluetooth_fill(uint8_t* bleSendArr){
     //put in the remaining 5 bits
     bleSendArr[12] = bleSendArr[12] | ((buff_val_raw.intcast[1])&0xF8); // 0xF8 = 11111000
 
-
     //continue this pattern for the 2nd byte
-    
     bleSendArr[13] = ((buff_val_raw.intcast[1]&0x07)<<5)|((buff_val_raw.intcast[0]&0xF8)>>3);
 
     //continue the pattern, but because we have reached the end of the 24 bit number, we need to shorten
@@ -761,25 +714,14 @@ void ppg_bluetooth_fill(uint8_t* bleSendArr){
 
     buff_val_raw.integer = (led1A[0] + led2A[0]) / 2;
 
-
     //we need to place 4 bits in bleSendArr[16] and there are 3 useable bits in
     // buff_val_raw.intcast[2]. So, :( we have to place 1 bit of
     bleSendArr[16] = bleSendArr[16] | ((buff_val_raw.intcast[2] & 0x07) << 1);
 
     //place the final bit
     bleSendArr[16] = bleSendArr[16] | ((buff_val_raw.intcast[1] & 0x80) >> 7); //0x80 = 10000000
-
-
     bleSendArr[17] = (buff_val_raw.intcast[1] &  0x3F) << 1; //3F = 0111111
-
     bleSendArr[17] = bleSendArr[17] | ((buff_val_raw.intcast[0] & 0x80) >> 7);
-
     bleSendArr[18] = (buff_val_raw.intcast[0] & 0x3F) << 1;
-
-    // now we write the packet counter
-    
-  
-    ppg_led_currentUpdate();
-
 }
 

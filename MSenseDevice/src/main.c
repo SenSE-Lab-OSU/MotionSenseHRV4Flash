@@ -29,10 +29,11 @@
 #include <zephyr/bluetooth/services/bas.h>
 
 // dfu configuration
-#define INCLUDE_DFU
+
 
 #ifdef INCLUDE_DFU
-#ifdef CONFIG_BOOTLOADER_MCUBOOT
+#ifdef CONFIG_BOOTLOADER_MCUBOOT 
+
 #include "os_mgmt/os_mgmt.h"
 #include "img_mgmt/img_mgmt.h"
 #include "stats/stats.h"
@@ -172,7 +173,8 @@ struct bt_conn *my_connection;
 // Setting up the device information service
 static int settings_runtime_load(void)
 {
-#ifdef CONFIG_BOOTLOADER_MCUBOOT
+
+/*#ifdef CONFIG_BOOTLOADER_MCUBOOT
   settings_runtime_set("bt/dis/model",
                        DIS_MODEL, DIS_MODEL_LEN);
   settings_runtime_set("bt/dis/manuf",
@@ -182,7 +184,7 @@ static int settings_runtime_load(void)
   settings_runtime_set("bt/dis/hw",
                        DIS_HW_REV_STR, DIS_HW_REV_STR_LEN);
 #endif
-
+*/
   return 0;
 }
 

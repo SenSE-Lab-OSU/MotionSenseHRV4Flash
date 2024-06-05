@@ -116,7 +116,7 @@ typedef struct MotionSenseFile {
 static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file = {
-	.write_size = 8192,
+	.write_size = 8000,
 	.sensor_string = "ppg"
 };
 

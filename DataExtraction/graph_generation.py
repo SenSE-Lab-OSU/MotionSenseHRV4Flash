@@ -1,21 +1,17 @@
 import numpy
 import matplotlib.pyplot as plt
+import pandas as pd
 import scipy
 
 def show_graph(title, data: list, labels: list, ppg_filter_passthrough=False):
     # by just using plt, it now comes with auto zoom features which I somehow missed.
 
-    # create random data
-    xdata = numpy.random.random([2, 10])
 
     # split the data into two parts
-
     # plot the data
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
 
-    # ax.plot(xdata1, ydata1, color='tab:blue')
-    # ax.plot(xdata2, ydata2, color='tab:orange')
 
 
     for data_element in range(len(data)):
@@ -44,3 +40,14 @@ def show_graph(title, data: list, labels: list, ppg_filter_passthrough=False):
     # collection is done, which will shutdown this graph even if block=False.
     plt.show(block=True)
 
+
+
+def pd_graph_generation(title:str, data_set:pd.DataFrame):
+    #data_set = pd.read_csv()
+    labels = data_set.columns.values.tolist()
+    data = []
+    for label in labels:
+        data.append(list(data_set[label]))
+    #for label in labels:
+    #    signals.append(list(data_set[label]))
+    show_graph(title, data, labels, False)

@@ -183,6 +183,7 @@ void orientation_notify(struct k_work *item);
 void ppgData_notify(struct k_work *item);
 void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value);
 void start_stop_device_collection(uint8_t val);
+void reset_device();
 static ssize_t configSet(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_ppg_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );

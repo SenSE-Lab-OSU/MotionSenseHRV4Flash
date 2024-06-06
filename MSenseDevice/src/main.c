@@ -517,6 +517,7 @@ void main(void)
   int update_time = SLEEP_TIME_MS;
   enable_read_only(true);
   usb_enable(usb_status_cb);
+  
   while (1)
   {
     if (file_lock){
@@ -527,9 +528,12 @@ void main(void)
     
     
 
-    if (!connectedFlag)
+    if (!connectedFlag){
     // blink the LED while we aren't connected.
       led_is_on = !led_is_on;
+      
+      
+    }
     else
     {
       //When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
@@ -537,7 +541,7 @@ void main(void)
       if (!file_lock){
       storage_update++;
       // update how much storage we have left every 40 cycles 
-      if (storage_update >= 40)
+      if (storage_update >= 80)
       {
         led_is_on = 1;
         
@@ -548,6 +552,7 @@ void main(void)
       }
     }
     gpio_pin_set(gpio0_device, LED_PIN, (int)led_is_on);
+    
     k_msleep(update_time);
     
   }

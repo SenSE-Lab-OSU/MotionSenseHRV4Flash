@@ -449,6 +449,9 @@ void reset_device(){
     LOG_INF("Chip Erase Complete! Resetting");
     k_sleep(K_SECONDS(2));
   }
+  else {
+    LOG_ERR("Couldn't erase flash chip, device not ready.");
+  }
   
   
   NVIC_SystemReset();

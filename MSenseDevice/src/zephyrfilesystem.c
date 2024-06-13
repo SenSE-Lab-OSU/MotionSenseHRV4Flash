@@ -32,7 +32,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 
 
-#define MAX_BUFFER_SIZE 9000
+#define MAX_BUFFER_SIZE 40000
 
 
 // Might need to put this and the timer in a seperate file.
@@ -116,7 +116,7 @@ typedef struct MotionSenseFile {
 static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file = {
-	.write_size = 8000,
+	.write_size = 8192,
 	.sensor_string = "ppg"
 };
 
@@ -229,7 +229,10 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		if (file_create != 0){
 			LOG_WRN("Unable to create file");
 		}
-
+		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*8, 1);
+		if (res != 0){
+		LOG_WRN("failed to expand file");
+		}
 	}
 	else if (data_counter >= data_limit){
 		//memset(file_name, 0, sizeof(file_name));
@@ -418,10 +421,9 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	mnt->fs_data = &fat_fs;
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
-	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) || IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
+	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) | IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) | 
+	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
 		mnt->mnt_point = "/SD:";
-	} else {
-		mnt->mnt_point = "/NAND:";
 	}
 
 #elif CONFIG_FILE_SYSTEM_LITTLEFS

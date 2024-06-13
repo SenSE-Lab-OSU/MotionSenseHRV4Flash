@@ -99,4 +99,5 @@ if __name__ == '__main__':
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
     data_set = collect_all_data_by_prefix("PPG", ppg_labels)
     graph_generation.pd_graph_generation("ppg", data_set)
+    # then save it as a csv
 

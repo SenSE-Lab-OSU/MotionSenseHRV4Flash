@@ -1,0 +1,21 @@
+description: |
+  Zephyr MMC disk node. A binding with this compatible present within an SD
+  host controller device node indicates that an SDMMC disk is attached to that
+  SD bus. This binding will enable that disk to be used with the disk driver
+  API and any subsystems that utilize it.
+
+compatible: "senselab,nanddisk"
+
+include: ["spi-device.yaml", "jedec,spi-nor-common.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  jedec-id:
+    required: true
+
+  size:
+    type: int
+    description: |
+      The size of the flash in bytes.  

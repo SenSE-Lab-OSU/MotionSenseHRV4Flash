@@ -24,6 +24,9 @@
 #include <nrfx_timer.h>
 #include "BLEService.h"
 
+#if CONFIG_DISK_DRIVER_RAW_NAND
+#include "drivers/nand/spi_nand.h"
+#endif
 
 #define CONFIG_NAME "Configure sensor"
 #define TFMICRO_NAME "Micromarker Heart-rate"
@@ -435,7 +438,7 @@ void reset_device(){
     LOG_INF("got qspi_device, eraseing... \n");
     file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
-
+    spi_nand_multi_chip_erase(flash_device);
     #else
     #if !DT_NODE_HAS_PROP(DT_ALIAS(spi_flash0), size)
     #error "flash needs size property in order to be erased"

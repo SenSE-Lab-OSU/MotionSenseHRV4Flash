@@ -17,6 +17,10 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #include <zephyr/storage/flash_map.h>
 #endif
 
+#if CONFIG_DISK_DRIVER_RAW_NAND
+#include "drivers/nand/spi_nand.h"
+#endif
+
 #if CONFIG_FAT_FILESYSTEM_ELM
 #include <ff.h>
 #define STORAGE_PARTITION_ID FIXED_PARTITION_ID(PM_LITTLEFS_STORAGE_NAME)

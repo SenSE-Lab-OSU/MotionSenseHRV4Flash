@@ -294,8 +294,8 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
 
         // Executes every 2 seconds to send battery level
         if(global_counter % 400 == 0) 
-          //k_work_submit(&my_battery.work);
-          bt_bas_set_battery_level(100);
+          k_work_submit(&my_battery.work);
+          //bt_bas_set_battery_level(100);
         if(ppgRead  == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = gyroData1.movingFlag;

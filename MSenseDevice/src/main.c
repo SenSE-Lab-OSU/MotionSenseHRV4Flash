@@ -406,18 +406,20 @@ void spi_verify_sensor_ids()
 static void i2c_init(void)
 {
   printk("The I2C Init started\n");
-  i2c_dev = device_get_binding("I2C_0");
-  if (!i2c_dev)
+  i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+  if (!device_is_ready(i2c_dev))
   {
     printk("Binding failed to i2c.");
     return;
   }
+  /*
   i2c_configure(i2c_dev, I2C_SPEED_SET(I2C_SPEED_STANDARD));
 
   batteryMonitorConfig.design_capacity = 0x00AA;   // 170 mAHour
   batteryMonitorConfig.taper_current = 0x0015;     // 21 mA
   batteryMonitorConfig.terminate_voltage = 0x0C1C; // 3100 mV
   bq274xx_gauge_init(&batteryMonitorConfig);
+  */
 }
 
 // Timer handler that periodically executes commands with a period,
@@ -525,8 +527,11 @@ void main(void)
     }
     printk("%d %d\n", connectedFlag, collecting_data);
     battery_maintenance();
-    
-    
+    /*bq274xx_sample_fetch(&batteryMonitor, 
+                        SENSOR_CHAN_GAUGE_REMAINING_CHARGE_CAPACITY);
+    printk("Battery level: %d", batteryMonitor.remaining_charge_capacity);
+    */
+    //do_main(i2c_dev);
 
     if (!connectedFlag){
     // blink the LED while we aren't connected.

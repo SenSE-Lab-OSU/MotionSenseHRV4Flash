@@ -75,6 +75,9 @@
 #define BQ274XX_DELAY 1000
 extern const struct device *i2c_dev;
 
+void do_main(const struct device *dev);
+
+
 struct bq274xx_data {
 	uint16_t voltage;
 	uint16_t avg_current;

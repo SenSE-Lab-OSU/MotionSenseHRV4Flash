@@ -9,7 +9,7 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/sys/printk.h>
 
-static void bq274xx_show_values(const char *type, struct sensor_value value)
+void bq274xx_show_values(const char *type, struct sensor_value value)
 {
 	if ((value.val2 < 0) && (value.val1 >= 0)) {
 		value.val2 = -(value.val2);
@@ -33,7 +33,7 @@ static void get_charge(const struct device* dev){
 }
 
 
-static void do_main(const struct device *dev)
+void do_main(const struct device *dev)
 {
 	int status = 0;
 	struct sensor_value voltage, current, state_of_charge,

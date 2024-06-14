@@ -36,7 +36,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 
 
-#define MAX_BUFFER_SIZE 40000
+#define MAX_BUFFER_SIZE 9000
 
 
 // Might need to put this and the timer in a seperate file.

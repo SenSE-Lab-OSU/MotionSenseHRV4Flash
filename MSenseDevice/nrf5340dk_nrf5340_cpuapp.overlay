@@ -83,6 +83,9 @@
 
 &gpio_fwd {
 	status = "okay";
+	uart {
+		gpios = <&gpio0 19 0>, <&gpio0 20 0>, <&gpio0 21 0>, <&gpio0 22 0>;
+	};
 };
 
 /* End dev kit trim section */
@@ -115,8 +118,9 @@
 	chosen {
 	
 		nordic,pm-ext-flash = &mt29;
-		zephyr,console = &cdc_acm_uart0;
-        zephyr,shell-uart = &cdc_acm_uart0;
+		//zephyr,console = &cdc_acm_uart0;
+        //zephyr,shell-uart = &cdc_acm_uart0;
+		
 		};
 	};
 	

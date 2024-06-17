@@ -25,7 +25,7 @@ def process_data(data, categories: list[list], format: list) -> int:
     # we always assume that the last category is the packet counter
     #assert len(categories) == len(format)
     errors = 0
-    counter_value = 0
+    counter_value = 1
     current_index = 0
     num_of_categories = len(categories)
     for data_byte in range(0, len(data), 4):
@@ -69,9 +69,9 @@ def gather_files_by_prefix(prefix:str, path):
     return all_files
 
 
-def collect_all_data_by_prefix(prefix:str, labels:list[str]):
+def collect_all_data_by_prefix(path, prefix:str, labels:list[str]):
     total_errors = 0
-    path = "F:/"
+    
     all_data = []
     for element in range(len(labels)):
         all_data.append([])
@@ -96,8 +96,9 @@ def collect_all_data_by_prefix(prefix:str, labels:list[str]):
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     #files = os.listdir()
+    path = "E:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
-    data_set = collect_all_data_by_prefix("PPG", ppg_labels)
+    data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
     graph_generation.pd_graph_generation("ppg", data_set)
     # then save it as a csv
 

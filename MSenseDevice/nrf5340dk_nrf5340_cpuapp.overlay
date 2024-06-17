@@ -149,9 +149,11 @@ compatible = "nordic,nrf-spim";
 
 // We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
 &i2c1 {
-	status = "okay";
 	compatible = "nordic,nrf-twim";
+	status = "okay";
+
 	clock-frequency = <I2C_BITRATE_FAST>;
+
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
 	pinctrl-names = "default", "sleep";

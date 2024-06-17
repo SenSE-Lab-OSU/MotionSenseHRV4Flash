@@ -111,7 +111,12 @@ void do_main(const struct device *dev)
 		bq274xx_show_values("Max Load Current in Amps",
 				    current_max_load);
 
-		
+		status = sensor_sample_fetch_chan(dev,
+					SENSOR_CHAN_GAUGE_STATE_OF_CHARGE);
+		if (status < 0) {
+			printk("Failed to fetch State of Charge \n");
+			return;
+		}
 		
 		status = sensor_channel_get(dev,
 					    SENSOR_CHAN_GAUGE_STATE_OF_CHARGE,
@@ -123,6 +128,11 @@ void do_main(const struct device *dev)
 		
 
 		printk("State of charge: %d%%\n", state_of_charge.val1);
+
+		int battery = ((remaining_charge_capacity.val1*100)/full_charge_capacity.val1);
+		battery_level = state_of_charge.val1;
+		printk("estimated state of charge: %d\n", battery);
+		bt_bas_set_battery_level(battery_level);
 
 		status = sensor_sample_fetch_chan(dev,
 					SENSOR_CHAN_GAUGE_STATE_OF_HEALTH);
@@ -209,8 +219,8 @@ void do_main(const struct device *dev)
 
 		printk("Gauge Temperature: %d.%06d C\n", int_temp.val1,
 		       int_temp.val2);
-		battery_level = (remaining_charge_capacity.val1/full_charge_capacity.val1)*100;
-		bt_bas_set_battery_level(battery_level);
+		
+		
 
 		
 	

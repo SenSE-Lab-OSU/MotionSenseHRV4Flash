@@ -8,6 +8,8 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/bluetooth/services/bas.h>
+#include "batteryMonitor.h"
 
 void bq274xx_show_values(const char *type, struct sensor_value value)
 {
@@ -35,12 +37,13 @@ static void get_charge(const struct device* dev){
 
 void do_main(const struct device *dev)
 {
+	
 	int status = 0;
 	struct sensor_value voltage, current, state_of_charge,
 		full_charge_capacity, remaining_charge_capacity, avg_power,
 		int_temp, current_standby, current_max_load, state_of_health;
 
-	while (1) {
+	
 		status = sensor_sample_fetch_chan(dev,
 						  SENSOR_CHAN_GAUGE_VOLTAGE);
 		if (status < 0) {
@@ -108,13 +111,8 @@ void do_main(const struct device *dev)
 		bq274xx_show_values("Max Load Current in Amps",
 				    current_max_load);
 
-		status = sensor_sample_fetch_chan(dev,
-					SENSOR_CHAN_GAUGE_STATE_OF_CHARGE);
-		if (status < 0) {
-			printk("Unable to fetch State of Charge\n");
-			return;
-		}
-
+		
+		
 		status = sensor_channel_get(dev,
 					    SENSOR_CHAN_GAUGE_STATE_OF_CHARGE,
 					    &state_of_charge);
@@ -122,6 +120,7 @@ void do_main(const struct device *dev)
 			printk("Unable to get state of charge\n");
 			return;
 		}
+		
 
 		printk("State of charge: %d%%\n", state_of_charge.val1);
 
@@ -210,8 +209,10 @@ void do_main(const struct device *dev)
 
 		printk("Gauge Temperature: %d.%06d C\n", int_temp.val1,
 		       int_temp.val2);
+		battery_level = (remaining_charge_capacity.val1/full_charge_capacity.val1)*100;
+		bt_bas_set_battery_level(battery_level);
 
-		k_sleep(K_MSEC(5000));
-	}
+		
+	
 }
 

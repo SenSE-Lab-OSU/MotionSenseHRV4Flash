@@ -43,13 +43,13 @@
 
 &led0 {
     status = "okay";
-	gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+	gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
 };
 
 
 &led1 {
     status = "okay";
-    gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
+    gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
 };
 
 &led2 {
@@ -83,9 +83,6 @@
 
 &gpio_fwd {
 	status = "okay";
-	uart {
-		gpios = <&gpio0 19 0>, <&gpio0 20 0>, <&gpio0 21 0>, <&gpio0 22 0>;
-	};
 };
 
 /* End dev kit trim section */

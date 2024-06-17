@@ -75,6 +75,9 @@
 #define BQ274XX_DELAY 1000
 extern const struct device *i2c_dev;
 
+extern int battery_level;
+
+
 void do_main(const struct device *dev);
 
 

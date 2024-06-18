@@ -25,12 +25,16 @@ def process_data(data, categories: list[list], format: list) -> int:
     # we always assume that the last category is the packet counter
     #assert len(categories) == len(format)
     errors = 0
+    
+    skip_code = 1
     counter_value = 1
     current_index = 0
     num_of_categories = len(categories)
     for data_byte in range(0, len(data), 4):
         try:
             result = struct.unpack("<I", data[data_byte:data_byte+4])[0]
+            if result == 4294967295:
+                continue
             #print(result)
             categories[current_index].append(result)
             if current_index == num_of_categories -1:

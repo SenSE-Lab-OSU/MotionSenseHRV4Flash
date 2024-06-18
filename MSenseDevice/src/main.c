@@ -47,7 +47,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 1000
+#define SLEEP_TIME_MS 3000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -492,8 +492,8 @@ void main(void)
   // Init, verify ID and config sensors
   spi_init();
   int ret;
-  ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
-  ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_ACTIVE | LED_FLAGS);
+  ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
+  ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
   
   spi_verify_sensor_ids();
@@ -542,30 +542,22 @@ void main(void)
   {
     
     printk("%d %d\n", connectedFlag, collecting_data);
-    global_update++;
 
+    global_update++;
+    if (global_update >= 100){
+      global_update = 0;
+    }
 
     if (global_update % 10 == 0){
       battery_maintenance();
-    }
-    if (global_update >= 100){
-      global_update = 0;
     }
     if (file_lock){
       update_time = 250;
     }
 
-    if (collecting_data){
-      led1_is_on = !led1_is_on;
-    }
-    else{
-      led1_is_on = false;
-    }
-
     if (!connectedFlag){
     // blink the LED while we aren't connected.
-      led_is_on = !led_is_on;
-      
+      blink_led(LED_PIN);
       
     }
     else
@@ -575,17 +567,23 @@ void main(void)
       if (!file_lock){
       storage_update++;
       // update how much storage we have left every 40 cycles 
-      if (storage_update >= 80)
+      if (storage_update >= 40)
       { 
         get_storage_percent_full();
         get_current_unix_time();
         storage_update = 0;
       }
+      if (global_update % 10 == 0){
+        blink_led(LED_PIN);
+      }
       }
       
     }
-    gpio_pin_set(gpio0_device, LED1_PIN, (int)led1_is_on);
-    gpio_pin_set(gpio0_device, LED_PIN, (int)led_is_on);
+    if (collecting_data){
+        blink_led(LED1_PIN);
+    }
+    
+    
     k_msleep(update_time);
     
   }

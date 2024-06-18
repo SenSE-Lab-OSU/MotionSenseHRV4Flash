@@ -364,12 +364,12 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	void* result = memcpy(address_to_write, data, size);
 	//memcpy(arr, address_to_write, size);
 	current_buffer->current_size += size;
-	if (current_buffer->current_size >= MSenseFile->write_size){
-		if (current_buffer->current_size != MSenseFile->write_size){
+	if (current_buffer->current_size + size >= MSenseFile->write_size){
+		if (current_buffer->current_size + size != MSenseFile->write_size){
 			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
 		}
 		LOG_INF("Submitting File!");
-		submit_write(current_buffer->data_upload_buffer, MSenseFile->write_size, sensor);
+		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
 	}

@@ -51,7 +51,7 @@ TODO: Make this system calculate this in offline mode.
 Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
 since bad sectors aren't used and the next sector over is used.
 */
-uint32_t bad_sectors[20000];
+uint32_t bad_sectors[5000];
 
 // Config sector monitoring
 int sector_write_list[5000] = { 0 };

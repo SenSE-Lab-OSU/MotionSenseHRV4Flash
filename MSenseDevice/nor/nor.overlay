@@ -1,0 +1,70 @@
+
+/ {
+    aliases {
+		spi-flash0 = &mx66u;
+    };
+};
+
+
+/ {
+	chosen {
+	
+		nordic,pm-ext-flash = &mx66u;
+		
+		};
+	};
+	
+
+// External Flash, MX66U NOR 
+&spi4 {
+	status = "okay";
+	pinctrl-0 = < &spi_flash_default>;
+	pinctrl-1 = <&spi_flash_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>,<&gpio0 4 GPIO_ACTIVE_LOW>;
+	mx66u: mx66u2g45g@0 {
+		compatible = "jedec,spi-nor";
+		//size = <4194304000>;
+		// size needs to be in bytes
+		//size = <1073725440>;
+		size = <2147450880>;
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [c2 25 3c];
+		status = "okay";
+	};
+
+};
+
+
+
+
+
+
+
+&pinctrl {
+	
+	
+	spi_flash_default: spi_flash_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 13)>,
+				<NRF_PSEL(SPIM_MISO, 0, 14)>;
+				
+		};
+	};
+	
+	spi_flash_sleep: spi_flash_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
+			<NRF_PSEL(SPIM_MOSI, 0, 13)>,
+			<NRF_PSEL(SPIM_MISO, 0, 14)>;
+			low-power-enable;
+		};
+	};
+
+};
+
+
+
+

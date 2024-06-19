@@ -130,7 +130,7 @@ void do_main(const struct device *dev)
 		printk("State of charge: %d%%\n", state_of_charge.val1);
 
 		int battery = ((remaining_charge_capacity.val1*100)/full_charge_capacity.val1);
-		battery_level = state_of_charge.val1;
+		battery_level = 100;//state_of_charge.val1;
 		printk("estimated state of charge: %d\n", battery);
 		bt_bas_set_battery_level(battery_level);
 

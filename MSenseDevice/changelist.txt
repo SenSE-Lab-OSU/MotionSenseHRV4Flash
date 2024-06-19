@@ -81,3 +81,7 @@ The littlefs partition is configured as the following:
        --lookahead_size=32
 	   sector size of 512
 block size is the total size of a block, read and program size are usually the same
+
+
+
+https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/config_and_build/config_and_build_system.html

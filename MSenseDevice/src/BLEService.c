@@ -291,21 +291,16 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
         my_motionSensor.pktCounter = global_counter;
         my_motionSensor.gyro_first_read = gyro_first_read;
         k_work_submit(&my_motionSensor.work);
-
-        // Executes every 2 seconds to send battery level
-        if(global_counter % 400 == 0) 
-          k_work_submit(&my_battery.work);
-          //bt_bas_set_battery_level(100);
-        if(ppgRead  == 0){
+        if(ppgRead == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = gyroData1.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
           k_work_submit(&my_ppgSensor.work);
         }  
-        // Executes every 8 seconds to send compressed signal
-        
+        // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
         magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+        
         gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
         
         break;

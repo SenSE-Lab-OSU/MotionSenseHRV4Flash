@@ -360,19 +360,7 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
-#define MAX_TRANSMIT_SIZE 250 //TODO figure this out
 
-
-uint8_t data_rx[MAX_TRANSMIT_SIZE];
-uint8_t data_tx[MAX_TRANSMIT_SIZE];
-struct tfMicro_configData tfMicroCoonfig;
-int tfMicro_service_init(void){
-  int err=0;
-
-  memset(&data_rx, 0,MAX_TRANSMIT_SIZE);
-  memset(&data_tx, 0,MAX_TRANSMIT_SIZE);
-  return err;
-}
 
 void connected(struct bt_conn *conn, uint8_t err){
   struct bt_conn_info info; 

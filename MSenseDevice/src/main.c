@@ -234,15 +234,13 @@ static void bt_ready(int err)
   else
     printk("BLE init success\n");
 
-  settings_load();
+  //settings_load();
 
-  settings_runtime_load();
+  //settings_runtime_load();
 
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
 
-  // Initalize services
-  err = tfMicro_service_init();
 
   if (err)
     return;
@@ -358,8 +356,8 @@ static void spi_init(void)
 
   magnetoConfig.isEnabled = false;
   magnetoConfig.txPacketEnable = true;
-  tfMicroCoonfig.isEnabled = true;
-  tfMicroCoonfig.txPacketEnable = true;
+  //tfMicroCoonfig.isEnabled = true;
+  //tfMicroCoonfig.txPacketEnable = true;
 
   configRead[1] = IMU_ENABLE | MAGNETOMETER_ENABLE | PPG_ENABLE |
                   ORIENTATION_ENABLE | TFMICRO_ENABLE;
@@ -439,7 +437,7 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
 
   if (collecting_data || host_wants_collection){
-        if (battery_level < 10 && collecting_data){
+        if (battery_level < 5 && collecting_data){
             start_stop_device_collection(false);
         }
         else if (battery_level > 15 && host_wants_collection && !collecting_data){
@@ -492,6 +490,8 @@ void main(void)
   // Init, verify ID and config sensors
   spi_init();
   int ret;
+
+  // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
@@ -507,7 +507,6 @@ void main(void)
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
-  k_work_init(&my_battery.work, bas_notify);
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
   k_work_init(&my_motionData.work, motion_notify);
@@ -588,5 +587,3 @@ void main(void)
     
   }
 }
-
-//SYS_INIT(setup_disk, APPLICATION, 49);

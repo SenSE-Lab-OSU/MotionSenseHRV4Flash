@@ -377,6 +377,7 @@ void spi_verify_sensor_ids()
   uint8_t txLen = 2, rxLen = 2;
   if (device_is_ready(spi_dev_imu))
   {
+
     spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
     LOG_INF("Chip ID from motion sensor=%x\n", rx_buffer[1]);
   }
@@ -502,6 +503,8 @@ void main(void)
 
   i2c_init();
 
+  ppg_turn_off();
+  
 
   // Start Threads for all our sensor tasks
   k_work_queue_init(&my_work_q);

@@ -134,8 +134,8 @@ void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen){
 	
 }
 
-
-void ppg_config(void){
+//bool use_specific, struct ppgConfig_data* conf_data
+void ppg_config(){
   if (ppgConfig.isEnabled) {
     //fileOpen();
     
@@ -313,8 +313,23 @@ void ppg_changeIntensity(void){
 }
 
 void ppg_turn_off(){
-  ppgConfig = ppg_off_config;
-  ppg_config();
+    uint8_t rxLen,txLen; 
+    // Read chip ID 
+    uint8_t cmd_array[] = {PPG_CHIP_ID_1, READMASTER, SPI_FILL};
+    uint8_t read_array[5] = {0};
+    txLen=3;
+    rxLen=3;
+    spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
+
+    // Resetting PPG sensor
+    cmd_array[0] = PPG_SYS_CTRL;
+    cmd_array[1] = WRITEMASTER;
+    cmd_array[2] = PPG_RESET;
+    spiWritePPG(cmd_array, txLen);
+
+    // Shutting down PPG sensor
+    cmd_array[2] = PPG_SHUTDOWN;
+    spiWritePPG(cmd_array, txLen);
 }
 
 void ppg_turn_on(){

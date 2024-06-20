@@ -542,7 +542,8 @@ uint16_t offset, uint8_t flags){
   return len;
 }
 
-
+//function from main
+void storage_clear_led();
 
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -566,6 +567,7 @@ uint16_t offset, uint8_t flags){
     LOG_INF("Correct Code Entered, Resetting Device");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     connectedFlag=false;
+    storage_clear_led();
     k_sleep(K_SECONDS(2));
     
     reset_device();

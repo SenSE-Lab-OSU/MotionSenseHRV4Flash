@@ -454,6 +454,9 @@ void blink_led(gpio_pin_t pin){
   gpio_pin_set(gpio0_device, pin, 0);
 }
 
+void storage_clear_led(){
+  gpio_pin_set(gpio0_device, LED1_PIN, 1);
+}
 
 void main(void)
 {

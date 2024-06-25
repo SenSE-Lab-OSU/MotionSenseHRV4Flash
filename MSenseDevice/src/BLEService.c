@@ -96,7 +96,7 @@ uint16_t offset, uint8_t flags);
 //         - 0x03 - Motion FS=50
 //         - 0x04 - Motion FS=25
 /* Later, we should just delete these and move the defining bluetooth to the bottom. */
- struct bt_uuid_128 bt_uuid_tfmicro = BT_UUID_INIT_128(TFMICRO_SERVICE_UUID);
+ struct bt_uuid_128 bt_uuid_data = BT_UUID_INIT_128(UPDATE3_SERVICE_UUID);
  struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_tfmicro_tx = BT_UUID_INIT_128(TF_HR_TX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_ppg_tx = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
@@ -105,17 +105,17 @@ uint16_t offset, uint8_t flags);
  struct bt_uuid_128 bt_uuid_orientation_tx = BT_UUID_INIT_128(ORIENTATION_TX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_ppg_quality = BT_UUID_INIT_128(PPG_QUALITY_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_acc_quality = BT_UUID_INIT_128(ACC_QUALITY_CHARACTERISTIC_UUID);
-#define BT_UUID_TFMICRO_SERVICE      (struct bt_uuid *)(&bt_uuid_tfmicro)
-#define BT_UUID_TFMICRO_CONFIG_RX   (struct bt_uuid *)(&bt_uuid_config_rx)
-#define BT_UUID_TFMICRO_TX   (struct bt_uuid *)(&bt_uuid_tfmicro_tx)
-#define BT_UUID_PPG_TX   (struct bt_uuid *)(&bt_uuid_ppg_tx)
-#define BT_UUID_ACC_GYRO_TX   (struct bt_uuid *)(&bt_uuid_acc_gyro_tx)
-#define BT_UUID_MAGNETO_TX   (struct bt_uuid *)(&bt_uuid_magneto_tx)
-#define BT_UUID_ORIENTATION_TX   (struct bt_uuid *)(&bt_uuid_orientation_tx)
-#define BT_UUID_PPG_QUALITY   (struct bt_uuid *)(&bt_uuid_ppg_quality)
-#define BT_UUID_ACC_QUALITY   (struct bt_uuid *)(&bt_uuid_acc_quality)
+#define BT_UUID_DATA_SERVICE      (struct bt_uuid_128 *)(&bt_uuid_data)
+#define BT_UUID_TFMICRO_CONFIG_RX   (struct bt_uuid_128 *)(&bt_uuid_config_rx)
+#define BT_UUID_TFMICRO_TX   (struct bt_uuid_128 *)(&bt_uuid_tfmicro_tx)
+#define BT_UUID_PPG_TX   (struct bt_uuid_128 *)(&bt_uuid_ppg_tx)
+#define BT_UUID_ACC_GYRO_TX   (struct bt_uuid_128 *)(&bt_uuid_acc_gyro_tx)
+#define BT_UUID_MAGNETO_TX   (struct bt_uuid_128 *)(&bt_uuid_magneto_tx)
+#define BT_UUID_ORIENTATION_TX   (struct bt_uuid_128 *)(&bt_uuid_orientation_tx)
+#define BT_UUID_PPG_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_ppg_quality)
+#define BT_UUID_ACC_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_acc_quality)
 //#else
-struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(TFMICRO_SERVICE_UUID);
+struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(CONTROL_SERVICE_UUID);
 struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
@@ -129,8 +129,8 @@ struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERI
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
-BT_GATT_SERVICE_DEFINE(tfMicro_service,
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_TFMICRO_SERVICE), //0
+BT_GATT_SERVICE_DEFINE(data_service,
+  BT_GATT_PRIMARY_SERVICE(BT_UUID_DATA_SERVICE), //0
   /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
     BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
     BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
@@ -175,7 +175,7 @@ BT_GATT_CCC(on_cccd_changed, //24
         BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 );
-#else
+#endif
 
 /* See bas.c for more information, but essentially, the battery service in configured in this exact same way as here,
  with the same macros and everything.
@@ -213,7 +213,7 @@ BT_GATT_SERVICE_DEFINE(update_service,
     NULL, NULL, NULL),
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
   );
-#endif
+
 
 
 /* This function sends a notification to a Client with the provided data,
@@ -387,6 +387,9 @@ void connected(struct bt_conn *conn, uint8_t err){
     
     
     connectedFlag=true;
+    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+    start_stop_device_collection(true);
+    #endif
     
     
     
@@ -399,6 +402,10 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
   
   
   connectedFlag=false;
+
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+    start_stop_device_collection(false);
+  #endif
 }
 
 
@@ -877,7 +884,7 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
 given that the Client Characteristic Control Descripter has been set to Notify (0x1).
 It also calls the on_sent() callback if successful*/
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_PPG_CHARACTERISTIC]; 
+  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
   struct bt_gatt_notify_params params = {
     .uuid   = BT_UUID_PPG_TX,
     .attr   = attr,
@@ -885,12 +892,12 @@ void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
     .len    = len,
     .func   = on_sent
   };
-    
+  
   // Check whether notifications are enabled or not
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     // Send the notification
     if(bt_gatt_notify_cb(conn, &params)){
-            //printk("Error, unable to send notification\n");
+            LOG_WRN("Error, unable to send notification\n");
     }
   }
   else{
@@ -900,7 +907,7 @@ void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
 
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
+  const struct bt_gatt_attr *attr = &data_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
   struct bt_gatt_notify_params params = {
     .uuid   = BT_UUID_ACC_GYRO_TX,
     .attr   = attr,
@@ -929,6 +936,7 @@ void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
 
 void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
 
+  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
   const struct bt_gatt_attr *attr = &update_service.attrs[2];
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");

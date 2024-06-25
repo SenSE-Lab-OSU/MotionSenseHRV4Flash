@@ -312,25 +312,7 @@ void ppg_changeIntensity(void){
   }
 }
 
-void ppg_turn_off(){
-    uint8_t rxLen,txLen; 
-    // Read chip ID 
-    uint8_t cmd_array[] = {PPG_CHIP_ID_1, READMASTER, SPI_FILL};
-    uint8_t read_array[5] = {0};
-    txLen=3;
-    rxLen=3;
-    spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
 
-    // Resetting PPG sensor
-    cmd_array[0] = PPG_SYS_CTRL;
-    cmd_array[1] = WRITEMASTER;
-    cmd_array[2] = PPG_RESET;
-    spiWritePPG(cmd_array, txLen);
-
-    // Shutting down PPG sensor
-    cmd_array[2] = PPG_SHUTDOWN;
-    spiWritePPG(cmd_array, txLen);
-}
 
 void ppg_turn_on(){
   ppgConfig = ppg_default_config;
@@ -652,14 +634,15 @@ void read_ppg_fifo_buffer(struct k_work *item){
   ppg_samples[4] = ppg_packet_counter;
   store_data(ppg_samples, sizeof(ppg_samples), 0);
   
-  #ifdef CONFIG_MSENSE3
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   // Transmitting the un-filtered data on BLE 
-  if(ppgConfig.txPacketEnable == true){
+  
+    ppg_bluetooth_preprocessing_raw(led1A, led1B, led2A, led2B, ppg_packet_counter);
     my_ppgDataSensor.dataPacket = blePktPPG_noFilter;
     my_ppgDataSensor.packetLength = PPG_DATA_UNFILTER_LEN;
     k_work_submit(&my_ppgDataSensor.work);
-  }
   if(ppgTFPass){
+    // This was a pass to send the compressed signal
     ppgData1.green_ch1_buffer[ppgData1.bufferIndex] = ppgData1.green_ch1;
     ppgData1.green_ch2_buffer[ppgData1.bufferIndex] = ppgData1.green_ch2;
     ppgData1.infraRed_ch1_buffer[ppgData1.bufferIndex] = ppgData1.infraRed_ch1;

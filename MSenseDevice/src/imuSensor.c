@@ -517,6 +517,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       //accData1.ENMO = testcounter;
 
       // Submit our data to the bluetooth work thread.
+      
       k_work_submit(&my_motionData.work);
     }
 

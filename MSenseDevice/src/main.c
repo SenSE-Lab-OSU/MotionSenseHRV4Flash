@@ -167,7 +167,7 @@ static const struct bt_data ad[] = {
 };
 
 static const struct bt_data sd[] = {
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL, TFMICRO_SERVICE_UUID),
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, CONTROL_SERVICE_UUID),
 };
 
 struct bt_conn *my_connection;
@@ -506,17 +506,22 @@ void main(void)
 
   i2c_init();
 
-  ppg_turn_off();
+  ppg_sleep();
   
 
   // Start Threads for all our sensor tasks
+  // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
+  // Handles reading from the motion sensor and ppg sensor
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
+  // sends enmo and accelerometer
   k_work_init(&my_motionData.work, motion_notify);
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  // These items all handle sending data across bluetooth
+  
   k_work_init(&my_magnetoSensor.work, magneto_notify);
   k_work_init(&my_orientaionSensor.work, orientation_notify);
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);

@@ -1,9 +1,5 @@
 
 #include <zephyr/types.h>
-#include <zephyr/kernel.h>
-
-#include <zephyr/settings/settings.h>
-#include "common.h"
 
 
 /*** General Constant ***/
@@ -78,7 +74,7 @@ extern const struct device *i2c_dev;
 extern int battery_level;
 
 
-void do_main(const struct device *dev);
+void dt_update_battery(const struct device *dev);
 
 
 struct bq274xx_data {

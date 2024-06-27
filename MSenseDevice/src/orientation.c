@@ -251,13 +251,13 @@ void motion_data_orientation_timeout_handler(uint16_t pktCounter){
   float32_t mag_orientation_x,mag_orientation_y,mag_orientation_z;
   float_cast tempBuff;
   // Compute the angular velocity in radians/second
-  gyro_orientation_x = gyroData1.gyrox_val; 
-  gyro_orientation_y = gyroData1.gyroy_val; 
-  gyro_orientation_z = gyroData1.gyroz_val;
+  gyro_orientation_x = current_gyro_data.gyrox_val; 
+  gyro_orientation_y = current_gyro_data.gyroy_val; 
+  gyro_orientation_z = current_gyro_data.gyroz_val;
 					
-  acc_orientation_x = accData1.accx_val;  
-  acc_orientation_y = accData1.accy_val;  
-  acc_orientation_z = accData1.accz_val;
+  acc_orientation_x = currentAccData.accx_val;  
+  acc_orientation_y = currentAccData.accy_val;  
+  acc_orientation_z = currentAccData.accz_val;
   //printf("accx= %f,accy=%f,accz=%f, gx=%f,gy=%f,gz=%f\n",
   //  acc_orientation_x,acc_orientation_y,acc_orientation_z,
   //  gyro_orientation_x,gyro_orientation_y,gyro_orientation_z);
@@ -316,9 +316,9 @@ void motion_data_orientation_timeout_handler(uint16_t pktCounter){
     k_work_submit(&my_orientaionSensor.work);
   }
 
-  mag_orientation_x = magnetoData1.Hx_val;
-  mag_orientation_y = magnetoData1.Hy_val;
-  mag_orientation_z = magnetoData1.Hz_val;
+  mag_orientation_x = current_magneto_data.Hx_val;
+  mag_orientation_y = current_magneto_data.Hy_val;
+  mag_orientation_z = current_magneto_data.Hz_val;
   if( norm_acc > 1.3f ){   
     mxBiax_arr[pointerMag]=mag_orientation_x;
     myBiax_arr[pointerMag]=mag_orientation_y;

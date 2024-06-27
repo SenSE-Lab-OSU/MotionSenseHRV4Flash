@@ -47,13 +47,6 @@ const struct ppg_configData ppg_default_config = {
   .txPacketEnable = false,
 };
 
-const struct ppg_configData ppg_off_config = {
-  .isEnabled = false,
-  .green_intensity = 0,
-  .infraRed_intensity = 0,
-  .txPacketEnable = false
-};
-
 
 uint32_t timeWindow=50;
 
@@ -394,7 +387,7 @@ void ppg_led_update(void){
   uint8_t txLen=3;
   if (ppgConfig.isEnabled){
     if(counterCheck == timeWindow){
-      if(gyroData1.movingFlag ==0){ // Motion is minimal
+      if(current_gyro_data.movingFlag ==0){ // Motion is minimal
         arm_sqrt_f32(runningSquaredMeanCh1aFil - timeWindow/(timeWindow-1.0f)
           *runningMeanCh1aFil*runningMeanCh1aFil, &ppgData1.stdChanIR_1);
 	arm_sqrt_f32(runningSquaredMeanCh1bFil - timeWindow/(timeWindow-1.0f)
@@ -429,7 +422,7 @@ void ppg_led_update(void){
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
       printk("adapt_flag: %d\n", adapt_Ch2);
       printk("bad counter: %d\n", badDataCounterCh2);
-      if(gyroData1.movingFlag ==0){
+      if(current_gyro_data.movingFlag ==0){
         if(adapt_Ch1==0){
           if(meanCh1 > chLED_upperBound || meanCh1 < chLED_lowerBound )
             badDataCounterCh1++;
@@ -449,8 +442,8 @@ void ppg_led_update(void){
           }						
 	}
       }
-      printk("moving flag: %d\n", gyroData1.movingFlag);
-      if(gyroData1.movingFlag ==0 && adapt_Ch1 ==1){ // Motion is minimal an adaptation is required
+      printk("moving flag: %d\n", current_gyro_data.movingFlag);
+      if(current_gyro_data.movingFlag ==0 && adapt_Ch1 ==1){ // Motion is minimal an adaptation is required
         ppgConfig.infraRed_intensity = searchStep( 
                 adapt_counterCh1,meanCh1, stdCh1_fil,
 		&low_ch1,&up_ch1,ppgConfig.infraRed_intensity, IR_steps);
@@ -468,7 +461,7 @@ void ppg_led_update(void){
           badDataCounterCh1=0;
         }
       }
-      if(gyroData1.movingFlag ==0 && adapt_Ch2 ==1){
+      if(current_gyro_data.movingFlag ==0 && adapt_Ch2 ==1){
         ppgConfig.green_intensity = searchStep( 
           adapt_counterCh2,meanCh2, stdCh2_fil,
           &low_ch2,&up_ch2,ppgConfig.green_intensity, green_steps);

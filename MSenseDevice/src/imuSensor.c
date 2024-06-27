@@ -15,7 +15,7 @@ float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[25];
-float testcounter = 0;
+uint16_t testcounter = 0;
 int log_counter = 0;
 
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
@@ -136,14 +136,14 @@ static void gyroscope_measurement(float * quaternionResult){
     counterGyro=0;
     arm_sqrt_f32(runningSquaredMeanGyro - runningMeanGyro*runningMeanGyro
       *4*timeWindow/(4*timeWindow-1.0f),&stdGyro);
-   //printf("stdGyro=%f,gyroThreshold=%f,movingFlag=%d\n",stdGyro,gyroThreshold,gyroData1.movingFlag);
+   //printf("stdGyro=%f,gyroThreshold=%f,movingFlag=%d\n",stdGyro,gyroThreshold,current_gyro_data.movingFlag);
 
     if(stdGyro <= gyroThreshold) 
-      gyroData1.movingFlag=false;
+      current_gyro_data.movingFlag=false;
     else 
-      gyroData1.movingFlag=true;
+      current_gyro_data.movingFlag=true;
   }
-  //printf("movingFlag=%d\n",gyroData1.movingFlag);
+  //printf("movingFlag=%d\n",current_gyro_data.movingFlag);
     arm_sqrt_f32(angularVelX*angularVelX +angularVelY*angularVelY
     +angularVelZ*angularVelZ, &thetaRate );
   temp1 = thetaRate*deltaT;
@@ -311,9 +311,9 @@ static void prepare_gyros(float* quaternionResult){
   if(angularZ < -bounds1 )  
     angularZ = -bounds1;
 
-  gyroData1.gyrox_val = angularX;
-  gyroData1.gyroy_val = angularY;
-  gyroData1.gyroz_val = angularZ;
+  current_gyro_data.gyrox_val = angularX;
+  current_gyro_data.gyroy_val = angularY;
+  current_gyro_data.gyroz_val = angularZ;
   //printf("angX_final = %f,angy_final = %f,angz_final = %f\n",
    // angularX,angularY,angularZ);
 
@@ -335,10 +335,10 @@ static void prepare_gyros(float* quaternionResult){
   blePktMotion[16] = temp1.floatcast[2];
   blePktMotion[17] = temp1.floatcast[3];
 
-  gyroData1.quaternion_1_val = quaternionResult[0];
-  gyroData1.quaternion_2_val = quaternionResult[1];
-  gyroData1.quaternion_3_val = quaternionResult[2];
-  gyroData1.quaternion_4_val = quaternionResult[3];
+  current_gyro_data.quaternion_1_val = quaternionResult[0];
+  current_gyro_data.quaternion_2_val = quaternionResult[1];
+  current_gyro_data.quaternion_3_val = quaternionResult[2];
+  current_gyro_data.quaternion_4_val = quaternionResult[3];
 }
 // Read the magnetometer sample and use it for orientation calculation
 static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCounter){
@@ -393,28 +393,28 @@ static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCoun
   }
 
   if(validMeasurement == true){
-    magnetoData1.Hy = (burst_rx_magneto[2]<<8) + burst_rx_magneto[1];
+    current_magneto_data.Hy = (burst_rx_magneto[2]<<8) + burst_rx_magneto[1];
     if((burst_rx_magneto[2]&0x80) == 0x80)
-      magnetoData1.Hy = -(~(magnetoData1.Hy) + 1);
-    magnetoData1.Hx = (burst_rx_magneto[4]<<8) + burst_rx_magneto[3];
+      current_magneto_data.Hy = -(~(current_magneto_data.Hy) + 1);
+    current_magneto_data.Hx = (burst_rx_magneto[4]<<8) + burst_rx_magneto[3];
     if((burst_rx_magneto[4]&0x80) == 0x80)
-      magnetoData1.Hx = -(~(magnetoData1.Hx) + 1);
-    magnetoData1.Hz = (burst_rx_magneto[6]<<8) + burst_rx_magneto[5];
+      current_magneto_data.Hx = -(~(current_magneto_data.Hx) + 1);
+    current_magneto_data.Hz = (burst_rx_magneto[6]<<8) + burst_rx_magneto[5];
     if((burst_rx_magneto[6]&0x80) == 0x80)
-      magnetoData1.Hz = -(~(magnetoData1.Hz) + 1);
-    magnetoData1.Hz = -magnetoData1.Hz;
-    magnetoData1.Hx_val = magnetoData1.Hx *0.15;
-    magnetoData1.Hy_val = magnetoData1.Hy *0.15;
-    magnetoData1.Hz_val = magnetoData1.Hz *0.15;
+      current_magneto_data.Hz = -(~(current_magneto_data.Hz) + 1);
+    current_magneto_data.Hz = -current_magneto_data.Hz;
+    current_magneto_data.Hx_val = current_magneto_data.Hx *0.15;
+    current_magneto_data.Hy_val = current_magneto_data.Hy *0.15;
+    current_magneto_data.Hz_val = current_magneto_data.Hz *0.15;
 
   }
   else{
-    magnetoData1.Hy = 0;
-    magnetoData1.Hx = 0;
-    magnetoData1.Hz = 0;
-    magnetoData1.Hx_val = magnetoData1.Hx *0.15;
-    magnetoData1.Hy_val = magnetoData1.Hy *0.15;
-    magnetoData1.Hz_val = magnetoData1.Hz *0.15;
+    current_magneto_data.Hy = 0;
+    current_magneto_data.Hx = 0;
+    current_magneto_data.Hz = 0;
+    current_magneto_data.Hx_val = current_magneto_data.Hx *0.15;
+    current_magneto_data.Hy_val = current_magneto_data.Hy *0.15;
+    current_magneto_data.Hz_val = current_magneto_data.Hz *0.15;
   }
   //printf("H_x=%f,H_y=%f,H_z=%f\n", 
   //  magnetoData1.Hx_val,magnetoData1.Hy_val,magnetoData1.Hz_val);
@@ -509,7 +509,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
           enmo += enmo_store[x];
       }
       enmo /= 25;
-      accData1.ENMO = enmo;
+      currentAccData.ENMO = enmo;
       
       
       // Testing: Make Enmo a random counter that increments instead.
@@ -635,16 +635,16 @@ void motion_data_timeout_handler(struct k_work *item){
       log_counter = 0;
     }
     #endif
-    accData1.accx = dataReadAccX;
-    accData1.accy = dataReadAccY;
-    accData1.accz = dataReadAccZ;
+    currentAccData.accx = dataReadAccX;
+    currentAccData.accy = dataReadAccY;
+    currentAccData.accz = dataReadAccZ;
 
     accelX = dataReadAccX*dividerAcc/1.0;
     accelY = dataReadAccY*dividerAcc/1.0;
     accelZ = dataReadAccZ*dividerAcc/1.0;
-    accData1.accx_val = accelX;
-    accData1.accy_val = accelY;
-    accData1.accz_val = accelZ;
+    currentAccData.accx_val = accelX;
+    currentAccData.accy_val = accelY;
+    currentAccData.accz_val = accelZ;
     calculate_enmo(accelX, accelY, accelZ);
     
     for (uint8_t i=0; i<3; i++)
@@ -660,9 +660,9 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
     
-    int16_t accel_and_gyro[6] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ};
+    int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ, currentAccData.ENMO, testcounter};
     int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
-    store_data(accel_and_gyrotest2, sizeof(accel_and_gyro), 1);
+    store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
 
 
@@ -680,8 +680,8 @@ void motion_data_timeout_handler(struct k_work *item){
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
 
-    my_motionData.dataPacket = &accData1.ENMO;
-    my_motionData.packetLength = sizeof(accData1.ENMO);
+    my_motionData.dataPacket = &currentAccData.ENMO;
+    my_motionData.packetLength = sizeof(currentAccData.ENMO);
     
     #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     if(accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE){

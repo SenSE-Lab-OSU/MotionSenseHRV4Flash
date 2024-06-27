@@ -184,9 +184,9 @@ struct magneto_config{
   bool txPacketEnable;
 };
 
-extern struct accData accData1;
-extern struct gyroData gyroData1;
-extern struct magnetoData magnetoData1;  
+extern struct accData currentAccData;
+extern struct gyroData current_gyro_data;
+extern struct magnetoData current_magneto_data;  
 extern struct orientationData orientationData1; 
                     
 extern struct accel_config accelConfig;

@@ -131,9 +131,9 @@ struct bq274xx_config batteryMonitorConfig;
 
 uint8_t blePktTFMicro[ble_tfMicroPktLength];
 
-struct accData accData1;
-struct gyroData gyroData1;
-struct magnetoData magnetoData1;
+struct accData currentAccData;
+struct gyroData current_gyro_data;
+struct magnetoData current_magneto_data;
 
 struct accel_config accelConfig;
 struct gyro_config gyroConfig;
@@ -433,7 +433,7 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 void battery_maintenance()
 {
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
-  do_main(dev);
+  dt_update_battery(dev);
   
   //battery_lvl = bt_bas_get_battery_level();
 

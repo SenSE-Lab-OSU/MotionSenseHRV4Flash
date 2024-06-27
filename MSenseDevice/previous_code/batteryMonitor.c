@@ -9,7 +9,7 @@
 #define BATTERY_MONITOR_ADDR 0x55
 #define BQ274XX_SUBCLASS_DELAY 5 /* subclass 64 & 82 needs 5ms delay */
 
-int battery_level = 100;
+
 
 
 int bq274xx_gauge_init(struct bq274xx_config* batterMonitorConfig);

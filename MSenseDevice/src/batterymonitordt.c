@@ -11,6 +11,9 @@
 #include <zephyr/bluetooth/services/bas.h>
 #include "batteryMonitor.h"
 
+int battery_level = 100;
+
+
 void bq274xx_show_values(const char *type, struct sensor_value value)
 {
 	if ((value.val2 < 0) && (value.val1 >= 0)) {
@@ -26,16 +29,9 @@ void bq274xx_show_values(const char *type, struct sensor_value value)
 	}
 }
 
-static void get_charge(const struct device* dev){
-    int status;
-    struct sensor_value state_of_charge;
-    status = sensor_channel_get(dev,
-					    SENSOR_CHAN_GAUGE_STATE_OF_CHARGE,
-					    &state_of_charge);
-}
 
 
-void do_main(const struct device *dev)
+void dt_update_battery(const struct device *dev)
 {
 	
 	int status = 0;

@@ -293,7 +293,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
         k_work_submit(&my_motionSensor.work);
         if(ppgRead == 0){
           my_ppgSensor.pktCounter = global_counter;
-          my_ppgSensor.movingFlag = gyroData1.movingFlag;
+          my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
           k_work_submit(&my_ppgSensor.work);
         }  
@@ -880,30 +880,41 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
 }
                         
 
+
 /* This function sends a notification to a Client with the provided data,
 given that the Client Characteristic Control Descripter has been set to Notify (0x1).
 It also calls the on_sent() callback if successful*/
-void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_PPG_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-  
-  // Check whether notifications are enabled or not
+void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
+
+  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
+  const struct bt_gatt_attr *attr = &update_service.attrs[2];
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            LOG_WRN("Error, unable to send notification\n");
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(conn, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
     }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
+  } 
+
 }
+
+void motion_notify(struct k_work *item){
+  struct motionSendInfo* the_device=  ((struct motionSendInfo *)(((char *)(item)) - offsetof(struct motionSendInfo, work)));
+  
+  uint8_t *dataPacket = the_device->dataPacket;
+  uint8_t packetLength = the_device->packetLength;
+
+  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #else
+  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #endif
+
+}
+
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+
 
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   
@@ -934,20 +945,28 @@ void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
 
 }
 
-void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
 
-  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
-  const struct bt_gatt_attr *attr = &update_service.attrs[2];
+void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
+  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
+  struct bt_gatt_notify_params params = {
+    .uuid   = BT_UUID_PPG_TX,
+    .attr   = attr,
+    .data   = data,
+    .len    = len,
+    .func   = on_sent
+  };
+  
+  // Check whether notifications are enabled or not
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(conn, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
+    // Send the notification
+    if(bt_gatt_notify_cb(conn, &params)){
+            LOG_WRN("Error, unable to send notification\n");
     }
-  } 
-
+  }
+  else{
+        //printk("Warning, notification not enabled on the selected attribute\n");
+  }
 }
-
 
 void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_MAGNETO_CHARACTERISTIC]; 
@@ -1001,20 +1020,9 @@ void tfMicro_notify(struct k_work *item){
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   tfMicro_service_send(my_connection, the_device->dataPacket, TFMICRO_DATA_LEN);
 }
-void motion_notify(struct k_work *item){
-  struct motionSendInfo* the_device=  ((struct motionSendInfo *)(((char *)(item)) - offsetof(struct motionSendInfo, work)));
-  
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
 
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #else
-  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #endif
 
-}
+
 void magneto_notify(struct k_work *item){
   struct magnetoInfo* the_device=  ((struct magnetoInfo *)(((char *)(item)) - offsetof(struct magnetoInfo, work)));
   
@@ -1033,6 +1041,8 @@ void orientation_notify(struct k_work *item){
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   orientation_send(my_connection, the_device->dataPacket, ORIENTATION_DATA_LEN);
 }
+
+
 void ppgData_notify(struct k_work *item){
   struct ppg_ble_packet* the_device=  ((struct ppg_ble_packet *)(((char *)(item)) - offsetof(struct ppg_ble_packet, work)));
   
@@ -1043,7 +1053,7 @@ void ppgData_notify(struct k_work *item){
   ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
 }
 
-
+#endif
 
 
 

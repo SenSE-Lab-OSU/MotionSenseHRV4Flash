@@ -70,7 +70,7 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
-const int max_writes = 4;
+const int max_writes = 16;
 
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;
@@ -233,7 +233,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		if (file_create != 0){
 			LOG_WRN("Unable to create file");
 		}
-		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*8, 1);
+		// we write in sizes of 4096*2, so we include that in the formula
+		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
 		if (res != 0){
 		LOG_WRN("failed to expand file");
 		}

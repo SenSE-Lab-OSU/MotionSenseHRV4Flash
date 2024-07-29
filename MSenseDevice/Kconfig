@@ -74,6 +74,10 @@ config MSENSE3_BLUETOOTH_DATA_UPDATES
 	bool "Use MotionSenseHRV3Updates"
 	default n
 
+menuconfig COLLECTION_REQUIRES_DATE_ID
+	bool "Allows sensor collection only if the date time and id characteristics have been filled out by the central."
+	default n
+
 config BLUETOOTH_SETTINGS_OVERRIDE
 	int "Override User Set Bluetooth Settings"
 	default 1

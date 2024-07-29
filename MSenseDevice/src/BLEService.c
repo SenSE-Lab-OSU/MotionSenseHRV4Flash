@@ -253,6 +253,7 @@ uint8_t configRead[6] = {0,0,0,0,0,0};
 uint8_t ppgQuality[4] = {0};
 uint8_t accQuality[4] = {0};
 
+bool* status_registers[6] = {&connectedFlag, &collecting_data};
 
 uint8_t gyro_first_read = 0;
 uint8_t magneto_first_read = 0;  
@@ -268,12 +269,21 @@ uint16_t sampleFreq=25;
 struct ppgInfo my_ppgSensor;
 struct ble_battery_info my_battery ;  // work-queue instance for batter level
 
-struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
 struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
 struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
 struct ppg_ble_packet my_ppgDataSensor;
 
+
+void write_status_register(bool value, int position){
+    uint8_t* register_ptr = status_registers[position];
+    *register_ptr = value;
+}
+
+
+bool read_status_register(int position){
+    return *status_registers[position];
+}
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
@@ -480,6 +490,10 @@ void start_stop_device_collection(uint8_t val){
 }
 
 
+bool check_valid_date_and_id(){
+    
+}
+
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p", attr->handle,
@@ -576,8 +590,12 @@ uint16_t offset, uint8_t flags){
     connectedFlag=false;
     storage_clear_led();
     k_sleep(K_SECONDS(2));
-    
+    if (val == 68){
     reset_device();
+    }
+    else {
+      NVIC_SystemReset();
+    }
     return NRFX_SUCCESS;  
   }
   
@@ -615,6 +633,7 @@ static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr
   return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(uint64_t));
 
 }
+
 
 /* This function is called whenever the RX Characteristic has been written to by a Client */
 ssize_t on_receive(struct bt_conn *conn,

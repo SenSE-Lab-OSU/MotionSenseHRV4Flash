@@ -152,18 +152,13 @@ struct tfMicro_service_cb {
   /** Data received callback. */
   data_rx_cb_t    data_rx_cb;
 };
-struct TfMicroInfo {
-    struct k_work work;
-    uint8_t *dataPacket;
-    uint8_t packetLength;
-}; 
 
 struct motionSendInfo {
     struct k_work work;
     uint8_t *dataPacket;
     uint8_t packetLength;
 }; 
-extern struct TfMicroInfo my_HeartRateEncoder;  // work-queue instance for tflite notifications
+
 extern struct motionSendInfo my_motionData;  // work-queue instance for tflite notifications
 
 void connected(struct bt_conn *conn, uint8_t err);

@@ -21,6 +21,7 @@
 #include "common.h"
 #include "BLEService.h"
 #include "zephyrfilesystem.h"
+#include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
@@ -170,6 +171,10 @@ static const struct bt_data sd[] = {
     BT_DATA_BYTES(BT_DATA_UUID128_ALL, CONTROL_SERVICE_UUID),
 };
 
+// Shell Commands for entering in the terminal, in case a bluetooth command is not avalible.
+SHELL_CMD_REGISTER(reset, NULL, "Resets Device", NVIC_SystemReset);
+SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
+
 struct bt_conn *my_connection;
 
 // Setting up the device information service
@@ -296,10 +301,8 @@ static void spi_init(void)
   const char *const spiName_ppg = "spi@c000";
 
   spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); // device_get_binding(spiName_imu);
-  gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
   spi_dev_ppg = DEVICE_DT_GET(DT_NODELABEL(spi3));
   //spi_dev_ppg = device_get_binding(spiName_ppg);
-  gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 
   if (!device_is_ready(gpio0_device))
   {
@@ -377,9 +380,7 @@ void spi_verify_sensor_ids()
   uint8_t txLen = 2, rxLen = 2;
   if (device_is_ready(spi_dev_imu))
   {
-
-    spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
-    LOG_INF("Chip ID from motion sensor=%x\n", rx_buffer[1]);
+    getIMUID();
   }
   else
   {
@@ -406,6 +407,7 @@ void spi_verify_sensor_ids()
 
 static void i2c_init(void)
 {
+
   printk("The I2C Init started\n");
   i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
   if (!device_is_ready(i2c_dev))
@@ -413,21 +415,14 @@ static void i2c_init(void)
     printk("Binding failed to i2c.");
     return;
   }
-  /*
-  i2c_configure(i2c_dev, I2C_SPEED_SET(I2C_SPEED_STANDARD));
-
-  batteryMonitorConfig.design_capacity = 0x00AA;   // 170 mAHour
-  batteryMonitorConfig.taper_current = 0x0015;     // 21 mA
-  batteryMonitorConfig.terminate_voltage = 0x0C1C; // 3100 mV
-  bq274xx_gauge_init(&batteryMonitorConfig);
-  */
+  // Previously we used to set values, but these are now set by device tree.
 }
 
 // Timer handler that periodically executes commands with a period,
 // which is defined by the macro-variable TIMER_MS
 
 #define WORKQUEUE_PRIORITY -1
-#define WORKQUEUE_STACK_SIZE 40048
+#define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 void battery_maintenance()
@@ -468,10 +463,10 @@ void main(void)
   
 
   // Setup our Flash Filesystem
-  setup_disk();
+  //setup_disk();
 
   usb_enable(usb_status_cb);
-  k_sleep(K_SECONDS(1));
+  k_sleep(K_SECONDS(2));
 
 // this initializes FOTA
 #ifdef INCLUDE_DFU
@@ -483,38 +478,50 @@ void main(void)
 #endif
 #endif
 
-  bool led_is_on = true;
-  bool led1_is_on = true;
-
   // the "1" is the timer priority
   IRQ_CONNECT(TIMER1_IRQn, 1,
               nrfx_timer_1_irq_handler, NULL, 0);
 
 
-  // Init, verify ID and config sensors
-  spi_init();
+  
+  
+  
+  
+  gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+  gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+  
   int ret;
-
   // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+  if (ret < 0)
+  {
+    printk("Error: Can't initialize LED");
+    // return;
+  }
   
+  // Init, verify ID and config sensors
+  
+  spi_init();
   spi_verify_sensor_ids();
 
   
 
   i2c_init();
 
+  // Shutdown our ppg and imu sensors until we need to get data from them
   ppg_sleep();
-  
+  motion_sleep();
+
 
   // Start Threads for all our sensor tasks
   // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
-  // Handles reading from the motion sensor and ppg sensor
+  // Handles reading from the motion sensor and ppg sensor. This is the system workqueue, which zephyr creates by default
+  // and is a different queue from the user created file system workqueue 
   k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
   k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
   // sends enmo and accelerometer
@@ -527,27 +534,18 @@ void main(void)
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);
 #endif
 
-  // TODO: make the file system init properly
+  
   k_work_init(&work_item.work, work_write);
 
   ble_init();
-
-  // dev = device_get_binding(LED0);
-  // dev = DEVICE_DT_GET(LED0_NODE);
-  // if (dev == NULL || !device_is_ready(dev)){
   
   
-  if (ret < 0)
-  {
-    printk("Error: Can't initialize LED");
-    // return;
-  }
   int storage_update = 14;
   int global_update = 0;
   int update_time = SLEEP_TIME_MS;
   enable_read_only(true);
   
-  
+
   while (1)
   {
     
@@ -572,10 +570,9 @@ void main(void)
     }
     else
     {
-      //When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
-      led_is_on = 1;
+      // When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
       if (!file_lock){
-      storage_update++;
+        storage_update++;
       // update how much storage we have left every 40 cycles 
       if (storage_update >= 40)
       { 
@@ -592,8 +589,6 @@ void main(void)
     if (collecting_data){
         blink_led(LED1_PIN);
     }
-    
-    
     k_msleep(update_time);
     
   }

@@ -504,26 +504,25 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       
       counterAcc = 0;
       //calculate the enmo as an average of 25 samples
-       enmo = 0;
+      enmo = 0;
       for (int x = 0; x <= 24; x++){
           enmo += enmo_store[x];
       }
       enmo /= 25;
       currentAccData.ENMO = enmo;
+      currentAccData.time = get_current_unix_time();
       
+      uint8_t enmo_packet[12]; 
       
       // Testing: Make Enmo a random counter that increments instead.
       testcounter++;
       //accData1.ENMO = testcounter;
 
       // Submit our data to the bluetooth work thread.
-      
+      my_motionData.dataPacket = &currentAccData.ENMO;
+      my_motionData.packetLength = sizeof(currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
     }
-
-
-    
-
 
 
 }
@@ -572,7 +571,7 @@ void motion_data_timeout_handler(struct k_work *item){
     dividerAcc = 1.0/2048;
 #
 // Point to register bank 0 for reading the data from sensors.
-  spiReadWriteIMU(m_tx_buf, 2,m_rx_buf, 2);	
+  spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);	
   
   if(magnetoConfig.isEnabled) {
     if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2){	
@@ -680,8 +679,7 @@ void motion_data_timeout_handler(struct k_work *item){
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
 
-    my_motionData.dataPacket = &currentAccData.ENMO;
-    my_motionData.packetLength = sizeof(currentAccData.ENMO);
+    
     
     #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     if(accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE){
@@ -751,7 +749,7 @@ void magnetometer_config(void){
     for(int i = 0; i < sizeof(magnetoConfig); i += 2){
       m_tx_buf[0] = magnetoConfig[i];
       m_tx_buf[1] = magnetoConfig[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
 		
     for(int i = 0; i < sizeof(magnetoConfig); i += 2){
@@ -795,7 +793,7 @@ void magnetometer_config(void){
     for(int i = 0; i < 10; i += 2){
       m_tx_buf[0] = tx_buf[i];
       m_tx_buf[1] = tx_buf[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
+      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
     k_msleep(15);
   }

@@ -385,55 +385,65 @@ uint8_t searchStep(uint8_t adapt_counter, float meanCha, float stdCha_fil,
 void ppg_led_update(void)
 {
   // Ch1a - IR1, Ch1b - IR2, Ch2a - G1, Ch2b - G2
-  float meanCh1 = 0, meanCh2 = 0;
-  float stdCh1_fil = 0, stdCh2_fil = 0;
+  float meanIR = 0, meanGreen = 0;
+  float stdIR = 0, stdGreen = 0;
   uint8_t IR_steps = 1, green_steps = 3;
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t txLen = 3;
+  
+  printk("moving flag: %d\n", current_gyro_data.movingFlag);
+  
   if (ppgConfig.isEnabled)
   {
     if (counterCheck == timeWindow)
     {
       if (current_gyro_data.movingFlag == 0)
-      { // Motion is minimal
+      { // If motion is minimal
+
+        // This is computing a running standard deviation
         arm_sqrt_f32(runningSquaredMeanCh1aFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1aFil * runningMeanCh1aFil, &ppgData1.stdChanIR_1);
         arm_sqrt_f32(runningSquaredMeanCh1bFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1bFil * runningMeanCh1bFil, &ppgData1.stdChanIR_2);
         arm_sqrt_f32(runningSquaredMeanCh2aFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh2aFil * runningMeanCh2aFil, &ppgData1.stdChanGreen_1);
         arm_sqrt_f32(runningSquaredMeanCh2bFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh2bFil * runningMeanCh2bFil, &ppgData1.stdChanGreen_2);
 
+        //running mean was calculated in the sample reading function, read_ppg_fifo, so we just use the value instead of calculating it.
         ppgData1.meanChanIR_1 = runningMeanCh1a;
         ppgData1.meanChanIR_2 = runningMeanCh1b;
         ppgData1.meanChanGreen_1 = runningMeanCh2a;
         ppgData1.meanChanGreen_2 = runningMeanCh2b;
 
+        // Use whatever channel has the highest samples for both green and red
         if (ppgData1.meanChanIR_1 >= ppgData1.meanChanIR_2)
         {
-          meanCh1 = ppgData1.meanChanIR_1;
-          stdCh1_fil = ppgData1.stdChanIR_1;
+          meanIR = ppgData1.meanChanIR_1;
+          stdIR = ppgData1.stdChanIR_1;
         }
         else
         {
-          meanCh1 = ppgData1.meanChanIR_2;
-          stdCh1_fil = ppgData1.stdChanIR_2;
+          meanIR = ppgData1.meanChanIR_2;
+          stdIR = ppgData1.stdChanIR_2;
         }
         if (ppgData1.meanChanGreen_1 >= ppgData1.meanChanGreen_2)
         {
-          meanCh2 = ppgData1.meanChanGreen_1;
-          stdCh2_fil = ppgData1.stdChanGreen_1;
+          meanGreen = ppgData1.meanChanGreen_1;
+          stdGreen = ppgData1.stdChanGreen_1;
         }
         else
         {
-          meanCh2 = ppgData1.meanChanGreen_2;
-          stdCh2_fil = ppgData1.stdChanGreen_2;
+          meanGreen = ppgData1.meanChanGreen_2;
+          stdGreen = ppgData1.stdChanGreen_2;
         }
       
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
       printk("adapt_flag: %d\n", adapt_Ch2);
       printk("bad counter: %d\n", badDataCounterCh2);
+        /* if we are not currently doing any adaptation, check to see if our data is bad */   
         if (adapt_Ch1 == 0)
         {
-          if (meanCh1 > chLED_upperBound || meanCh1 < chLED_lowerBound)
+        
+          if (meanIR > chLED_upperBound || meanIR < chLED_lowerBound)
             badDataCounterCh1++;
+          // if it is bad for 10 cycles, trigger the collection 
           if (badDataCounterCh1 > 10)
           {
             adapt_counterCh1 = 0;
@@ -441,9 +451,10 @@ void ppg_led_update(void)
             badDataCounterCh1 = 0;
           }
         }
+        
         if (adapt_Ch2 == 0)
         {
-          if (meanCh2 > chLED_upperBound || meanCh2 < chLED_lowerBound)
+          if (meanGreen > chLED_upperBound || meanGreen < chLED_lowerBound)
             badDataCounterCh2++;
           if (badDataCounterCh2 > 10)
           {
@@ -453,11 +464,11 @@ void ppg_led_update(void)
           }
         }
       
-      printk("moving flag: %d\n", current_gyro_data.movingFlag);
+      
       if (adapt_Ch1 == 1)
       { // Motion is minimal an adaptation is required
         ppgConfig.infraRed_intensity = searchStep(
-            adapt_counterCh1, meanCh1, stdCh1_fil,
+            adapt_counterCh1, meanIR, stdIR,
             &low_ch1, &up_ch1, ppgConfig.infraRed_intensity, IR_steps);
 
         cmd_array[0] = PPG_LED1_PA;
@@ -477,7 +488,7 @@ void ppg_led_update(void)
       if (adapt_Ch2 == 1)
       {
         ppgConfig.green_intensity = searchStep(
-            adapt_counterCh2, meanCh2, stdCh2_fil,
+            adapt_counterCh2, meanGreen, stdGreen,
             &low_ch2, &up_ch2, ppgConfig.green_intensity, green_steps);
         txLen = 3;
         cmd_array[0] = PPG_LED2_PA;

@@ -102,14 +102,9 @@ struct ppgInfo {
   uint16_t pktCounter;
   bool ppgTFPass;
 }; 
-struct ppg_ble_packet {
-  struct k_work work;
-  //this is the pointer to the actual packets being sent
-  uint8_t* dataPacket;
-  uint8_t packetLength;
-}; 
+
 extern struct ppgInfo my_ppgSensor;
-extern struct ppg_ble_packet my_ppgDataSensor;
+extern struct bleDataPacket my_ppgDataSensor;
 
 extern const struct device *spi_dev_ppg;
 extern struct spi_config spi_cfg_ppg;

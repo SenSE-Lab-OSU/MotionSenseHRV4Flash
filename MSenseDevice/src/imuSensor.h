@@ -195,6 +195,8 @@ extern struct gyro_config gyroConfig;
 extern struct magneto_config magnetoConfig;
 extern struct orientation_config orientationConfig;
 
+extern uint8_t enmo_threshold_packet[9];
+
 void motion_config(void);
 void getIMUID();
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);

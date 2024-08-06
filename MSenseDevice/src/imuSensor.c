@@ -24,8 +24,9 @@ const float gyroThreshold= 5.0f;
 uint8_t blePktMagneto[ble_magnetometerPktLength];
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
-struct motionSendInfo my_motionData;
+struct bleDataPacket my_motionData;
 
+struct bleDataPacket enmoThreshold;
 // Magnometer variables
  
 bool validMeasurement = false;
@@ -488,7 +489,6 @@ magneto_sample_config_t magneto_smpl_config){
 void calculate_enmo(float accelX, float accelY, float accelZ){
 
     // Calculate ENMO
-    
     // Sometimes the device doesn't like parenthesis, maybe something to do with the FPU? So we just do assignments instead
     float AccelX2 = accelX*accelX;
     float AccelY2 = accelY*accelY;
@@ -518,7 +518,9 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       testcounter++;
       //accData1.ENMO = testcounter;
 
+      enmo_threshold_evaluation(enmo);
       // Submit our data to the bluetooth work thread.
+
       my_motionData.dataPacket = &currentAccData.ENMO;
       my_motionData.packetLength = sizeof(currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
@@ -527,7 +529,41 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
 
 }
 
+// need to implement a read for this
+uint8_t enmo_threshold_packet[9];
+void enmo_threshold_evaluation(float enmo_number){
+  
+  static float second_enmo_arr[60];
+  static int enmo_sample_counter;
+  second_enmo_arr[enmo_sample_counter] = enmo_number;
+  enmo_sample_counter++;
+  if (enmo_sample_counter >= 60){
+    // Perform the threshold evaluation
+    enmo_sample_counter = 0;
+    float total_enmo = 0;
+    for (int sample = 0; sample < 60; sample++){
+      total_enmo  += second_enmo_arr[sample];
+    }
+    total_enmo = total_enmo / 60;
+    if (total_enmo*1000 > 95 || total_enmo*1000 > 421){
+      
+      if (total_enmo*1000 > 421){
+        enmo_threshold_packet[0] = 2;
+      }
+      else {
+        enmo_threshold_packet[0] = 1;
+      }
+      
+      uint64_t current_time = get_current_unix_time();
+      memcpy(&enmo_threshold_packet[1], &current_time, sizeof(current_time));
+      enmoThreshold.dataPacket = &currentAccData.ENMO;
+      enmoThreshold.packetLength = sizeof(currentAccData.ENMO);
+      k_work_submit(&my_motionData.work);
+    }
+  }
 
+
+}
 
 /**@brief Function for handling the motion data timer timeout.
  *
@@ -659,7 +695,8 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
     
-    int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ, currentAccData.ENMO, testcounter};
+    // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
+    int16_t accel_and_gyro[7] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ, testcounter};
     int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
@@ -938,7 +975,3 @@ void motion_sleep(void){
     }	
   }
 }
-
-
-
-

@@ -41,13 +41,23 @@
 LOG_MODULE_REGISTER(user_bluetooth);
 
 
+bool connectedFlag = false;
+bool collecting_data = false;
+bool host_wants_collection = false;
 
+bool* status_registers[8] = {&connectedFlag, &collecting_data};
 
+bool ble_status_register_send[8];
+
+void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
   static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+  static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
   static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
@@ -124,8 +134,10 @@ struct bt_uuid_128 bt_uuid_reset = BT_UUID_INIT_128(WRITE_RESET_CHARACTERISTIC_U
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
+struct bt_uuid_128 bt_uuid_read_status = BT_UUID_INIT_128(READ_STATUS_REGISTER_UUID);
 struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_enmothreshold_notify = BT_UUID_INIT_128(NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
@@ -204,6 +216,9 @@ BT_GATT_SERVICE_DEFINE(status_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
+    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    update_ble_status_register, NULL, &ble_status_register_send),
 );
 
 /* update service: read ENMO updates */
@@ -211,7 +226,11 @@ BT_GATT_SERVICE_DEFINE(update_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
     NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE)
+  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
+    read_enmo_threshold, NULL, NULL),
+  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
   );
 
 
@@ -253,16 +272,14 @@ uint8_t configRead[6] = {0,0,0,0,0,0};
 uint8_t ppgQuality[4] = {0};
 uint8_t accQuality[4] = {0};
 
-bool* status_registers[6] = {&connectedFlag, &collecting_data};
+
 
 uint8_t gyro_first_read = 0;
 uint8_t magneto_first_read = 0;  
 uint8_t ppgRead = 0;
 bool ppgTFPass = false;
 
-bool connectedFlag = false;
-bool collecting_data = false;
-bool host_wants_collection = false;
+
 uint16_t sampleFreq=25;
 
 
@@ -272,7 +289,7 @@ struct ble_battery_info my_battery ;  // work-queue instance for batter level
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
 struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
 struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
-struct ppg_ble_packet my_ppgDataSensor;
+struct bleDataPacket my_ppgDataSensor;
 
 
 void write_status_register(bool value, int position){
@@ -284,6 +301,18 @@ void write_status_register(bool value, int position){
 bool read_status_register(int position){
     return *status_registers[position];
 }
+
+void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  for (int x = 0; x < 8; x++){
+    ble_status_register_send[x] = *status_registers[0];
+  }
+  read_generic_eight(conn, attr, buf, len, offset);
+
+}
+
+
+//ble_update_status_register;
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
@@ -372,7 +401,7 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 
 
-void connected(struct bt_conn *conn, uint8_t err){
+void connected(struct bt_conn* conn, uint8_t err){
   struct bt_conn_info info; 
   char addr[BT_ADDR_LE_STR_LEN];
 
@@ -626,7 +655,6 @@ static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr 
 
 static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
-  
   const char* value = attr->user_data;
   //uint8_t space_left = storage_percent_full;
   //LOG_INF("space full: %i", space_left);
@@ -634,6 +662,14 @@ static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr
 
 }
 
+static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  const char* value = attr->user_data;
+  //uint8_t space_left = storage_percent_full;
+  //LOG_INF("space full: %i", space_left);
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, 9);
+
+}
 
 /* This function is called whenever the RX Characteristic has been written to by a Client */
 ssize_t on_receive(struct bt_conn *conn,
@@ -865,7 +901,7 @@ ssize_t on_receive(struct bt_conn *conn,
 }
 
 /* This function is called whenever a Notification has been sent by the TX Characteristic */
-static void on_sent(struct bt_conn *conn, void *user_data){
+static void on_sent(struct bt_conn* conn, void* user_data){
   ARG_UNUSED(user_data);
   const bt_addr_le_t * addr = bt_conn_get_dst(conn);
     /*    
@@ -917,8 +953,27 @@ void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
 
 }
 
+/* This function sends a notification to a Client with the provided data,
+given that the Client Characteristic Control Descripter has been set to Notify (0x1).
+It also calls the on_sent() callback if successful*/
+void enmo_threshold_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
+
+  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
+  const struct bt_gatt_attr *attr = &update_service.attrs[4];
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(conn, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+
+}
+
+
+
 void motion_notify(struct k_work *item){
-  struct motionSendInfo* the_device=  ((struct motionSendInfo *)(((char *)(item)) - offsetof(struct motionSendInfo, work)));
+  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
   
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;
@@ -927,7 +982,12 @@ void motion_notify(struct k_work *item){
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
+  if (the_device->packetLength == 4){
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  }
+  else {
+    enmo_threshold_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  }
   #endif
 
 }

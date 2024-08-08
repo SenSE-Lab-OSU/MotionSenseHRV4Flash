@@ -305,7 +305,7 @@ bool read_status_register(int position){
 void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   for (int x = 0; x < 8; x++){
-    ble_status_register_send[x] = *status_registers[0];
+    ble_status_register_send[x] = *status_registers[x];
   }
   read_generic_eight(conn, attr, buf, len, offset);
 
@@ -977,16 +977,17 @@ void motion_notify(struct k_work *item){
   
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;
-
+  printk("%i", packetLength);
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
-  if (the_device->packetLength == 4){
-  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  if (the_device->packetLength == 5){
+    enmo_threshold_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  
   }
   else {
-    enmo_threshold_send(my_connection, the_device->dataPacket, the_device->packetLength);
+    enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   }
   #endif
 

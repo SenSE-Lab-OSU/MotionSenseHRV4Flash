@@ -523,6 +523,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
 
       my_motionData.dataPacket = &currentAccData.ENMO;
       my_motionData.packetLength = sizeof(currentAccData.ENMO);
+      LOG_WRN("ENMO %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
     }
 

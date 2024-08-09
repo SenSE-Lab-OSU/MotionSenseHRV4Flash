@@ -179,12 +179,14 @@ void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t le
 void tfMicro_notify(struct k_work *);
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+void enmo_threshold_send(uint8_t* data, uint8_t len);
 void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void motion_notify(struct k_work *item);
 void magneto_notify(struct k_work *item);
 void orientation_notify(struct k_work *item);
 void ppgData_notify(struct k_work *item);
+
 void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value);
 void start_stop_device_collection(uint8_t val);
 void reset_device();

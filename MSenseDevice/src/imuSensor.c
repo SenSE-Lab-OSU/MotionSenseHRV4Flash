@@ -530,12 +530,15 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
 
 }
 
+
+float second_enmo_arr[60];
+int enmo_sample_counter = 0;
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9];
 void enmo_threshold_evaluation(float enmo_number){
   
-  static float second_enmo_arr[60];
-  static int enmo_sample_counter;
+  
+  
   second_enmo_arr[enmo_sample_counter] = enmo_number;
   enmo_sample_counter++;
   if (enmo_sample_counter >= 60){
@@ -546,7 +549,10 @@ void enmo_threshold_evaluation(float enmo_number){
       total_enmo  += second_enmo_arr[sample];
     }
     total_enmo = total_enmo / 60;
-    if (total_enmo*1000 > 95 || total_enmo*1000 > 421){
+    total_enmo = total_enmo * 1000;
+    LOG_ERR("total enmo: %f", total_enmo);
+    //total_enmo*1000 > 95 || total_enmo*1000 > 421
+    if (true){
       
       if (total_enmo*1000 > 421){
         enmo_threshold_packet[0] = 2;
@@ -559,7 +565,8 @@ void enmo_threshold_evaluation(float enmo_number){
       memcpy(&enmo_threshold_packet[1], &current_time, sizeof(current_time));
       enmoThreshold.dataPacket = &currentAccData.ENMO;
       enmoThreshold.packetLength = sizeof(currentAccData.ENMO);
-      k_work_submit(&my_motionData.work);
+      enmo_threshold_send(enmo_threshold_packet, sizeof(enmo_threshold_packet));
+      //k_work_submit(&my_motionData.work);
     }
   }
 
@@ -714,12 +721,13 @@ void motion_data_timeout_handler(struct k_work *item){
     //blePktMotion[18] = (pktCounter&) >> 14;
     blePktMotion[19] = ((pktCounter) & 0xFF);
     
-    my_motionData.dataPacket = blePktMotion;
-    my_motionData.packetLength = ACC_GYRO_DATA_LEN;
+    
 
     
     
     #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+    my_motionData.dataPacket = blePktMotion;
+    my_motionData.packetLength = ACC_GYRO_DATA_LEN;
     if(accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE){
       if (counterAcc == -1){
       k_work_submit(&my_motionData.work);

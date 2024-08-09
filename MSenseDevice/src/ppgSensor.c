@@ -384,6 +384,8 @@ uint8_t searchStep(uint8_t adapt_counter, float meanCha, float stdCha_fil,
 
 void ppg_led_update(void)
 {
+  /* Summary of this function: if the ppg is enabled and we are not moving, perform a check to see if the data is in a good value range. if it is not,
+  update the brightness until it is. */
   // Ch1a - IR1, Ch1b - IR2, Ch2a - G1, Ch2b - G2
   float meanIR = 0, meanGreen = 0;
   float stdIR = 0, stdGreen = 0;
@@ -391,7 +393,7 @@ void ppg_led_update(void)
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t txLen = 3;
   
-  printk("moving flag: %d\n", current_gyro_data.movingFlag);
+  LOG_INF("moving flag: %d\n", current_gyro_data.movingFlag);
   
   if (ppgConfig.isEnabled)
   {
@@ -435,8 +437,8 @@ void ppg_led_update(void)
         }
       
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
-      printk("adapt_flag: %d\n", adapt_Ch2);
-      printk("bad counter: %d\n", badDataCounterCh2);
+      LOG_INF("adapt_flag: %d\n", adapt_Ch2);
+      LOG_INF("bad counter: %d\n", badDataCounterCh2);
         /* if we are not currently doing any adaptation, check to see if our data is bad */   
         if (adapt_Ch1 == 0)
         {
@@ -466,7 +468,8 @@ void ppg_led_update(void)
       
       
       if (adapt_Ch1 == 1)
-      { // Motion is minimal an adaptation is required
+      { // Motion is minimal and adaptation is required
+        // TODO: Potentially seperate this into it's own function?
         ppgConfig.infraRed_intensity = searchStep(
             adapt_counterCh1, meanIR, stdIR,
             &low_ch1, &up_ch1, ppgConfig.infraRed_intensity, IR_steps);
@@ -476,9 +479,10 @@ void ppg_led_update(void)
         spiWritePPG(cmd_array, txLen);
 
         adapt_counterCh1++;
-        printk("adapt counter length: %d\n", adapt_counterCh1);
+        LOG_INF("adapt counter length: %d\n", adapt_counterCh1);
         if (adapt_counterCh1 > adaptIterMax)
         {
+          LOG_INF("finished adapting!");
           adapt_counterCh1 = adaptIterMax;
           adapt_Ch1 = 0;
           goodCh1 = 1;
@@ -492,7 +496,7 @@ void ppg_led_update(void)
             &low_ch2, &up_ch2, ppgConfig.green_intensity, green_steps);
         txLen = 3;
         cmd_array[0] = PPG_LED2_PA;
-        printk("new ppg intensity: %d\n", ppgConfig.green_intensity);
+        LOG_INF("new ppg green intensity: %d\n", ppgConfig.green_intensity);
         cmd_array[2] = ppgConfig.green_intensity; // Green 49.9mA
         spiWritePPG(cmd_array, txLen);
 

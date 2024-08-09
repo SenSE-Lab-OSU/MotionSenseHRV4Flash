@@ -939,8 +939,10 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
 /* This function sends a notification to a Client with the provided data,
 given that the Client Characteristic Control Descripter has been set to Notify (0x1).
 It also calls the on_sent() callback if successful*/
-void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
+void enmo_send(struct bt_conn* conn, uint8_t* data, uint8_t len){
 
+
+  
   // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
   const struct bt_gatt_attr *attr = &update_service.attrs[2];
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
@@ -956,13 +958,13 @@ void enmo_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
 /* This function sends a notification to a Client with the provided data,
 given that the Client Characteristic Control Descripter has been set to Notify (0x1).
 It also calls the on_sent() callback if successful*/
-void enmo_threshold_send(struct bt_conn* conn, const uint8_t* data, uint16_t len){
+void enmo_threshold_send(uint8_t* data, uint8_t len){
 
   // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
   const struct bt_gatt_attr *attr = &update_service.attrs[4];
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(conn, attr, data, len);
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){
       printk("Error, unable to send notification\n");
     }
@@ -973,8 +975,8 @@ void enmo_threshold_send(struct bt_conn* conn, const uint8_t* data, uint16_t len
 
 
 void motion_notify(struct k_work *item){
-  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
-  
+  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
+        
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;
   printk("%i", packetLength);
@@ -982,13 +984,9 @@ void motion_notify(struct k_work *item){
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
-  if (the_device->packetLength == 5){
-    enmo_threshold_send(my_connection, the_device->dataPacket, the_device->packetLength);
   
-  }
-  else {
-    enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  }
+  
+  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
 
 }

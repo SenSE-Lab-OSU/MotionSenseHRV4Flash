@@ -44,10 +44,12 @@ LOG_MODULE_REGISTER(user_bluetooth);
 bool connectedFlag = false;
 bool collecting_data = false;
 bool host_wants_collection = false;
+bool battery_low = false;
+bool file_system_full = false;
 
-bool* status_registers[8] = {&connectedFlag, &collecting_data};
-
-bool ble_status_register_send[8];
+bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full};
+int num_of_status_registers = 5;
+bool ble_status_register_send[8] = { 0 };
 
 void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
@@ -229,7 +231,7 @@ BT_GATT_SERVICE_DEFINE(update_service,
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
   BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
-    read_enmo_threshold, NULL, NULL),
+    read_enmo_threshold, NULL, &enmo_threshold_packet),
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
   );
 
@@ -304,7 +306,7 @@ bool read_status_register(int position){
 
 void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
-  for (int x = 0; x < 8; x++){
+  for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
   }
   read_generic_eight(conn, attr, buf, len, offset);
@@ -324,7 +326,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
-        
+        global_counter++;
         // submit work to read gyro, acc, magnetometer and orientation
         my_motionSensor.magneto_first_read = magneto_first_read;
         my_motionSensor.pktCounter = global_counter;

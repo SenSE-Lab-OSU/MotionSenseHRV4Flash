@@ -16,6 +16,8 @@ extern bool ppgTFPass;
 extern bool connectedFlag;
 extern bool collecting_data;
 extern bool host_wants_collection;
+extern bool battery_low;
+extern bool file_system_full;
 
 
 #define TFMICRO_DATA_LEN 66

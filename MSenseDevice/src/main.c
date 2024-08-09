@@ -434,10 +434,12 @@ void battery_maintenance()
 
   if (collecting_data || host_wants_collection){
         if (battery_level < 5 && collecting_data){
+            battery_low = true;
             start_stop_device_collection(false);
         }
         else if (battery_level > 15 && host_wants_collection && !collecting_data){
             start_stop_device_collection(true);
+            battery_low = false;
         }
   }
     
@@ -463,7 +465,7 @@ void main(void)
   
 
   // Setup our Flash Filesystem
-  //setup_disk();
+  setup_disk();
 
   usb_enable(usb_status_cb);
   k_sleep(K_SECONDS(2));

@@ -551,8 +551,8 @@ void enmo_threshold_evaluation(float enmo_number){
     total_enmo = total_enmo / 60;
     total_enmo = total_enmo * 1000;
     LOG_ERR("total enmo: %f", total_enmo);
-    //total_enmo*1000 > 95 || total_enmo*1000 > 421
-    if (true){
+    
+    if (total_enmo*1000 > 95 || total_enmo*1000 > 421){
       
       if (total_enmo*1000 > 421){
         enmo_threshold_packet[0] = 2;

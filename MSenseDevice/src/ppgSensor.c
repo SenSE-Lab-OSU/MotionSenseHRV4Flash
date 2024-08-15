@@ -65,7 +65,7 @@ uint8_t goodCh1 = 1, goodCh2 = 1;
 uint8_t badDataCounterCh1 = 0, badDataCounterCh2 = 0;
 uint32_t chLED_upperBound = 390000;
 uint32_t chLED_lowerBound = 200000;
-uint8_t prevFlag = 0, prevFlag2 = 0;
+uint32_t chLED_target = 300000;
 uint8_t counterCheck = 0;
 float32_t std_ppgThreshold = 150;
 
@@ -264,8 +264,6 @@ void ppg_config()
     counterCheck = 0;
     badDataCounterCh1 = 0;
     badDataCounterCh2 = 0;
-    prevFlag = 0;
-    prevFlag2 = 0;
     adapt_Ch1 = 1;
     adapt_Ch2 = 1;
     goodCh1 = 0;
@@ -346,8 +344,10 @@ void ppg_sleep(void)
 uint8_t searchStep(uint8_t adapt_counter, float meanCha, float stdCha_fil,
                    uint8_t *low_ch, uint8_t *up_ch, uint8_t midVal, uint8_t stepSize)
 {
-  printk("in f search step, mean: %d\n", meanCha);
-  if (meanCha < chLED_upperBound - 40000)
+  //chLED_upperBound - 40000
+  
+  printk("in f search step, mean: %f \n", meanCha);
+  if (meanCha < chLED_target)
   {
     if (stdCha_fil > std_ppgThreshold)
     {
@@ -393,15 +393,16 @@ void ppg_led_update(void)
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t txLen = 3;
   
-  LOG_INF("moving flag: %d\n", current_gyro_data.movingFlag);
+  
   
   if (ppgConfig.isEnabled)
   {
     if (counterCheck == timeWindow)
     {
+      LOG_INF("moving flag: %d\n", current_gyro_data.movingFlag);
       if (current_gyro_data.movingFlag == 0)
       { // If motion is minimal
-
+        
         // This is computing a running standard deviation
         arm_sqrt_f32(runningSquaredMeanCh1aFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1aFil * runningMeanCh1aFil, &ppgData1.stdChanIR_1);
         arm_sqrt_f32(runningSquaredMeanCh1bFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1bFil * runningMeanCh1bFil, &ppgData1.stdChanIR_2);
@@ -438,7 +439,10 @@ void ppg_led_update(void)
       
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
       LOG_INF("adapt_flag: %d\n", adapt_Ch2);
+      LOG_INF("green mean: %f \n", meanGreen);
+      LOG_INF("IR mean: %f \n", meanIR);
       LOG_INF("bad counter: %d\n", badDataCounterCh2);
+      
         /* if we are not currently doing any adaptation, check to see if our data is bad */   
         if (adapt_Ch1 == 0)
         {
@@ -515,7 +519,7 @@ void ppg_led_update(void)
       if (adapt_counterCh2 == adaptIterMax && adapt_counterCh2 == adaptIterMax)
       {
 
-        uint32_t dataFlash = (ppgConfig.green_intensity) << 8 + ppgConfig.infraRed_intensity;
+        uint32_t brightness_setting = (ppgConfig.green_intensity) << 8 + ppgConfig.infraRed_intensity;
       }
     }
   }

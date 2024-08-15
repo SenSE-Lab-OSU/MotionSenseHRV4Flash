@@ -470,6 +470,7 @@ void main(void)
   usb_enable(usb_status_cb);
   k_sleep(K_SECONDS(2));
 
+  
 // this initializes FOTA
 #ifdef INCLUDE_DFU
 #ifdef CONFIG_BOOTLOADER_MCUBOOT
@@ -541,8 +542,8 @@ void main(void)
 
   ble_init();
   
+  get_storage_percent_full();
   
-  int storage_update = 14;
   int global_update = 0;
   int update_time = SLEEP_TIME_MS;
   enable_read_only(true);
@@ -560,38 +561,28 @@ void main(void)
 
     if (global_update % 10 == 0){
       battery_maintenance();
-    }
-    if (file_lock){
-      update_time = 250;
+      get_current_unix_time();
+      if (!file_lock){
+      }
     }
 
     if (!connectedFlag){
     // blink the LED while we aren't connected.
       blink_led(LED_PIN);
-      
     }
-    else
-    {
-      // When Connected, LED is always on for now, but we can change to 0 so tha it only blinks once every 15 cycles
-      if (!file_lock){
-        storage_update++;
-      // update how much storage we have left every 40 cycles 
-      if (storage_update >= 40)
-      { 
-        get_storage_percent_full();
-        get_current_unix_time();
-        storage_update = 0;
-      }
+    else {
+      // When Connected, LED instead only blinks once every 10 cycles
       if (global_update % 10 == 0){
         blink_led(LED_PIN);
       }
-      }
-      
     }
+      
+    
     if (collecting_data){
         blink_led(LED1_PIN);
     }
+
     k_msleep(update_time);
-    
   }
 }
+

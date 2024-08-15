@@ -255,6 +255,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		MSenseFile->current_writes = 0;
+		get_storage_percent_full();
 	}
 }
 
@@ -539,6 +540,10 @@ int get_storage_percent_full(){
 	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 
+}
+
+int read_storage_percent_full(){
+	return storage_percent_full;
 }
 
 

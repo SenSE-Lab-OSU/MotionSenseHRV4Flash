@@ -512,7 +512,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 25;
       currentAccData.ENMO = enmo;
-      currentAccData.time = get_current_unix_time();
+      //currentAccData.time = get_current_unix_time();
        
       
       // Testing: Make Enmo a random counter that increments instead.

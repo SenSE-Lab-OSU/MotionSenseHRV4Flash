@@ -17,4 +17,4 @@ littlefs_storage:
     disk_sector_size: 512
   ##device: MX25R64
   region: external_flash
-  size: 0x7ff000
+  size: 0xf800000

@@ -1092,7 +1092,7 @@ void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   }
 }
 void tfMicro_notify(struct k_work *item){
-  struct TfMicroInfo* the_device =  ((struct TfMicroInfo *)(((char *)(item)) - offsetof(struct TfMicroInfo, work)));
+  struct bleDataPacket* the_device =  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
   
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;
@@ -1124,7 +1124,7 @@ void orientation_notify(struct k_work *item){
 
 
 void ppgData_notify(struct k_work *item){
-  struct ppg_ble_packet* the_device=  ((struct ppg_ble_packet *)(((char *)(item)) - offsetof(struct ppg_ble_packet, work)));
+  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
   
   uint8_t *dataPacket = the_device->dataPacket;
   uint8_t packetLength = the_device->packetLength;

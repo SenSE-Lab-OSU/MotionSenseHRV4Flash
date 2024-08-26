@@ -115,7 +115,7 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
         full_dict[labels[index]] = all_data[index]
 
     dataset = pd.DataFrame(full_dict)
-    dataset.to_csv("acceleration.csv")
+    
     return dataset
 
 
@@ -123,12 +123,17 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     #files = os.listdir()
-    path = "F:/"
+    path = "G:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
+
     acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
     acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<f"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
-    data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
+    accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
+    accel_data_set.to_csv("acceleration.csv")
+
+
+
     graph_generation.pd_graph_generation("ppg", data_set)
     # then save it as a csv
 

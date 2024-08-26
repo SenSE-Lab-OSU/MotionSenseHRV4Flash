@@ -151,26 +151,15 @@ void ppg_config()
     cmd_array[0] = PPG_INT_STAT_2;
     spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
 
-#if defined(LED_RED)
-    // nrf_delay_ms(5);
-    cmd_array[0] = 0x11;
-    cmd_array[1] = 0x00;
-    cmd_array[2] = 0x03; // Red LED 0x3F
-    nrf_drv_spi_transfer(&spi_ppg, cmd_array, 3, read_array, 3);
-    while (!spi_ppg_xfer_done)
-    {
-      __WFE();
-    }
-    spi_ppg_xfer_done = false;
-#endif
+
     // PPG configuration register - ALC enabled +
     // PPG ADC Range - 4096 nA, 117.3us integration time
-#if defined(LED_GREEN)
+
     cmd_array[0] = PPG_CONFIG_1;
     cmd_array[1] = WRITEMASTER;
-    cmd_array[2] = PPG_TINT_117_3us;
+    cmd_array[2] = PPG_TINT_117_3us | PPG2_ADC_RGE_16384nA | PPG1_ADC_RGE_16384nA;
     spiWritePPG(cmd_array, txLen);
-#endif
+
 
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
@@ -185,30 +174,19 @@ void ppg_config()
 
     // Photo-diode Bias 0 to 65pF
     cmd_array[0] = PPG_PHOTODIODE_BIAS;
-    cmd_array[2] = (uint8_t)(PPG_PDBIAS_65pF << 4) | (uint8_t)PPG_PDBIAS_65pF;
+    cmd_array[2] = (uint8_t)(PPG_PDBIAS_130pF << 4) | (uint8_t)PPG_PDBIAS_130pF ;
     spiWritePPG(cmd_array, txLen);
 
     // Configuring LED drive 3 (Green) range 124 mA
     //            LED drive 2 (Green) range 124 mA
     //            LED drive 1 (IR) range 31 mA
-#if defined(LED_GREEN)
-    cmd_array[0] = PPG_LED_RANGE_1;
-    cmd_array[2] = (uint8_t)(PPG_LED_CURRENT_124mA << 4) | (uint8_t)(PPG_LED_CURRENT_124mA << 2) | PPG_LED_CURRENT_31mA;
-    spiWritePPG(cmd_array, txLen);
-#endif
 
-#if defined(LED_RED)
-    cmd_array[0] = 0x2A;
-    cmd_array[2] = 0x00; // change back to x15
-    // cmd_array[2] = 0x03;
-    nrf_drv_spi_transfer(&spi_ppg, cmd_array, 3, read_array, 3);
-    while (!spi_ppg_xfer_done)
-    {
-      __WFE();
-    }
-    spi_ppg_xfer_done = false;
-// nrf_delay_ms(5);
-#endif
+    cmd_array[0] = PPG_LED_RANGE_1;
+    cmd_array[2] = (uint8_t)(PPG_LED_CURRENT_124mA << 4) | (uint8_t)(PPG_LED_CURRENT_124mA << 2) | PPG_LED_CURRENT_124mA ;
+    spiWritePPG(cmd_array, txLen);
+
+
+
 
     // LED 1 Driver current setting (IR )
     cmd_array[0] = PPG_LED1_PA;
@@ -285,7 +263,7 @@ void ppg_changeIntensity(void)
     // LED 1 Driver current setting (IR )
     cmd_array[0] = PPG_LED1_PA;
     cmd_array[2] = ppgConfig.infraRed_intensity;
-    spiWritePPG(cmd_array, txLen);
+    spiReadWritePPG(cmd_array, txLen, NULL, 0);
 
     // LED 2 Driver current setting (Green )
     cmd_array[0] = PPG_LED2_PA;
@@ -477,6 +455,7 @@ void ppg_led_update(void)
         ppgConfig.infraRed_intensity = searchStep(
             adapt_counterCh1, meanIR, stdIR,
             &low_ch1, &up_ch1, ppgConfig.infraRed_intensity, IR_steps);
+        LOG_INF("New IR Intensity: %d", ppgConfig.infraRed_intensity);
 
         cmd_array[0] = PPG_LED1_PA;
         cmd_array[2] = ppgConfig.infraRed_intensity; // changing it to 0x10 from 0x20
@@ -571,7 +550,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   uint32_t led2A[32];
   uint32_t led2B[32];
 
-  uint8_t tag1A, tag1B, tag2A, tag2B, tag;
+  uint8_t tag;
   float channel1A_in, channel1B_in, channel2A_in, channel2B_in;
   float meanChannel1A, meanChannel1B, meanChannel2A, meanChannel2B;
 
@@ -597,15 +576,20 @@ void read_ppg_fifo_buffer(struct k_work *item)
   cmd_array[0] = PPG_FIFO_DATA;
   spiReadWritePPG(cmd_array, txLen, read_array, sampleCount[2] * 3 + 2);
 
-  int i, j, k;
+  int i, j;
+  //for each sample (obtained earlier by reading the number of samples stored
   for (i = 0; i < sampleCount[2]; i++)
   {
+    // sample is stored as a sequence of 24 bit numbers so we iterate over 3 bytes (24 bits) 
     for (j = 0; j <= 9; j = j + 3)
     {
+      /* every 24 bit sample breaks into a 5 bit tag and 19 bit integer.
+       the tag indicates what photo diode it is */
       tag = (read_array[i * 12 + j + 2] & 0xF8) >> 3;
+      
       switch (tag)
       {
-      case PPG1_LEDC1_DATA: // IR 1
+      case PPG1_LEDC1_DATA: // Photo Diode 1 for IR 
         led1A[i] = ((read_array[i * 12 + j + 2] << 16) | (read_array[i * 12 + j + 1 + 2] << 8) | (read_array[i * 12 + j + 2 + 2])) & 0x7ffff;
         break;
       case PPG1_LEDC2_DATA: // Green 1
@@ -619,12 +603,6 @@ void read_ppg_fifo_buffer(struct k_work *item)
         break;
       }
     }
-    k = i;
-    k = 0;
-    tag1A = (read_array[k * 12 + 0 + 2] & 0xF8) >> 3;
-    tag1B = (read_array[k * 12 + 3 + 2] & 0xF8) >> 3;
-    tag2A = (read_array[k * 12 + 6 + 2] & 0xF8) >> 3;
-    tag2B = (read_array[k * 12 + 9 + 2] & 0xF8) >> 3;
   }
 
   if (counterCheck == 0)

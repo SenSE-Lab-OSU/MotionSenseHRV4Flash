@@ -707,7 +707,8 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
     
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
-    int16_t accel_and_gyro[7] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadAccY, dataReadAccZ, global_counter};
+    int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
+    memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
     int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 

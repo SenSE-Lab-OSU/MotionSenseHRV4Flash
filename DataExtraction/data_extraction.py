@@ -21,7 +21,21 @@ def process_data_test(data) -> int:
     return errors
 
 
-def process_data(data, categories: list[list], format: list) -> int:
+def calculate_file_end(file):
+    index = -1
+    subtract_length = 0
+    while file[index] == 0xff:
+        subtract_length += 1
+        index -= 1
+    return subtract_length
+
+struct_key = {"f":4,
+              "h":2,
+              "I": 4,
+              "H":2
+              }
+
+def process_data(data, categories: list[list], format: list, use_check=False) -> int:
     # we always assume that the last category is the packet counter
     #assert len(categories) == len(format)
     errors = 0
@@ -29,23 +43,33 @@ def process_data(data, categories: list[list], format: list) -> int:
     skip_code = 1
     counter_value = 1
     current_index = 0
+    data_position = 0
     num_of_categories = len(categories)
-    for data_byte in range(0, len(data), 4):
+    end_trim_size = calculate_file_end(data)
+    data_length = len(data) - end_trim_size
+    while data_position + struct_key[format[current_index][1]] <= data_length:
         try:
-            result = struct.unpack("<I", data[data_byte:data_byte+4])[0]
+
+            length = struct_key[format[current_index][1]]
+            data_byte = data[data_position:data_position+length]
+            data_position += length
+            result = struct.unpack(format[current_index], data_byte)[0]
+
             if result == 4294967295:
                 continue
             #print(result)
             categories[current_index].append(result)
-            if current_index == num_of_categories -1:
-                # we are on the last category, which means we are looking at the counter
+            current_index += 1
+            if current_index >= num_of_categories:
                 current_index = 0
-                if (result != counter_value):
-                    print("error: got " + str(result) + " expected " + str(counter_value))
-                    errors += 1
-                counter_value += 1
-            else:
-                current_index += 1
+                if use_check:
+                # we are on the last category, which means we are looking at the counter
+                    if (result != counter_value):
+                        print("error: got " + str(result) + " expected " + str(counter_value))
+                        errors += 1
+                    counter_value += 1
+
+
         except Exception as e:
             errors += 1
             print(e)
@@ -73,7 +97,7 @@ def gather_files_by_prefix(prefix:str, path):
     return all_files
 
 
-def collect_all_data_by_prefix(path, prefix:str, labels:list[str]):
+def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[str]):
     total_errors = 0
     
     all_data = []
@@ -85,14 +109,13 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str]):
         print(full_path)
         test_file = open(full_path, "rb")
         data = test_file.read()
-        total_errors += process_data(data, all_data, [])
-        break
+        total_errors += process_data(data, all_data, types)
     full_dict = {}
     for index in range(len(labels)):
         full_dict[labels[index]] = all_data[index]
 
     dataset = pd.DataFrame(full_dict)
-    #dataset.to_csv()
+    dataset.to_csv("acceleration.csv")
     return dataset
 
 
@@ -100,9 +123,12 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str]):
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     #files = os.listdir()
-    path = "E:/"
+    path = "F:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
-    data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
+    acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<f"]
+    #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
+    data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
     graph_generation.pd_graph_generation("ppg", data_set)
     # then save it as a csv
 

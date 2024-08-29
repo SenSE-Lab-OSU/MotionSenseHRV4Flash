@@ -134,6 +134,6 @@ if __name__ == '__main__':
 
 
 
-    graph_generation.pd_graph_generation("ppg", data_set)
+    graph_generation.pd_graph_generation("ppg", accel_data_set)
     # then save it as a csv
 

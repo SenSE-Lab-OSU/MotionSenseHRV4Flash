@@ -18,7 +18,7 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -29,7 +29,7 @@ struct ppg_configData ppgConfig = {
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .sampling_time = 0x28,
     .numCounts = 8,
     .txPacketEnable = false,
@@ -37,7 +37,7 @@ struct ppg_configData ppg_saved_config = {
 
 const struct ppg_configData ppg_default_config = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -137,11 +137,7 @@ void ppg_config()
     cmd_array[1] = WRITEMASTER;
     cmd_array[2] = PPG_RESET;
     spiWritePPG(cmd_array, txLen);
-
-    // Shutting down PPG sensor
-    cmd_array[2] = PPG_SHUTDOWN;
-    spiWritePPG(cmd_array, txLen);
-
+      
     // Reading interrupt status register 1
     cmd_array[0] = PPG_INT_STAT_1;
     cmd_array[1] = READMASTER;
@@ -150,6 +146,12 @@ void ppg_config()
     // Reading interrupt status register 2
     cmd_array[0] = PPG_INT_STAT_2;
     spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
+      
+    // Shutting down PPG sensor
+    cmd_array[2] = PPG_SHUTDOWN;
+    spiWritePPG(cmd_array, txLen);
+
+
 
 
     // PPG configuration register - ALC enabled +
@@ -172,14 +174,14 @@ void ppg_config()
     cmd_array[2] = PPG_LED_SETLNG_12us;
     spiWritePPG(cmd_array, txLen);
 
-    // Photo-diode Bias 0 to 65pF
+    // Photo-diode Bias 65 pF to 130pF
     cmd_array[0] = PPG_PHOTODIODE_BIAS;
     cmd_array[2] = (uint8_t)(PPG_PDBIAS_130pF << 4) | (uint8_t)PPG_PDBIAS_130pF ;
     spiWritePPG(cmd_array, txLen);
 
     // Configuring LED drive 3 (Green) range 124 mA
     //            LED drive 2 (Green) range 124 mA
-    //            LED drive 1 (IR) range 31 mA
+    //            LED drive 1 (IR) range 124 mA
 
     cmd_array[0] = PPG_LED_RANGE_1;
     cmd_array[2] = (uint8_t)(PPG_LED_CURRENT_124mA << 4) | (uint8_t)(PPG_LED_CURRENT_124mA << 2) | PPG_LED_CURRENT_124mA ;
@@ -228,7 +230,7 @@ void ppg_config()
     cmd_array[2] = PPG_LEDC2_LED2_LED3_SIMULT | PPG_LEDC1_LED1;
     spiWritePPG(cmd_array, txLen);
 
-    // System control Dual PPG + Low power mode enabled
+    // System control Dual PPG + Low power mode enabled + shutdown disabled
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[2] = PPG_LP_MODE;
     spiWritePPG(cmd_array, txLen);

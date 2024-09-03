@@ -496,9 +496,11 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     float AccelY2 = accelY*accelY;
     float AccelZ2 = accelZ*accelZ;
 
-    float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
-    
-
+    //float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
+    float32_t enmo;
+    arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
+    enmo = enmo-1;
+    if(enmo<0) enmo=0;
     // when we send the enmo, we send as an average of 25
     enmo_store[counterAcc] = enmo;
     counterAcc++;

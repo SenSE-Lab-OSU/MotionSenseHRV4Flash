@@ -83,5 +83,28 @@ The littlefs partition is configured as the following:
 block size is the total size of a block, read and program size are usually the same
 
 
+Fatfs has been configured as such:
+
+CONFIG_PM_OVERRIDE_EXTERNAL_DRIVER_CHECK=y
+CONFIG_MASS_STORAGE_DISK_NAME="SD"
+#CONFIG_FILE_SYSTEM_LITTLEFS=y
+CONFIG_FAT_FILESYSTEM_ELM=y
+
+CONFIG_FS_FATFS_READ_ONLY=n
+# below config is necessary because this determines the buffer fatfs internally uses to store reads which we do at a size of 4096
+CONFIG_FS_FATFS_MAX_SS=4096
+CONFIG_FS_FATFS_EXFAT=n
+CONFIG_FS_FATFS_MAX_ROOT_ENTRIES=4096
+CONFIG_FS_FATFS_LFN=y
+
+I'll describe some of the most important ones breifly:
+
+I configured the driver to write a sector size as determined by the disk size. Our 
+nand flash is 4096, hence the value.
+FAT fs typically only allows a certain amount of files in the root directory, so we have to
+bump it up to fix this.
+
+
+
 
 https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/config_and_build/config_and_build_system.html

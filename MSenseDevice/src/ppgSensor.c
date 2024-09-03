@@ -137,11 +137,7 @@ void ppg_config()
     cmd_array[1] = WRITEMASTER;
     cmd_array[2] = PPG_RESET;
     spiWritePPG(cmd_array, txLen);
-
-    // Shutting down PPG sensor
-    cmd_array[2] = PPG_SHUTDOWN;
-    spiWritePPG(cmd_array, txLen);
-
+      
     // Reading interrupt status register 1
     cmd_array[0] = PPG_INT_STAT_1;
     cmd_array[1] = READMASTER;
@@ -150,6 +146,12 @@ void ppg_config()
     // Reading interrupt status register 2
     cmd_array[0] = PPG_INT_STAT_2;
     spiReadWritePPG(cmd_array, txLen, read_array, rxLen);
+      
+    // Shutting down PPG sensor
+    cmd_array[2] = PPG_SHUTDOWN;
+    spiWritePPG(cmd_array, txLen);
+
+
 
 
     // PPG configuration register - ALC enabled +

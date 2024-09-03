@@ -174,14 +174,14 @@ void ppg_config()
     cmd_array[2] = PPG_LED_SETLNG_12us;
     spiWritePPG(cmd_array, txLen);
 
-    // Photo-diode Bias 0 to 65pF
+    // Photo-diode Bias 65 pF to 130pF
     cmd_array[0] = PPG_PHOTODIODE_BIAS;
     cmd_array[2] = (uint8_t)(PPG_PDBIAS_130pF << 4) | (uint8_t)PPG_PDBIAS_130pF ;
     spiWritePPG(cmd_array, txLen);
 
     // Configuring LED drive 3 (Green) range 124 mA
     //            LED drive 2 (Green) range 124 mA
-    //            LED drive 1 (IR) range 31 mA
+    //            LED drive 1 (IR) range 124 mA
 
     cmd_array[0] = PPG_LED_RANGE_1;
     cmd_array[2] = (uint8_t)(PPG_LED_CURRENT_124mA << 4) | (uint8_t)(PPG_LED_CURRENT_124mA << 2) | PPG_LED_CURRENT_124mA ;
@@ -230,7 +230,7 @@ void ppg_config()
     cmd_array[2] = PPG_LEDC2_LED2_LED3_SIMULT | PPG_LEDC1_LED1;
     spiWritePPG(cmd_array, txLen);
 
-    // System control Dual PPG + Low power mode enabled
+    // System control Dual PPG + Low power mode enabled + shutdown disabled
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[2] = PPG_LP_MODE;
     spiWritePPG(cmd_array, txLen);

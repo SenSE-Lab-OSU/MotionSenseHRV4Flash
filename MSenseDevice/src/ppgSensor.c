@@ -18,7 +18,7 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -29,7 +29,7 @@ struct ppg_configData ppgConfig = {
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .sampling_time = 0x28,
     .numCounts = 8,
     .txPacketEnable = false,
@@ -37,7 +37,7 @@ struct ppg_configData ppg_saved_config = {
 
 const struct ppg_configData ppg_default_config = {
     .isEnabled = true,
-    .sample_avg = 0x04,
+    .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,

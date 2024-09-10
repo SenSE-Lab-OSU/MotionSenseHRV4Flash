@@ -468,7 +468,7 @@ void main(void)
   // Setup our Flash Filesystem
   setup_disk();
 
-  //usb_enable(usb_status_cb);
+  usb_enable(usb_status_cb);
   k_sleep(K_SECONDS(2));
 
   

@@ -1,9 +1,7 @@
 #ifndef IMUSENSOR_H_
 #define IMUSENSOR_H_
 #include <zephyr/kernel.h>
-#include <zephyr/drivers/spi.h>
-#include "arm_const_structs.h"
-#include "arm_math.h"
+
 
 
 #define READMASTER 0x80

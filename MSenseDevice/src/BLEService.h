@@ -1,10 +1,6 @@
 #ifndef BLESERVICE_H_
 #define BLESERVICE_H_
 #include <zephyr/types.h>
-#include <stddef.h>
-#include <string.h>
-#include <errno.h>
-#include <soc.h>
 #include "common.h"
 
 

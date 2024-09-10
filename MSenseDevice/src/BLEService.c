@@ -6,7 +6,6 @@
 #include <zephyr/logging/log.h>
 //#include <sys/byteorder.h>
 #include <zephyr/kernel.h>
-#include <soc.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
 #include <zephyr/drivers/flash.h>
@@ -18,7 +17,6 @@
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
-#include <zephyr/bluetooth/addr.h>
 #include <zephyr/bluetooth/gatt.h>
 #include "zephyr/bluetooth/services/bas.h"
 #include <nrfx_timer.h>

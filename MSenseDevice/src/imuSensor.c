@@ -5,7 +5,9 @@
 #include "zephyrfilesystem.h"
 #include "BLEService.h"
 #include "ppgSensor.h"
+#include <zephyr/drivers/spi.h>
 #include <zephyr/logging/log.h>
+#include "arm_const_structs.h"
 #include <stdio.h>
 
 
@@ -500,7 +502,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     float32_t enmo;
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
-    if(enmo<0) enmo=0;
+    if(enmo < 0 ) enmo=0;
     // when we send the enmo, we send as an average of 25
     enmo_store[counterAcc] = enmo;
     counterAcc++;
@@ -709,9 +711,15 @@ void motion_data_timeout_handler(struct k_work *item){
     blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
     
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
-    int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
-    memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
-    int16_t accel_and_gyrotest2[6] = {1, 2, 3, 4, 5, 6};
+    //int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
+    //memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+
+
+    uint64_t current_time = get_current_unix_time();
+    int16_t accel_and_gyro[12] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ};
+    memcpy(&accel_and_gyro[6], &current_time, sizeof(current_time));
+    memcpy(&accel_and_gyro[10], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
 

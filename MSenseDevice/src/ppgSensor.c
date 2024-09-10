@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/logging/log.h>
+#include "arm_const_structs.h"
 #include <zephyr/fs/fs.h>
 
 LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);

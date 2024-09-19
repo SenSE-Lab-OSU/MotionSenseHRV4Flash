@@ -509,6 +509,7 @@ void start_stop_device_collection(uint8_t val){
   else{
     timer_deinit();
     close_all_files();
+    enmo_sample_counter = 0;
     #ifndef CONFIG_USB_ALWAYS_ON
     usb_enable(NULL);	
     #endif

@@ -537,8 +537,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
 
 }
 
-
-float second_enmo_arr[60];
+#define enmo_samples_size 420
+float second_enmo_arr[enmo_samples_size];
 int enmo_sample_counter = 0;
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9] = {0};
@@ -548,18 +548,18 @@ void enmo_threshold_evaluation(float enmo_number){
   
   second_enmo_arr[enmo_sample_counter] = currentAccData.ENMO;
   enmo_sample_counter++;
-  if (enmo_sample_counter >= 60){
+  if (enmo_sample_counter >= enmo_samples_size){
     // Perform the threshold evaluation
     enmo_sample_counter = 0;
     float total_enmo = 0;
-    for (int sample = 0; sample < 60; sample++){
+    for (int sample = 0; sample < enmo_samples_size; sample++){
       total_enmo  += second_enmo_arr[sample];
     }
-    total_enmo = total_enmo / 60;
+    //total_enmo = total_enmo / 60;
     total_enmo = total_enmo * 1000;
     LOG_ERR("total enmo: %f", total_enmo);
     
-    if (total_enmo > 95 || total_enmo > 421){
+    if (total_enmo > 29576 || total_enmo > 29576){
       
       if (total_enmo > 421){
         enmo_threshold_packet[0] = 2;

@@ -522,6 +522,8 @@ void start_stop_device_collection(uint8_t val){
 
 bool check_valid_date_and_id(){
     
+
+    
 }
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 

@@ -483,11 +483,18 @@ magneto_sample_config_t magneto_smpl_config){
   }
 }
 
+// our global variables needed for enmo calculation
+#define enmo_samples_size 420
+float second_enmo_arr[enmo_samples_size];
+int enmo_sample_counter = 0;
+// need to implement a read for this
+uint8_t enmo_threshold_packet[9] = {0};
 
+float fifteen_second_enmo = 0;
 uint8_t enmo_packet[6];
 /**@brief Function for calculating and sending the enmo when necessary.
  *
- * 
+ * This function will return any enmo sent.
  *
  */
 void calculate_enmo(float accelX, float accelY, float accelZ){
@@ -523,31 +530,43 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       testcounter++;
       //accData1.ENMO = testcounter;
 
+
+
       enmo_threshold_evaluation(enmo);
       // Submit our data to the bluetooth work thread.
+
+      int enmo_modulo = enmo_sample_counter % 15; 
+
+      if (enmo_modulo == 0 && enmo_sample_counter >= 15){
       
-      memcpy(enmo_packet, &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+      // compute the 15 second summary
+      fifteen_second_enmo = 0;
+      for (int x = enmo_sample_counter - 15; x < enmo_sample_counter; x++){
+        fifteen_second_enmo += second_enmo_arr[x];
+      }
+      fifteen_second_enmo /= 15;
+
+      memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
       memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = 6;
       LOG_WRN("ENMO %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
+      }
     }
 
 
 }
 
-#define enmo_samples_size 420
-float second_enmo_arr[enmo_samples_size];
-int enmo_sample_counter = 0;
-// need to implement a read for this
-uint8_t enmo_threshold_packet[9] = {0};
+
 void enmo_threshold_evaluation(float enmo_number){
   
   
   
   second_enmo_arr[enmo_sample_counter] = currentAccData.ENMO;
   enmo_sample_counter++;
+
+
   if (enmo_sample_counter >= enmo_samples_size){
     // Perform the threshold evaluation
     enmo_sample_counter = 0;

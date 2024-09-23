@@ -60,6 +60,15 @@ Timers apparently don't work very well (crash?) when setting frequency with enum
 The following KConfigs were added to provide USB and Filesystem Support:
 
 
+Zephyr does not allow for alternative USB sizes. Hence, you will need to insert these lines in msc.c in zephyr/subsys/usb/class/msc.c 
+
+#ifdef CONFIG_FS_FATFS_MAX_SS
+#define BLOCK_SIZE	CONFIG_FS_FATFS_MAX_SS
+#else
+#define BLOCK_SIZE 512
+#endif
+
+
 Device Tree:
 
 pins are now specified with the pin cntrl api

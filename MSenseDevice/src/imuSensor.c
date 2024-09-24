@@ -491,6 +491,7 @@ int enmo_sample_counter = 0;
 uint8_t enmo_threshold_packet[9] = {0};
 
 float fifteen_second_enmo = 0;
+int enmo_update_rate = 2;
 uint8_t enmo_packet[6];
 /**@brief Function for calculating and sending the enmo when necessary.
  *
@@ -535,16 +536,16 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       enmo_threshold_evaluation(enmo);
       // Submit our data to the bluetooth work thread.
 
-      int enmo_modulo = enmo_sample_counter % 15; 
+      int enmo_modulo = enmo_sample_counter % enmo_update_rate; 
 
-      if (enmo_modulo == 0 && enmo_sample_counter >= 15){
+      if (enmo_modulo == 0 && enmo_sample_counter >= enmo_update_rate){
       
       // compute the 15 second summary
       fifteen_second_enmo = 0;
-      for (int x = enmo_sample_counter - 15; x < enmo_sample_counter; x++){
+      for (int x = enmo_sample_counter - enmo_update_rate; x < enmo_sample_counter; x++){
         fifteen_second_enmo += second_enmo_arr[x];
       }
-      fifteen_second_enmo /= 15;
+      fifteen_second_enmo /= enmo_update_rate;
 
       memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
       //memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));

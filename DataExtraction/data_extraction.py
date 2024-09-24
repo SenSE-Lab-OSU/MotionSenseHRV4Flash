@@ -127,7 +127,7 @@ if __name__ == '__main__':
     path = "G:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "Device Timestamp", "ENMO"]
     acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<Q", "<f"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
     accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)

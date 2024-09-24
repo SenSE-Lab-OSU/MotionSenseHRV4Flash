@@ -32,7 +32,8 @@ def calculate_file_end(file):
 struct_key = {"f":4,
               "h":2,
               "I": 4,
-              "H":2
+              "H":2,
+              "Q": 8
               }
 
 def process_data(data, categories: list[list], format: list, use_check=False) -> int:
@@ -127,7 +128,7 @@ if __name__ == '__main__':
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
 
     acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
-    acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<f"]
+    acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<Q", "<f"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
     accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
     accel_data_set.to_csv("acceleration.csv")

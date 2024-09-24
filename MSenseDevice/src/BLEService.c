@@ -988,7 +988,7 @@ void motion_notify(struct k_work *item){
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
   
-  
+  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
 

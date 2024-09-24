@@ -547,7 +547,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       fifteen_second_enmo /= 15;
 
       memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
-      memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
+      //memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = 6;
       LOG_WRN("ENMO %f", currentAccData.ENMO);
@@ -735,9 +735,10 @@ void motion_data_timeout_handler(struct k_work *item){
 
 
     uint64_t current_time = get_current_unix_time();
-    int16_t accel_and_gyro[12] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ};
-    memcpy(&accel_and_gyro[6], &current_time, sizeof(current_time));
-    memcpy(&accel_and_gyro[10], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+    uint64_t ticks = k_uptime_get();
+    int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
+    memcpy(&accel_and_gyro[7], &ticks, sizeof(current_time));
+    memcpy(&accel_and_gyro[11], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 

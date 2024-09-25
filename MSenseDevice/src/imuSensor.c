@@ -570,17 +570,19 @@ void enmo_threshold_evaluation(float enmo_number){
   if (enmo_sample_counter >= enmo_samples_size){
     // Perform the threshold evaluation
     enmo_sample_counter = 0;
-    float total_enmo = 0;
+    int total_enmo = 0;
     for (int sample = 0; sample < enmo_samples_size; sample++){
-      total_enmo  += second_enmo_arr[sample];
+      if ((second_enmo_arr[sample]*1000) > 100.6f){
+        total_enmo++;
+      } 
     }
+
     //total_enmo = total_enmo / 60;
-    total_enmo = total_enmo * 1000;
-    LOG_ERR("total enmo: %f", total_enmo);
+    LOG_ERR("total enmo: %i", total_enmo);
     
-    if (total_enmo > 29576 || total_enmo > 29576){
+    if (total_enmo > 294){
       
-      if (total_enmo > 421){
+      if (total_enmo > 294){
         enmo_threshold_packet[0] = 2;
       }
       else {

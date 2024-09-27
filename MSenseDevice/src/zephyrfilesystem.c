@@ -560,9 +560,9 @@ uint64_t get_current_unix_time(){
 	
 	uint64_t current_upime = k_uptime_get();
 	current_upime /= 1000;
-	LOG_INF("current uptime in seconds: %llu", current_upime);
+	LOG_DBG("current uptime in seconds: %llu", current_upime);
 	uint64_t current_time = (current_upime - last_time_update_sent) + set_date_time;
-	LOG_INF("current timestamp: %llu", current_time);
+	LOG_DBG("current timestamp: %llu", current_time);
 	return current_time;
 }
 

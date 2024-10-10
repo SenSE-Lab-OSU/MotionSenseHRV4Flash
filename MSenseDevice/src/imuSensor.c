@@ -79,7 +79,7 @@ static void gyroscope_measurement(float * quaternionResult){
   const float deg_rad = (float)(2.0/360.0)*pi;
   float angularVelX,angularVelY,angularVelZ;
   float thetaRate;
-  const float deltaT = 1.0/250.0;
+  const float deltaT = 1.0/200.0;
   float quaternions[4];
   float temp,temp1;
   float stdGyro;

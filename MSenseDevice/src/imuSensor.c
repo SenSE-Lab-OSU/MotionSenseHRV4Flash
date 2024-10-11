@@ -266,7 +266,8 @@ static void prepare_gyros(float* quaternionResult){
   }
   /* Using Polynomial approximation for acos(x) = 
   (c0 +c1*x + c2*x^2 + ... + c21*x^21)/(d0 +d1*x + d2*x^2 + ... + d21*x^21) */
-		
+  /* Reverting back to Taylor's series expansion */
+	
   float temp,q3New = 1,acosValue=coeffs1[0],temp2,theta_rate,qq;
   float angularX,angularY,angularZ;
   float acosValueNum=1.0,acosValueDenom=1.0;
@@ -278,13 +279,14 @@ static void prepare_gyros(float* quaternionResult){
   arm_sqrt_f32(1-qq, &temp );
   
   for(uint8_t i=1;i<21;i++){
-    //acosValue1=acosValue1+coeffs1[i]*q3New;
-    acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;
-    acosValueDenom = acosValueDenom + coeffsDenom[20-i]*q3New;
-    q3New = q3New*qq;
+    q3New = q3New*qq;	  
+    acosValue1=acosValue1+coeffs1[i]*q3New;
+    //acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;
+    //acosValueDenom = acosValueDenom + coeffsDenom[20-i]*q3New;
+    
   }
-  acosValue = (float) temp*acosValueNum/acosValueDenom*factorMul;
-  //acosValue = (float32_t) temp*acosValue;
+  //acosValue = (float) temp*acosValueNum/acosValueDenom*factorMul;
+  acosValue = (float32_t) temp*acosValue;
   theta_rate = (float)2.0f*acosValue/delta_T;
   temp2 = arm_sin_f32(theta_rate*delta_T/2.0f);
   

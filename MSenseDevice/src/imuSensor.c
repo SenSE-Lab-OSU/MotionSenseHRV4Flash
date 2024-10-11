@@ -772,9 +772,10 @@ void motion_data_timeout_handler(struct k_work *item){
     }
     #endif
   }
-  else
+  else {
     gyroscope_measurement(quaternionResult_1);
-  
+    the_device->gyro_first_read = (the_device->gyro_first_read+1) % gyroConfig.tot_samples
+  }
 
   //stop_timer();
 }

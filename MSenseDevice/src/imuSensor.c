@@ -285,8 +285,8 @@ static void prepare_gyros(float* quaternionResult){
     //acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;
     //acosValueDenom = acosValueDenom + coeffsDenom[20-i]*q3New;
   }
-  acosValue = (float) temp*acosValue;
-  //acosValue = (float32_t) temp*acosValue;
+  //acosValue = (float) temp*acosValueNum/acosValueDenom*factorMul;
+  acosValue = (float32_t) temp*acosValue;
   theta_rate = (float)2.0f*acosValue/delta_T;
   temp2 = arm_sin_f32(theta_rate*delta_T/2.0f);
   

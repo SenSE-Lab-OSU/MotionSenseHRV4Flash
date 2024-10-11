@@ -279,7 +279,7 @@ static void prepare_gyros(float* quaternionResult){
     quaternionResult[2]*quaternionResult[2], &qq );
   arm_sqrt_f32(1-qq, &temp );
   
-  for(uint8_t i=1;i<21;i++){
+  for(uint8_t i=1;i<8;i++){
     q3New = q3New*qq;
     acosValue=acosValue+coeffs1[i]*q3New;
     //acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;

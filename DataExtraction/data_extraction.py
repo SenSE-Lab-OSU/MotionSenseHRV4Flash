@@ -83,16 +83,20 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
 
 
 
-def file_sort(element1):
-    return int(re.sub("\D", "", element1))
+def file_sort(element1:str):
+    numeric_index = element1.find(it_prefix)
+    numeric_time = element1[numeric_index+len(it_prefix):len(element1)]
+    return int(re.sub("\D", "", numeric_time))
 
 
 
 def gather_files_by_prefix(prefix:str, path):
+    global it_prefix
+    it_prefix = prefix
     all_files = []
     files = os.listdir(path)
     for file in files:
-        if file[0:len(prefix)] == prefix:
+        if prefix in file:
             all_files.append(file)
     all_files.sort(key=file_sort)
     return all_files
@@ -123,12 +127,12 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    #files = os.listdir()
+    #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
     path = "G:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "Device Timestamp", "ENMO"]
-    acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<Q", "<f"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
+    acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
     accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
     accel_data_set.to_csv("acceleration.csv")

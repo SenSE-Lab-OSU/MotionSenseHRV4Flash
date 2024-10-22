@@ -324,17 +324,24 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
+        int work_queue_result;
         global_counter++;
         // submit work to read gyro, acc, magnetometer and orientation
         my_motionSensor.magneto_first_read = magneto_first_read;
         my_motionSensor.pktCounter = global_counter;
         my_motionSensor.gyro_first_read = gyro_first_read;
-        k_work_submit(&my_motionSensor.work);
+        work_queue_result = k_work_submit(&my_motionSensor.work);
+        if (work_queue_result != 1){
+          LOG_ERR("accel work queue was not submitted: %i", work_queue_result);
+        }
         if(ppgRead == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
-          k_work_submit(&my_ppgSensor.work);
+          work_queue_result = k_work_submit(&my_ppgSensor.work);
+          if (work_queue_result != 1){
+            LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
+          }
         }  
         // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;

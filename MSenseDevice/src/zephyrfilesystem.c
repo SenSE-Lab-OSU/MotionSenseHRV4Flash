@@ -577,7 +577,7 @@ void start_timer(){
 int64_t stop_timer(){
 	int64_t length = k_uptime_get() - start_time;
 	start_time = 0;
-	LOG_INF("Timer Value: %lli ms", length);
+	//LOG_WRN("Timer Value: %lli ms", length);
 	return length;
 }
 

@@ -226,7 +226,7 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t l
 static struct bt_conn_cb conn_callbacks = {
     .connected = connected,
     .disconnected = disconnected,
-    .le_param_req = le_param_req,
+    //.le_param_req = le_param_req,
     .le_param_updated = le_param_updated};
 
 static void bt_ready(int err)
@@ -431,7 +431,7 @@ static void i2c_init(void)
 // Timer handler that periodically executes commands with a period,
 // which is defined by the macro-variable TIMER_MS
 
-#define WORKQUEUE_PRIORITY -1
+#define WORKQUEUE_PRIORITY 8
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 

@@ -328,6 +328,7 @@ static void prepare_gyros(float* quaternionResult){
   // Storing only the first three components of the Quaternion. 
   // The fourth component can be computed because the norm of the 
   // quaternion vector is 1.	
+  /*
   temp1.float_val =  quaternionResult[0]; // angularX; changed to quaternionComponent 0 
   blePktMotion[6] = temp1.floatcast[0];
   blePktMotion[7] = temp1.floatcast[1];
@@ -344,7 +345,7 @@ static void prepare_gyros(float* quaternionResult){
   blePktMotion[14] = temp1.floatcast[0];
   blePktMotion[15] = temp1.floatcast[1];
   blePktMotion[16] = temp1.floatcast[2];
-  blePktMotion[17] = temp1.floatcast[3];
+  blePktMotion[17] = temp1.floatcast[3];*/
 
   current_gyro_data.quaternion_1_val = quaternionResult[0];
   current_gyro_data.quaternion_2_val = quaternionResult[1];
@@ -746,16 +747,19 @@ void motion_data_timeout_handler(struct k_work *item){
     //int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
     //memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
-    int16_t accel_and_gyro[12] = {dataReadAccX, dataReadAccY, dataReadAccZ, global_counter}
+    int16_t accel_and_gyro[16] = {dataReadAccX, dataReadAccY, dataReadAccZ, global_counter};
     memcpy(&accel_and_gyro[4], temp1[0].floatcast, sizeof(temp1[0].floatcast));
     memcpy(&accel_and_gyro[6], temp1[1].floatcast, sizeof(temp1[1].floatcast));
     memcpy(&accel_and_gyro[8], temp1[2].floatcast, sizeof(temp1[2].floatcast));
 		  
-    //uint64_t current_time = get_current_unix_time();
-    //uint64_t ticks = k_uptime_get();
+    uint64_t current_time = get_current_unix_time();
+    uint64_t ticks = k_uptime_get();
     //int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
-    memcpy(&accel_and_gyro[7], &ticks, sizeof(current_time));
-    memcpy(&accel_and_gyro[11], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+    
+    memcpy(&accel_and_gyro[10], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+
+    memcpy(&accel_and_gyro[12], &ticks, sizeof(current_time));
+
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
@@ -790,8 +794,12 @@ void motion_data_timeout_handler(struct k_work *item){
     gyroscope_measurement(quaternionResult_1);
     
   }
-
-  //stop_timer();
+  /*
+  int64_t timer_value = stop_timer();
+  if (rand() % 100 == 5){
+    LOG_WRN("Timer Value: %lli ms", timer_value);
+  }
+  */
 }
 
 

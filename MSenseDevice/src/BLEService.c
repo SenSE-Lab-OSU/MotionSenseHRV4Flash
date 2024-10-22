@@ -69,6 +69,8 @@ static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_att
 uint16_t offset, uint8_t flags);
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
+static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
 
 
 
@@ -131,6 +133,7 @@ struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTE
 struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_reset = BT_UUID_INIT_128(WRITE_RESET_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_name = BT_UUID_INIT_128(WRITE_DEVICE_NAME_CHARACTERISTIC_UUID);
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
@@ -208,6 +211,7 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_name, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
@@ -605,6 +609,8 @@ uint16_t offset, uint8_t flags){
 //function from main
 void storage_clear_led();
 
+
+
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
@@ -613,7 +619,7 @@ uint16_t offset, uint8_t flags){
 	
 	LOG_INF("Write length: %i", len);
   if (len != 1){
-    LOG_WRN("invalid packet length for date: %i", len);
+    LOG_WRN("invalid packet length for reset: %i", len);
   }
   
   if (offset != 0) {
@@ -637,6 +643,35 @@ uint16_t offset, uint8_t flags){
     }
     return NRFX_SUCCESS;  
   }
+  
+  return -1;
+}
+
+
+static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  int status;
+  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+		(void *)conn, len);
+
+	
+	LOG_INF("Write length: %i", len);
+  
+  
+  if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+  }
+
+  const char* val = ((const char*)buff);
+  LOG_INF("entered new name: %s", val);
+  status = bt_set_name(val);
+  if (status == 0){
+    LOG_INF("Sucessfully changed device name!");
+  }
+  //NVIC_SystemReset();
+  return 0;
+  //NVIC_SystemReset();
   
   return -1;
 }

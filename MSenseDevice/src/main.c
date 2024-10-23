@@ -239,7 +239,9 @@ static void bt_ready(int err)
   else
     printk("BLE init success\n");
 
-  //settings_load();
+  #if CONFIG_BT_SETTINGS
+    settings_load();
+  #endif
 
   //settings_runtime_load();
 

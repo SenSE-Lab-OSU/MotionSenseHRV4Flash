@@ -639,7 +639,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_samples[1] = led1B[0];
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
-  ppg_samples[4] = ppg_packet_counter;
+  ppg_samples[4] = global_counter;
   store_data(ppg_samples, sizeof(ppg_samples), 0);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES

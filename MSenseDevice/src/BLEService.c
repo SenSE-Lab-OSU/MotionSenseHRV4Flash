@@ -664,12 +664,37 @@ uint16_t offset, uint8_t flags){
   }
 
   const char* val = ((const char*)buff);
-  LOG_INF("entered new name: %s", val);
-  status = bt_set_name(val);
+  char new_name[30];
+  memcpy(new_name, val, len);
+  new_name[len] = '\0';
+  LOG_INF("entered new name: %s", new_name);
+  bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+  bt_le_adv_stop();
+  status = bt_set_name(new_name);
   if (status == 0){
     LOG_INF("Sucessfully changed device name!");
   }
-  //NVIC_SystemReset();
+  
+
+  const struct bt_le_adv_param v = {
+      .id = BT_ID_DEFAULT,
+      .sid = 0,
+      .secondary_max_skip = 0,
+      .options = BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_IDENTITY,
+      .interval_min = BT_GAP_ADV_FAST_INT_MIN_2,
+      .interval_max = BT_GAP_ADV_FAST_INT_MAX_2,
+      .peer = NULL};
+
+  /*err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+  if (err)
+    printk("Advertising failed to start (err %d)\n", err);
+  else
+  {
+    printk("Advertising successfully started\n");
+  }
+  */
+  k_sleep(K_SECONDS(2));
+  NVIC_SystemReset();
   return 0;
   //NVIC_SystemReset();
   

@@ -32,6 +32,7 @@ def calculate_file_end(file):
 struct_key = {"f":4,
               "h":2,
               "I": 4,
+              "i": 4,
               "H":2,
               "Q": 8
               }
@@ -130,15 +131,27 @@ if __name__ == '__main__':
     #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
     path = "G:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
+    ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
     acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
     acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
-    accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
-    accel_data_set.to_csv("acceleration.csv")
+    try:
+        accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
+        accel_data_set.to_csv("acceleration.csv")
+        graph_generation.pd_graph_generation("ac", accel_data_set)
+    except Exception as e:
+        print(e)
+    try:
+        ppg_data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels, ppg_formats)
+        ppg_data_set.to_csv("ppg.csv")
+        graph_generation.pd_graph_generation("ppg", ppg_data_set)
+    except Exception as e:
+        print(e)
 
+    
+    
 
-
-    graph_generation.pd_graph_generation("ppg", accel_data_set)
+    
     # then save it as a csv
 

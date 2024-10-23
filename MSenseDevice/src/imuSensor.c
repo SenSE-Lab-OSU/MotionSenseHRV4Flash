@@ -533,6 +533,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 25;
       currentAccData.ENMO = enmo;
+      LOG_WRN("Enmo: %f", enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
       
@@ -554,13 +555,13 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       for (int x = enmo_sample_counter - enmo_update_rate; x < enmo_sample_counter; x++){
         fifteen_second_enmo += second_enmo_arr[x];
       }
-      fifteen_second_enmo /= enmo_update_rate;
+      fifteen_second_enmo /= enmo_sample_counter;
 
       memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
-      //memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
+      memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = 6;
-      LOG_WRN("ENMO %f", currentAccData.ENMO);
+      LOG_WRN("ENMO ble update: %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
     }
@@ -580,17 +581,19 @@ void enmo_threshold_evaluation(float enmo_number){
   if (enmo_sample_counter >= enmo_samples_size){
     // Perform the threshold evaluation
     enmo_sample_counter = 0;
-    float total_enmo = 0;
+    int total_enmo = 0;
     for (int sample = 0; sample < enmo_samples_size; sample++){
-      total_enmo  += second_enmo_arr[sample];
+      if ((second_enmo_arr[sample]*1000) > 100.6f){
+        total_enmo++;
+      } 
     }
+
     //total_enmo = total_enmo / 60;
-    total_enmo = total_enmo * 1000;
-    LOG_ERR("total enmo: %f", total_enmo);
+    LOG_ERR("total enmo: %i", total_enmo);
     
-    if (total_enmo > 29576 || total_enmo > 29576){
+    if (total_enmo > 294){
       
-      if (total_enmo > 421){
+      if (total_enmo > 294){
         enmo_threshold_packet[0] = 2;
       }
       else {

@@ -1,6 +1,8 @@
 import os
+import sys
 import struct
 import re
+import datetime
 import pandas as pd
 
 import graph_generation
@@ -128,6 +130,10 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
+    if len(sys.argv) >= 2:
+        file_prefix = sys.argv[1]
+    else:
+        file_prefix = ""
     #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
     path = "G:/"
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
@@ -137,14 +143,18 @@ if __name__ == '__main__':
     acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
     try:
+        accel_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
+        accel_file_name += "acceleration.csv"
         accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
-        accel_data_set.to_csv("acceleration.csv")
+        accel_data_set.to_csv(accel_file_name)
         graph_generation.pd_graph_generation("ac", accel_data_set)
     except Exception as e:
         print(e)
     try:
+        ppg_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
+        ppg_file_name += "ppg.csv"
         ppg_data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels, ppg_formats)
-        ppg_data_set.to_csv("ppg.csv")
+        ppg_data_set.to_csv(ppg_file_name)
         graph_generation.pd_graph_generation("ppg", ppg_data_set)
     except Exception as e:
         print(e)

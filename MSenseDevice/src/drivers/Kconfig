@@ -23,3 +23,8 @@ menuconfig RAW_NAND_ALLOW_ERASE_PAGE_REWRITE
     bool
     prompt "Allows a page write to an already written page to be rewritten by eraseing at the block level, followed by restoration of all existing pages."
     default n
+
+menuconfig SPI_NOR_CUSTOM_DRIVER
+    bool
+    prompt "Custom spi NOR driver, modified from spi_nor.c to be more generic and customizable."
+    default n

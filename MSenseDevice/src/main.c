@@ -226,7 +226,7 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t l
 static struct bt_conn_cb conn_callbacks = {
     .connected = connected,
     .disconnected = disconnected,
-    .le_param_req = le_param_req,
+    //.le_param_req = le_param_req,
     .le_param_updated = le_param_updated};
 
 static void bt_ready(int err)
@@ -239,7 +239,9 @@ static void bt_ready(int err)
   else
     printk("BLE init success\n");
 
-  //settings_load();
+  #if CONFIG_BT_SETTINGS
+    settings_load();
+  #endif
 
   //settings_runtime_load();
 
@@ -255,11 +257,18 @@ static void bt_ready(int err)
       .id = BT_ID_DEFAULT,
       .sid = 0,
       .secondary_max_skip = 0,
-      .options = BT_LE_ADV_OPT_CONNECTABLE,
+      .options = BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_IDENTITY,
       .interval_min = BT_GAP_ADV_FAST_INT_MIN_2,
       .interval_max = BT_GAP_ADV_FAST_INT_MAX_2,
       .peer = NULL};
 
+  // if this doesn't work we can use
+  /* 
+  static struct bt_le_adv_param *adv_param = BT_LE_ADV_PARAM((BT_LE_ADV_OPT_CONNECTABLE|BT_LE_ADV_OPT_USE_IDENTITY), 
+                800, //Min Advertising Interval 500ms (800*0.625ms) 
+                801, //Max Advertising Interval 500.625ms (801*0.625ms)
+                NULL); // Set to NULL for undirected advertising
+  */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
     printk("Advertising failed to start (err %d)\n", err);
@@ -275,12 +284,15 @@ static void bt_ready(int err)
 static void ble_init(void)
 {
   int err;
+  //bt_uuid_create()
+  
   err = bt_enable(bt_ready);
   if (err)
   {
     printk("BLE initialization failed\n");
   }
 
+  //err = bt_id_create(BT_ADDR_LE_ANY, NULL);
   if (!err)
     printk("Bluetooth initialized\n");
   else
@@ -421,7 +433,7 @@ static void i2c_init(void)
 // Timer handler that periodically executes commands with a period,
 // which is defined by the macro-variable TIMER_MS
 
-#define WORKQUEUE_PRIORITY -1
+#define WORKQUEUE_PRIORITY 8
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 

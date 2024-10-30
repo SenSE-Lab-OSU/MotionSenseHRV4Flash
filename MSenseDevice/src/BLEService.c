@@ -69,6 +69,8 @@ static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_att
 uint16_t offset, uint8_t flags);
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
+static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags);
 
 
 
@@ -131,6 +133,7 @@ struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTE
 struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_reset = BT_UUID_INIT_128(WRITE_RESET_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_name = BT_UUID_INIT_128(WRITE_DEVICE_NAME_CHARACTERISTIC_UUID);
 //#endif
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
@@ -208,6 +211,7 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_name, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
@@ -324,17 +328,24 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
+        int work_queue_result;
         global_counter++;
         // submit work to read gyro, acc, magnetometer and orientation
         my_motionSensor.magneto_first_read = magneto_first_read;
         my_motionSensor.pktCounter = global_counter;
         my_motionSensor.gyro_first_read = gyro_first_read;
-        k_work_submit(&my_motionSensor.work);
+        work_queue_result = k_work_submit(&my_motionSensor.work);
+        if (work_queue_result != 1){
+          LOG_ERR("accel work queue was not submitted: %i", work_queue_result);
+        }
         if(ppgRead == 0){
           my_ppgSensor.pktCounter = global_counter;
           my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
           my_ppgSensor.ppgTFPass = ppgTFPass;
-          k_work_submit(&my_ppgSensor.work);
+          work_queue_result = k_work_submit(&my_ppgSensor.work);
+          if (work_queue_result != 1){
+            LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
+          }
         }  
         // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
@@ -598,6 +609,8 @@ uint16_t offset, uint8_t flags){
 //function from main
 void storage_clear_led();
 
+
+
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
@@ -606,7 +619,7 @@ uint16_t offset, uint8_t flags){
 	
 	LOG_INF("Write length: %i", len);
   if (len != 1){
-    LOG_WRN("invalid packet length for date: %i", len);
+    LOG_WRN("invalid packet length for reset: %i", len);
   }
   
   if (offset != 0) {
@@ -630,6 +643,60 @@ uint16_t offset, uint8_t flags){
     }
     return NRFX_SUCCESS;  
   }
+  
+  return -1;
+}
+
+
+static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+uint16_t offset, uint8_t flags){
+  int status;
+  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+		(void *)conn, len);
+
+	
+	LOG_INF("Write length: %i", len);
+  
+  
+  if (offset != 0) {
+		LOG_INF("Write: Incorrect data offset");
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+  }
+
+  const char* val = ((const char*)buff);
+  char new_name[30];
+  memcpy(new_name, val, len);
+  new_name[len] = '\0';
+  LOG_INF("entered new name: %s", new_name);
+  bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+  bt_le_adv_stop();
+  status = bt_set_name(new_name);
+  if (status == 0){
+    LOG_INF("Sucessfully changed device name!");
+  }
+  
+
+  const struct bt_le_adv_param v = {
+      .id = BT_ID_DEFAULT,
+      .sid = 0,
+      .secondary_max_skip = 0,
+      .options = BT_LE_ADV_OPT_CONNECTABLE | BT_LE_ADV_OPT_USE_IDENTITY,
+      .interval_min = BT_GAP_ADV_FAST_INT_MIN_2,
+      .interval_max = BT_GAP_ADV_FAST_INT_MAX_2,
+      .peer = NULL};
+
+  /*err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+  if (err)
+    printk("Advertising failed to start (err %d)\n", err);
+  else
+  {
+    printk("Advertising successfully started\n");
+  }
+  */
+  k_sleep(K_SECONDS(2));
+  NVIC_SystemReset();
+  return 0;
+  //NVIC_SystemReset();
   
   return -1;
 }
@@ -988,7 +1055,7 @@ void motion_notify(struct k_work *item){
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
   
-  
+  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
 

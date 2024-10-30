@@ -12,7 +12,7 @@ def show_graph(title, data: list, labels: list, ppg_filter_passthrough=False):
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
 
-
+    
 
     for data_element in range(len(data)):
         row = len(data[data_element])

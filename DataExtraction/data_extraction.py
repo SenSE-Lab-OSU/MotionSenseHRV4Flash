@@ -1,9 +1,16 @@
 import os
+import sys
 import struct
 import re
-import pandas as pd
+import datetime
 
-import graph_generation
+try:
+    import pandas as pd
+    import graph_generation
+except ImportError:
+    print("unable to import pandas, please install this package if you would like to view files!")
+
+
 
 
 def process_data_test(data) -> int:
@@ -32,7 +39,9 @@ def calculate_file_end(file):
 struct_key = {"f":4,
               "h":2,
               "I": 4,
-              "H":2
+              "i": 4,
+              "H":2,
+              "Q": 8
               }
 
 def process_data(data, categories: list[list], format: list, use_check=False) -> int:
@@ -82,16 +91,20 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
 
 
 
-def file_sort(element1):
-    return int(re.sub("\D", "", element1))
+def file_sort(element1:str):
+    numeric_index = element1.find(it_prefix)
+    numeric_time = element1[numeric_index+len(it_prefix):len(element1)]
+    return int(re.sub("\D", "", numeric_time))
 
 
 
 def gather_files_by_prefix(prefix:str, path):
+    global it_prefix
+    it_prefix = prefix
     all_files = []
     files = os.listdir(path)
     for file in files:
-        if file[0:len(prefix)] == prefix:
+        if prefix in file:
             all_files.append(file)
     all_files.sort(key=file_sort)
     return all_files
@@ -122,18 +135,41 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    #files = os.listdir()
     path = "G:/"
+    if len(sys.argv) >= 2:
+        file_prefix = sys.argv[1]
+        if len(sys.argv) >= 3:
+            path = sys.argv[2]
+    else:
+        file_prefix = ""
+    #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
+
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
+    ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
-    acc_formats = ["<h", "<h", "<h", "<h", "<h", "<h", "<H", "<f"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
+    acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
-    accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
-    accel_data_set.to_csv("acceleration.csv")
+    try:
+        accel_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
+        accel_file_name += "acceleration.csv"
+        accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
+        accel_data_set.to_csv(accel_file_name)
+        #graph_generation.pd_graph_generation("ac", accel_data_set)
+    except Exception as e:
+        print(e)
+    try:
+        ppg_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
+        ppg_file_name += "ppg.csv"
+        ppg_data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels, ppg_formats)
+        ppg_data_set.to_csv(ppg_file_name)
+        #graph_generation.pd_graph_generation("ppg", ppg_data_set)
+    except Exception as e:
+        print(e)
 
+    
+    
 
-
-    graph_generation.pd_graph_generation("ppg", accel_data_set)
+    
     # then save it as a csv
 

@@ -214,6 +214,7 @@ static void gyroscope_measurement(float * quaternionResult){
 // Function that converts the accumulated quarternion 
 // back to angular velocity measurements.
 static void prepare_gyros(float* quaternionResult){
+  /* 
   float quantizerScale; 
   float pi =(float) 3.14159;
   float32_t rad_deg = 180.0f/pi; 
@@ -263,15 +264,17 @@ static void prepare_gyros(float* quaternionResult){
   else if(gyroConfig.sensitivity == 0x06 ){
     quantizerScale = 32767.0f/ 2000.0f;
     bounds1 = 2000.0f;
-  } */ 
-  /* Using Polynomial approximation for acos(x) = 
+
+  }
+  */
+/* Using Polynomial approximation for acos(x) = 
   (c0 +c1*x + c2*x^2 + ... + c21*x^21)/(d0 +d1*x + d2*x^2 + ... + d21*x^21) */
-  /* Reverting back to Taylor's series expansion */
-  float_cast temp1;	
- /*	
-  float temp,q3New = 1,acosValue=coeffs1[0],temp2,theta_rate,qq;
+/* Not using the polynomial expansion and reverting back to Taylor's series */
+/*	
+  float temp,q3New = 1.0,acosValue=coeffs1[0],temp2,theta_rate,qq;
+
   float angularX,angularY,angularZ;
-  float acosValueNum=1.0,acosValueDenom=1.0;
+  //float acosValueNum=1.0,acosValueDenom=1.0;
   float factorMul = 1.570796;
   
   arm_sqrt_f32(1-quaternionResult[0]*quaternionResult[0] - 
@@ -280,13 +283,14 @@ static void prepare_gyros(float* quaternionResult){
   arm_sqrt_f32(1-qq, &temp );
   
   for(uint8_t i=1;i<8;i++){
-    q3New = q3New*qq;	  
-    acosValue1=acosValue1+coeffs1[i]*q3New;
+    q3New = q3New*qq;
+    acosValue=acosValue+coeffs1[i]*q3New;
     //acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;
     //acosValueDenom = acosValueDenom + coeffsDenom[20-i]*q3New;
-    
-  }
+  }*/
   //acosValue = (float) temp*acosValueNum/acosValueDenom*factorMul;
+  /*
+
   acosValue = (float32_t) temp*acosValue;
   theta_rate = (float)2.0f*acosValue/delta_T;
   temp2 = arm_sin_f32(theta_rate*delta_T/2.0f);
@@ -316,17 +320,19 @@ static void prepare_gyros(float* quaternionResult){
     angularY = -bounds1;
   if(angularZ < -bounds1 )  
     angularZ = -bounds1;
- */ 	
- // commented out gyro calculations
- // current_gyro_data.gyrox_val = angularX;
- // current_gyro_data.gyroy_val = angularY;
- // current_gyro_data.gyroz_val = angularZ;
-	
+
+  current_gyro_data.gyrox_val = angularX;
+  current_gyro_data.gyroy_val = angularY;
+  current_gyro_data.gyroz_val = angularZ;
+	*/
   //printf("angX_final = %f,angy_final = %f,angz_final = %f\n",
    // angularX,angularY,angularZ);
+
   // Storing only the first three components of the Quaternion. 
   // The fourth component can be computed because the norm of the 
   // quaternion vector is 1.	
+  /*
+
   temp1.float_val =  quaternionResult[0]; // angularX; changed to quaternionComponent 0 
   blePktMotion[6] = temp1.floatcast[0];
   blePktMotion[7] = temp1.floatcast[1];
@@ -343,7 +349,7 @@ static void prepare_gyros(float* quaternionResult){
   blePktMotion[14] = temp1.floatcast[0];
   blePktMotion[15] = temp1.floatcast[1];
   blePktMotion[16] = temp1.floatcast[2];
-  blePktMotion[17] = temp1.floatcast[3];
+  blePktMotion[17] = temp1.floatcast[3];*/
 
   current_gyro_data.quaternion_1_val = quaternionResult[0];
   current_gyro_data.quaternion_2_val = quaternionResult[1];
@@ -498,6 +504,7 @@ int enmo_sample_counter = 0;
 uint8_t enmo_threshold_packet[9] = {0};
 
 float fifteen_second_enmo = 0;
+int enmo_update_rate = 2;
 uint8_t enmo_packet[6];
 /**@brief Function for calculating and sending the enmo when necessary.
  *
@@ -530,6 +537,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 25;
       currentAccData.ENMO = enmo;
+      LOG_WRN("Enmo: %f", enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
       
@@ -542,22 +550,22 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       enmo_threshold_evaluation(enmo);
       // Submit our data to the bluetooth work thread.
 
-      int enmo_modulo = enmo_sample_counter % 15; 
+      int enmo_modulo = enmo_sample_counter % enmo_update_rate; 
 
-      if (enmo_modulo == 0 && enmo_sample_counter >= 15){
+      if (enmo_modulo == 0 && enmo_sample_counter >= enmo_update_rate){
       
       // compute the 15 second summary
       fifteen_second_enmo = 0;
-      for (int x = enmo_sample_counter - 15; x < enmo_sample_counter; x++){
+      for (int x = enmo_sample_counter - enmo_update_rate; x < enmo_sample_counter; x++){
         fifteen_second_enmo += second_enmo_arr[x];
       }
-      fifteen_second_enmo /= 15;
+      fifteen_second_enmo /= enmo_sample_counter;
 
       memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
       memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = 6;
-      LOG_WRN("ENMO %f", currentAccData.ENMO);
+      LOG_WRN("ENMO ble update: %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
     }
@@ -619,7 +627,9 @@ void motion_data_timeout_handler(struct k_work *item){
   //start_timer();
   struct motionInfo* the_device=  ((struct motionInfo *)(((char *)(item)) 
     - offsetof(struct motionInfo, work)));
+
   float_cast temp1[4];
+
   uint16_t pktCounter = the_device->pktCounter;
   uint8_t magneto_first_readTemp = the_device->magneto_first_read;
   
@@ -648,7 +658,7 @@ void motion_data_timeout_handler(struct k_work *item){
     dividerAcc = 1.0/4096;
   else if(accelConfig.sensitivity == 6)
     dividerAcc = 1.0/2048;
-#
+
 // Point to register bank 0 for reading the data from sensors.
   spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);	
   
@@ -720,9 +730,12 @@ void motion_data_timeout_handler(struct k_work *item){
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
     calculate_enmo(accelX, accelY, accelZ);
+
+
     temp1[0].float_val = quaternionResult_1[0];
     temp1[1].float_val = quaternionResult_1[1];
     temp1[2].float_val = quaternionResult_1[2];
+	  
 
     for (uint8_t i=0; i<3; i++)
       quaternionResult_1[i] = 0.0;	  
@@ -731,27 +744,34 @@ void motion_data_timeout_handler(struct k_work *item){
     //collect gyroscope for values 6-12
     gyroscope_measurement(quaternionResult_1);
     //blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
-   // blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
-   // blePktMotion[8] = ((uint16_t)dataReadGyroY >> 8) & 0xFF;
-  //  blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
-   // blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
-  //  blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
+
+    //blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
+    //blePktMotion[8] = ((uint16_t)dataReadGyroY >> 8) & 0xFF;
+    //blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
+    //blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
+    //blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
+
     
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
     //int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
     //memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
 
-    //uint64_t current_time = get_current_unix_time();
-    //int16_t accel_and_gyro[12] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ};
-    // accx,accy,accz,counter,quaternion0,quaternion1,quaternion2,enmo
-    int16_t accel_and_gyro[12] = {dataReadAccX, dataReadAccY, dataReadAccZ, global_counter}
+    int16_t accel_and_gyro[16] = {dataReadAccX, dataReadAccY, dataReadAccZ, global_counter};
+
     memcpy(&accel_and_gyro[4], temp1[0].floatcast, sizeof(temp1[0].floatcast));
     memcpy(&accel_and_gyro[6], temp1[1].floatcast, sizeof(temp1[1].floatcast));
     memcpy(&accel_and_gyro[8], temp1[2].floatcast, sizeof(temp1[2].floatcast));
 		  
-    //memcpy(&accel_and_gyro[6], &current_time, sizeof(current_time));
+    uint64_t current_time = get_current_unix_time();
+    uint64_t ticks = k_uptime_get();
+    //int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
+    
+
     memcpy(&accel_and_gyro[10], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+
+    memcpy(&accel_and_gyro[12], &ticks, sizeof(current_time));
+
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
@@ -784,10 +804,16 @@ void motion_data_timeout_handler(struct k_work *item){
   }
   else {
     gyroscope_measurement(quaternionResult_1);
-   
-  }
 
-  //stop_timer();
+    
+  }
+  /*
+  int64_t timer_value = stop_timer();
+  if (rand() % 100 == 5){
+    LOG_WRN("Timer Value: %lli ms", timer_value);
+  }
+  */
+
 }
 
 

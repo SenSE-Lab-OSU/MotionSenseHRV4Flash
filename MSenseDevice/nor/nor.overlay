@@ -23,7 +23,7 @@
 	pinctrl-names = "default", "sleep";
 	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>,<&gpio0 4 GPIO_ACTIVE_LOW>;
 	mx66u: mx66u2g45g@0 {
-		compatible = "jedec,spi-nor";
+		compatible = "senselab,spinor";
 		//size = <4194304000>;
 		// size needs to be in bytes
 		//size = <1073725440>;

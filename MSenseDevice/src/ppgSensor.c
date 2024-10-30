@@ -540,6 +540,7 @@ uint32_t ppg_samples[5];
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
+  start_timer();
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
   uint16_t pktCounter = the_device->pktCounter;
@@ -638,7 +639,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_samples[1] = led1B[0];
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
-  ppg_samples[4] = ppg_packet_counter;
+  ppg_samples[4] = global_counter;
   store_data(ppg_samples, sizeof(ppg_samples), 0);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -664,6 +665,11 @@ void read_ppg_fifo_buffer(struct k_work *item)
 #endif
 
   ppg_led_update();
+
+  int64_t timer_value = stop_timer();
+  if (rand() % 100 == 5){
+    LOG_WRN("Timer Value: %lli ms", timer_value);
+  }
 }
 
 /* This function reads and fills bleSendArr with unfiltered ppg according

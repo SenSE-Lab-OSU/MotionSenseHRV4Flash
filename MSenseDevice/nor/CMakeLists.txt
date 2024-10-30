@@ -5,9 +5,6 @@
 # Ohio State SENSE LAB
 cmake_minimum_required(VERSION 3.20.0)
 
-# Hacky work around, do not use in the future
-#set(CMAKE_CURRENT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/..)
-
 list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/../src/drivers)
 
 

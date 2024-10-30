@@ -3,9 +3,14 @@ import sys
 import struct
 import re
 import datetime
-import pandas as pd
 
-import graph_generation
+try:
+    import pandas as pd
+    import graph_generation
+except ImportError:
+    print("unable to import pandas, please install this package if you would like to view files!")
+
+
 
 
 def process_data_test(data) -> int:
@@ -130,12 +135,15 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
+    path = "G:/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
+        if len(sys.argv) >= 3:
+            path = sys.argv[2]
     else:
         file_prefix = ""
     #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
-    path = "G:/"
+
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
     ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
@@ -147,7 +155,7 @@ if __name__ == '__main__':
         accel_file_name += "acceleration.csv"
         accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
         accel_data_set.to_csv(accel_file_name)
-        graph_generation.pd_graph_generation("ac", accel_data_set)
+        #graph_generation.pd_graph_generation("ac", accel_data_set)
     except Exception as e:
         print(e)
     try:
@@ -155,7 +163,7 @@ if __name__ == '__main__':
         ppg_file_name += "ppg.csv"
         ppg_data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels, ppg_formats)
         ppg_data_set.to_csv(ppg_file_name)
-        graph_generation.pd_graph_generation("ppg", ppg_data_set)
+        #graph_generation.pd_graph_generation("ppg", ppg_data_set)
     except Exception as e:
         print(e)
 

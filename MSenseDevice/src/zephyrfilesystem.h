@@ -34,6 +34,8 @@ int get_storage_percent_full();
 
 extern int storage_percent_full;
 
+int write_ble_uuid(const char* ble_string);
+
 //k work item
 void work_write(struct k_work* item);
 

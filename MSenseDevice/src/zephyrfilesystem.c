@@ -377,6 +377,31 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 }
 
+int write_ble_uuid(const char* uuid){
+
+	struct fs_mount_t* mp = &fs_mnt;
+	struct fs_file_t name_file;
+	fs_file_t_init(&name_file);
+	// theoretically zephyr docs say this allows us to test whether the file exists or not?
+	char uuid_name[20] = "";
+	strcat(uuid_name, mp->mnt_point);
+	strcat(uuid_name, "/");
+	strcat(uuid_name, "uuid.txt");
+	//int file_create = fs_open(&name_file, uuid_name, 0);
+	// the above function will return error -2 if file name is not present, so we can use it to check whether it gets included or not.
+	int file_create = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
+		if (file_create != 0){
+			LOG_WRN("Unable to create file");
+			return -1;
+		}
+		// we write in sizes of 4096*2, so we include that in the formula
+		//max_writes
+	FRESULT res = f_expand(name_file.filep, 4096*4, 1);
+	res = fs_write(&name_file, uuid, strlen(uuid));
+	fs_close(&name_file);
+	return res;
+}
+
 int close_all_files(){
 
 	int code = fs_close(&file);

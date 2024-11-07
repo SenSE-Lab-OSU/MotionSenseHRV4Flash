@@ -195,6 +195,17 @@ static int settings_runtime_load(void)
   return 0;
 }
 
+void write_uuid_file(){
+  bt_addr_le_t address = {0};
+  size_t count = 1;
+  char addr_str[BT_ADDR_LE_STR_LEN]; 
+  //bt_le_oob_get_local()
+  bt_id_get(&address, &count);
+  bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
+  printk("advertising with address: %s \n", addr_str);
+  write_ble_uuid(addr_str);
+}
+
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 {
   // If acceptable params, return true, otherwise return false.
@@ -278,6 +289,8 @@ static void bt_ready(int err)
   }
 
   k_sem_give(&ble_init_ok);
+
+  write_uuid_file();
 }
 
 // Initialize BLE
@@ -437,6 +450,10 @@ static void i2c_init(void)
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
+
+
+
+
 void battery_maintenance()
 {
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
@@ -458,11 +475,15 @@ void battery_maintenance()
     
 }
 
+
+
 void blink_led(gpio_pin_t pin){
   gpio_pin_set(gpio0_device, pin, 1);
   k_sleep(K_MSEC(200));
   gpio_pin_set(gpio0_device, pin, 0);
 }
+
+
 
 void storage_clear_led(){
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
@@ -557,6 +578,8 @@ void main(void)
   
   get_storage_percent_full();
   
+  
+
   int global_update = 0;
   int update_time = SLEEP_TIME_MS;
   enable_read_only(true);

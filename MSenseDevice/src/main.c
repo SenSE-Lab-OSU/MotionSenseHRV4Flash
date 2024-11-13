@@ -198,12 +198,19 @@ static int settings_runtime_load(void)
 void write_uuid_file(){
   bt_addr_le_t address = {0};
   size_t count = 1;
-  char addr_str[BT_ADDR_LE_STR_LEN]; 
+  char addr_str[80]; 
   //bt_le_oob_get_local()
   bt_id_get(&address, &count);
   bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
   printk("advertising with address: %s \n", addr_str);
-  write_ble_uuid(addr_str);
+  strcat(addr_str, "\n Name:");
+  strcat(addr_str, CONFIG_BT_DEVICE_NAME);
+  strcat(addr_str, "\n Version: ");
+  strcat(addr_str, CONFIG_BT_DIS_MODEL);
+  int result = write_ble_uuid(addr_str);
+  if (result > 0){
+    
+  }
 }
 
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
@@ -291,6 +298,9 @@ static void bt_ready(int err)
   k_sem_give(&ble_init_ok);
 
   write_uuid_file();
+  #ifndef CONFIG_DEBUG
+    usb_enable(usb_status_cb);
+  #endif
 }
 
 // Initialize BLE
@@ -500,8 +510,10 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-
-  usb_enable(usb_status_cb);
+  
+  #ifdef CONFIG_DEBUG
+    usb_enable(usb_status_cb);
+  #endif
   k_sleep(K_SECONDS(2));
 
   

@@ -383,6 +383,7 @@ printk("timer init\n");
           .interrupt_priority = TIMER_PRIORITY,
           .p_context = NULL,
   };  
+  
   uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
   nrfx_timer_config_t config = timer_cfg; 
   //nrfx_timer_config_t config5_2 = NRFX_TIMER_DEFAULT_CONFIG(1000000);
@@ -467,6 +468,7 @@ void reset_device(){
   LOG_INF("disabling bluetooth.. \n");
   
   bt_disable();
+  usb_disable();
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
   const struct qspi_cmd chip_erase = {

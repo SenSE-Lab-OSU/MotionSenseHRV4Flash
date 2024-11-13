@@ -109,6 +109,20 @@ def gather_files_by_prefix(prefix:str, path):
     all_files.sort(key=file_sort)
     return all_files
 
+def obtain_prefix_ids(path):
+
+    all_files = []
+    files = os.listdir(path)
+    for file in files:
+        if file[0].isdigit():
+            id = re.search(r'\d+', file)
+            if id is not None:
+                id = id.group()
+                if id not in all_files:
+                    all_files.append(id)
+
+    return all_files
+
 
 def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[str]):
     total_errors = 0
@@ -132,6 +146,16 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
     return dataset
 
 
+def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, labels, formats):
+    try:
+        file_name = file_prefix + str(search_key) + "at" + str(int(datetime.datetime.now().timestamp()))
+
+        file_name += type_prefix
+        data_set = collect_all_data_by_prefix(path, search_key, labels, formats)
+        data_set.to_csv(file_name)
+    except Exception as e:
+        print(e)
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
@@ -150,25 +174,17 @@ if __name__ == '__main__':
     acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
     acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
     #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
-    try:
-        accel_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
-        accel_file_name += "acceleration.csv"
-        accel_data_set = collect_all_data_by_prefix(path, "ac", acc_labels, acc_formats)
-        accel_data_set.to_csv(accel_file_name)
-        #graph_generation.pd_graph_generation("ac", accel_data_set)
-    except Exception as e:
-        print(e)
-    try:
-        ppg_file_name = file_prefix + str(int(datetime.datetime.now().timestamp()))
-        ppg_file_name += "ppg.csv"
-        ppg_data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels, ppg_formats)
-        ppg_data_set.to_csv(ppg_file_name)
-        #graph_generation.pd_graph_generation("ppg", ppg_data_set)
-    except Exception as e:
-        print(e)
+    ids = obtain_prefix_ids(path)
+    if len(ids) == 0:
+        ids.append("")
 
-    
-    
+    for id in ids:
+        search_prefix = id + "ac"
+        file_name = search_prefix + ".csv"
+        generate_csv_for_pattern(file_prefix, file_name, search_prefix, acc_labels, acc_formats)
+        search_prefix = id + "ppg"
+        file_name = search_prefix + ".csv"
+        generate_csv_for_pattern(file_prefix, file_name, search_prefix, ppg_labels, ppg_formats)
 
     
     # then save it as a csv

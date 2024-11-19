@@ -70,7 +70,7 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
-const int max_writes = 32;
+const int max_writes = 64;
 
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;

@@ -148,7 +148,7 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
 
 def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, labels, formats):
     try:
-        file_name = file_prefix + str(search_key) + "at" + str(int(datetime.datetime.now().timestamp()))
+        file_name = file_prefix + str(search_key) + "_at_" + str(int(datetime.datetime.now().timestamp()))
 
         file_name += type_prefix
         data_set = collect_all_data_by_prefix(path, search_key, labels, formats)
@@ -159,7 +159,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "G:/"
+    path = "D:/8088-5/8088-5/11122024/" #"F:/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:
@@ -179,7 +179,7 @@ if __name__ == '__main__':
         ids.append("")
 
     for id in ids:
-        search_prefix = id + "ac"
+        search_prefix = id + " ac"
         file_name = search_prefix + ".csv"
         generate_csv_for_pattern(file_prefix, file_name, search_prefix, acc_labels, acc_formats)
         search_prefix = id + "ppg"

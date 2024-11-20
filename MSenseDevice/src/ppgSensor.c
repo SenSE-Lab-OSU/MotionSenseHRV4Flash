@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_16,
+    .sample_avg = PPG_SMP_AVE_8,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -30,7 +30,7 @@ struct ppg_configData ppgConfig = {
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_16,
+    .sample_avg = PPG_SMP_AVE_8,
     .sampling_time = 0x28,
     .numCounts = 8,
     .txPacketEnable = false,
@@ -38,7 +38,7 @@ struct ppg_configData ppg_saved_config = {
 
 const struct ppg_configData ppg_default_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_16,
+    .sample_avg = PPG_SMP_AVE_8,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -166,7 +166,7 @@ void ppg_config()
 
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
-    cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
+    cmd_array[2] = PPG_SR_512_1 | ppgConfig.sample_avg;
     spiWritePPG(cmd_array, txLen);
 
     // PPG coniguration 3- LED settling time =12us
@@ -297,7 +297,7 @@ void ppg_changeSamplingRate(void)
     rxLen = 3;
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
-    cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
+    cmd_array[2] = PPG_SR_512_1 | ppgConfig.sample_avg;
     spiWritePPG(cmd_array, txLen);
   }
 }

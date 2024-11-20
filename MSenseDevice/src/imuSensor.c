@@ -757,20 +757,20 @@ void motion_data_timeout_handler(struct k_work *item){
     //memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
 
-    int16_t accel_and_gyro[16] = {dataReadAccX, dataReadAccY, dataReadAccZ, global_counter};
+    int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ};
 
-    memcpy(&accel_and_gyro[4], temp1[0].floatcast, sizeof(temp1[0].floatcast));
-    memcpy(&accel_and_gyro[6], temp1[1].floatcast, sizeof(temp1[1].floatcast));
-    memcpy(&accel_and_gyro[8], temp1[2].floatcast, sizeof(temp1[2].floatcast));
+    memcpy(&accel_and_gyro[3], temp1[0].floatcast, sizeof(temp1[0].floatcast));
+    memcpy(&accel_and_gyro[5], temp1[1].floatcast, sizeof(temp1[1].floatcast));
+    memcpy(&accel_and_gyro[7], temp1[2].floatcast, sizeof(temp1[2].floatcast));
 		  
     uint64_t current_time = get_current_unix_time();
     uint64_t ticks = k_uptime_get();
     //int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
     
 
-    memcpy(&accel_and_gyro[10], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
+    memcpy(&accel_and_gyro[9], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
-    memcpy(&accel_and_gyro[12], &ticks, sizeof(current_time));
+    memcpy(&accel_and_gyro[11], &global_counter, sizeof(global_counter));
 
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);

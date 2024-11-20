@@ -107,6 +107,7 @@ typedef struct MotionSenseFile {
 	int data_counter;
 	char sensor_string[5];
 	char file_name[50];
+	char sensor_format[80];
 	struct fs_file_t self_file;
 	bool switch_buffer;
 	data_upload_buffer buffer1;
@@ -121,12 +122,14 @@ static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
-	.sensor_string = "ppg"
+	.sensor_string = "ppg",
+	.sensor_format = "4 channels of uint32 ppg and uint32 global counter"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
-	.sensor_string = "ac"
+	.sensor_string = "ac",
+	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 global counter"
 };
 
 
@@ -400,6 +403,13 @@ int write_ble_uuid(const char* uuid){
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
 		// max_writes
+
+		strcat(uuid, "\n ppg format: ");
+  		strcat(uuid, ppg_file.sensor_format);
+
+		strcat(uuid, "\n accel format: ");
+  		strcat(uuid, accel_file.sensor_format);
+		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
 		res = f_expand(name_file.filep, 4096 * 4, 1);
 		res = fs_write(&name_file, uuid, strlen(uuid));
 		res = 1;

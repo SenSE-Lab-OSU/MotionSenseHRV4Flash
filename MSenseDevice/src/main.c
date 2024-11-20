@@ -198,7 +198,7 @@ static int settings_runtime_load(void)
 void write_uuid_file(){
   bt_addr_le_t address = {0};
   size_t count = 1;
-  char addr_str[80]; 
+  char addr_str[800]; 
   //bt_le_oob_get_local()
   bt_id_get(&address, &count);
   bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
@@ -207,6 +207,8 @@ void write_uuid_file(){
   strcat(addr_str, CONFIG_BT_DEVICE_NAME);
   strcat(addr_str, "\n Version: ");
   strcat(addr_str, CONFIG_BT_DIS_MODEL);
+  
+  
   int result = write_ble_uuid(addr_str);
   if (result > 0){
     

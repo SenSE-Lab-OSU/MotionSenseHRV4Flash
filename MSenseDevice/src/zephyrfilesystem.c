@@ -38,6 +38,10 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 #define MAX_BUFFER_SIZE 9000
 
+#define GET_FATTIME() (DWORD)get_current_unix_time()
+#undef GET_FATTIME()
+
+
 
 // Might need to put this and the timer in a seperate file.
 

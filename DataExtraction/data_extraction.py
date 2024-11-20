@@ -153,6 +153,8 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
         file_name += type_prefix
         data_set = collect_all_data_by_prefix(path, search_key, labels, formats)
         data_set.to_csv(file_name)
+        graph_generation.pd_graph_generation(search_key, data_set)
+
     except Exception as e:
         print(e)
 
@@ -173,7 +175,7 @@ if __name__ == '__main__':
 
     acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
     acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
-    #data_set = collect_all_data_by_prefix(path, "ppg", ppg_labels)
+
     ids = obtain_prefix_ids(path)
     if len(ids) == 0:
         ids.append("")

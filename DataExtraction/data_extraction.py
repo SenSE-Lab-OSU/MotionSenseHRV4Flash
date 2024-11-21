@@ -5,6 +5,7 @@ import re
 import datetime
 
 try:
+    import numpy
     import pandas as pd
     import graph_generation
 except ImportError:
@@ -124,6 +125,18 @@ def obtain_prefix_ids(path):
     return all_files
 
 
+def counter_validity_check(df:pd.DataFrame):
+    try:
+        counter_columns = df.iloc[:,-1:]
+        counter_arr = numpy.array(counter_columns).flatten()
+        diff_arr = numpy.diff(counter_arr)
+        check_array = (diff_arr == 8) | (diff_arr == -65528)
+        print("pass counter check: " + str(numpy.all(check_array)))
+
+    except Exception as e:
+        print(e)
+
+
 def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[str]):
     total_errors = 0
     
@@ -153,6 +166,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
         file_name += type_prefix
         data_set = collect_all_data_by_prefix(path, search_key, labels, formats)
         data_set.to_csv(file_name)
+        counter_validity_check(data_set)
         graph_generation.pd_graph_generation(search_key, data_set)
 
     except Exception as e:
@@ -161,7 +175,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "D:/8088-5/8088-5/11122024/" #"F:/"
+    path = "F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:
@@ -173,15 +187,15 @@ if __name__ == '__main__':
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
     ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GC", "GyroX", "GyroY", "GyroZ", "Counter", "ENMO"]
-    acc_formats = ["<h", "<h", "<h", "<h", "<f", "<f", "<f", "<f","<Q"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter", ]
+    acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f","<i"]
 
     ids = obtain_prefix_ids(path)
     if len(ids) == 0:
         ids.append("")
 
     for id in ids:
-        search_prefix = id + " ac"
+        search_prefix = id + "ac"
         file_name = search_prefix + ".csv"
         generate_csv_for_pattern(file_prefix, file_name, search_prefix, acc_labels, acc_formats)
         search_prefix = id + "ppg"

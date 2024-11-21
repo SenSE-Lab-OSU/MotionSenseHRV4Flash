@@ -23,7 +23,7 @@ struct ppg_configData ppgConfig = {
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
-    .numCounts = 8,
+    .numCounts = 5,
     .txPacketEnable = false,
 };
 
@@ -32,7 +32,7 @@ struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
     .sample_avg = PPG_SMP_AVE_8,
     .sampling_time = 0x28,
-    .numCounts = 8,
+    .numCounts = 5,
     .txPacketEnable = false,
 };
 
@@ -42,7 +42,7 @@ const struct ppg_configData ppg_default_config = {
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
-    .numCounts = 8,
+    .numCounts = 5,
     .txPacketEnable = false,
 };
 

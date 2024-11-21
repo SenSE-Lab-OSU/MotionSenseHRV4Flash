@@ -320,7 +320,7 @@ void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
-#define TIMER_NS 390625
+#define TIMER_US 3125
 #define TIMER_PRIORITY 1
 
 
@@ -395,16 +395,8 @@ printk("timer init\n");
   else
           printk("nrfx_timer_init success with: %d\n", err);
   
-  
-  
-  
-  uint32_t prescaler = nrfy_timer_prescaler_get(timer_global.p_reg);
-  uint32_t freq_base_khz = NRF_TIMER_BASE_FREQUENCY_GET(timer_global.p_reg) / 1000;
-  LOG_INF("timer_base_khz: %d", freq_base_khz);
-  time_ticks = (((uint64_t)TIMER_MS * freq_base_khz) >> prescaler);
-  printk("time ticks = %d\n", time_ticks);
-  time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
-
+  //time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
+  time_ticks = nrfx_timer_us_to_ticks(&timer_global, TIMER_US);
   nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks, 
   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
 

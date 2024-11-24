@@ -498,13 +498,16 @@ magneto_sample_config_t magneto_smpl_config){
 
 // our global variables needed for enmo calculation
 #define enmo_samples_size 420
-float second_enmo_arr[enmo_samples_size];
+float second_enmo_arr[enmo_samples_size] = {0.0};
 int enmo_sample_counter = 0;
+// samples since the last activated trigger
+int last_activated_trigger_counter = 0;
+
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9] = {0};
 
 float fifteen_second_enmo = 0;
-int enmo_update_rate = 2;
+const int enmo_update_rate = 15;
 uint8_t enmo_packet[6];
 /**@brief Function for calculating and sending the enmo when necessary.
  *
@@ -559,7 +562,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       for (int x = enmo_sample_counter - enmo_update_rate; x < enmo_sample_counter; x++){
         fifteen_second_enmo += second_enmo_arr[x];
       }
-      fifteen_second_enmo /= enmo_sample_counter;
+      fifteen_second_enmo /= enmo_update_rate;
 
       memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
       memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
@@ -573,47 +576,55 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
 
 }
 
+void enmo_threshold_evaluation(float enmo_number)
+{
 
-void enmo_threshold_evaluation(float enmo_number){
-  
-  
-  
   second_enmo_arr[enmo_sample_counter] = currentAccData.ENMO;
   enmo_sample_counter++;
-
-
-  if (enmo_sample_counter >= enmo_samples_size){
+  last_activated_trigger_counter++;
+  if (enmo_sample_counter >= enmo_samples_size)
+  {
     // Perform the threshold evaluation
     enmo_sample_counter = 0;
+  }
+
+  if (last_activated_trigger_counter >= enmo_samples_size)
+  {
     int total_enmo = 0;
-    for (int sample = 0; sample < enmo_samples_size; sample++){
-      if ((second_enmo_arr[sample]*1000) > 100.6f){
+    for (int sample = 0; sample < enmo_samples_size; sample++)
+    {
+      if ((second_enmo_arr[sample] * 1000) > 100.6f)
+      {
         total_enmo++;
-      } 
+      }
     }
 
-    //total_enmo = total_enmo / 60;
+    // total_enmo = total_enmo / 60;
     LOG_ERR("total enmo: %i", total_enmo);
-    
-    if (total_enmo > 294){
-      
-      if (total_enmo > 294){
-        enmo_threshold_packet[0] = 2;
+
+    if (total_enmo > 294)
+    {
+
+      enmo_threshold_packet[0] = 1;
+      /*if (total_enmo > 294){
+        enmo_threshold_packet[0] = 1;
       }
       else {
         enmo_threshold_packet[0] = 1;
       }
-      
+      */
+
       uint64_t current_time = get_current_unix_time();
       memcpy(&enmo_threshold_packet[1], &current_time, sizeof(current_time));
       enmoThreshold.dataPacket = &currentAccData.ENMO;
       enmoThreshold.packetLength = sizeof(currentAccData.ENMO);
       enmo_threshold_send(enmo_threshold_packet, sizeof(enmo_threshold_packet));
-      //k_work_submit(&my_motionData.work);
+      // k_work_submit(&my_motionData.work);
+
+      // zero out the last activated trigger since that is now.
+      last_activated_trigger_counter = 0;
     }
   }
-
-
 }
 
 /**@brief Function for handling the motion data timer timeout.

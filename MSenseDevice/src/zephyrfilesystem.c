@@ -414,7 +414,7 @@ int write_ble_uuid(const char* uuid){
 		strcat(uuid, "\n accel format: ");
   		strcat(uuid, accel_file.sensor_format);
 		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
-		res = f_expand(name_file.filep, 4096 * 4, 1);
+		//res = f_expand(name_file.filep, 4096 * 4, 1);
 		res = fs_write(&name_file, uuid, strlen(uuid));
 		res = 1;
 	}

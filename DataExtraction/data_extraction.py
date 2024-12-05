@@ -9,7 +9,7 @@ try:
     import pandas as pd
     import graph_generation
 except ImportError:
-    print("unable to import pandas, please install this package if you would like to view files!")
+    print("unable to import packages, please install numpy or pandas if you would like to use the graph display functionality!")
 
 
 
@@ -191,8 +191,7 @@ if __name__ == '__main__':
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f","<i"]
 
     ids = obtain_prefix_ids(path)
-    if len(ids) == 0:
-        ids.append("")
+    ids.append("")
 
     for id in ids:
         search_prefix = id + "ac"

@@ -348,9 +348,9 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
             LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
           }
         }  
-        // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
+        // gyroConfig.tot_samples is 10 and ppg.numCounts is set in main.c at 5
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-        magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+        magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
         
         gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
         

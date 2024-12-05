@@ -530,15 +530,15 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     // when we send the enmo, we send as an average of 25
     enmo_store[counterAcc] = enmo;
     counterAcc++;
-    if (counterAcc >= 25 ){
+    if (counterAcc >= 32){
       
       counterAcc = 0;
       //calculate the enmo as an average of 25 samples
       enmo = 0;
-      for (int x = 0; x <= 24; x++){
+      for (int x = 0; x <= 31; x++){
           enmo += enmo_store[x];
       }
-      enmo /= 25;
+      enmo /= 32;
       currentAccData.ENMO = enmo;
       LOG_WRN("Enmo: %f", enmo*1000);
       //currentAccData.time = get_current_unix_time();
@@ -633,190 +633,181 @@ void enmo_threshold_evaluation(float enmo_number)
  *
  */
 
-void motion_data_timeout_handler(struct k_work *item){
+void motion_data_timeout_handler(struct k_work *item)
+{
 
-  //start_timer();
-  struct motionInfo* the_device=  ((struct motionInfo *)(((char *)(item)) 
-    - offsetof(struct motionInfo, work)));
+  // start_timer();
+  struct motionInfo *the_device = ((struct motionInfo *)(((char *)(item)) - offsetof(struct motionInfo, work)));
 
   float_cast temp1[4];
 
   uint16_t pktCounter = the_device->pktCounter;
   uint8_t magneto_first_readTemp = the_device->magneto_first_read;
-  
-  //printk("gyro: %i \n", gyro_first_readTemp);
-  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL};	// SPI burst read holders.
-  uint16_t checkMag=0;
+
+  // printk("gyro: %i \n", gyro_first_readTemp);
+  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL}; // SPI burst read holders.
+  uint16_t checkMag = 0;
   uint8_t burst_tx[13] = {
-    READMASTER | ACCEL_XOUT_H,SPI_FILL,
-    SPI_FILL,SPI_FILL,SPI_FILL,SPI_FILL,
-    SPI_FILL,SPI_FILL,SPI_FILL,SPI_FILL,
-    SPI_FILL,SPI_FILL,SPI_FILL
-  };	// Burst read acc & gyro regs (0x3B-0x48).
-  uint8_t burst_rx[23];	// SPI burst read holders.
-  uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0};		/**< TX buffer. */
-  uint8_t m_rx_buf[15];  /**< RX buffer. */
+      READMASTER | ACCEL_XOUT_H, SPI_FILL,
+      SPI_FILL, SPI_FILL, SPI_FILL, SPI_FILL,
+      SPI_FILL, SPI_FILL, SPI_FILL, SPI_FILL,
+      SPI_FILL, SPI_FILL, SPI_FILL}; // Burst read acc & gyro regs (0x3B-0x48).
+  uint8_t burst_rx[23];                                           // SPI burst read holders.
+  uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
+  uint8_t m_rx_buf[15];                                           /**< RX buffer. */
 
   int16_t dataReadAccX, dataReadAccY, dataReadAccZ;
-  float accelX,accelY,accelZ;
-  float dividerAcc=0;
+  float accelX, accelY, accelZ;
+  float dividerAcc = 0;
 
-  if(accelConfig.sensitivity == 0)
-    dividerAcc = 1.0/16384;
-  else if(accelConfig.sensitivity == 2)
-    dividerAcc = 1.0/8192;
-  else if(accelConfig.sensitivity == 4)
-    dividerAcc = 1.0/4096;
-  else if(accelConfig.sensitivity == 6)
-    dividerAcc = 1.0/2048;
+  if (accelConfig.sensitivity == 0)
+    dividerAcc = 1.0 / 16384;
+  else if (accelConfig.sensitivity == 2)
+    dividerAcc = 1.0 / 8192;
+  else if (accelConfig.sensitivity == 4)
+    dividerAcc = 1.0 / 4096;
+  else if (accelConfig.sensitivity == 6)
+    dividerAcc = 1.0 / 2048;
 
-// Point to register bank 0 for reading the data from sensors.
-  spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);	
-  
-  if(magnetoConfig.isEnabled) {
-    if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2){	
-    // Checking the magnetometer status bits
-      
-      while(checkMag < 40000){
-        spiReadWriteIMU(burst_tx_INT_STAT, 2,burst_rx, 2);
-        if((burst_rx[1] & 0x01) == 0x01){
-        validMeasurement = true;
-         checkMag = 0;
-          
+  // Point to register bank 0 for reading the data from sensors.
+  spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
+
+  if (magnetoConfig.isEnabled)
+  {
+    if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2)
+    {
+      // Checking the magnetometer status bits
+
+      while (checkMag < 40000)
+      {
+        spiReadWriteIMU(burst_tx_INT_STAT, 2, burst_rx, 2);
+        if ((burst_rx[1] & 0x01) == 0x01)
+        {
+          validMeasurement = true;
+          checkMag = 0;
+
           break;
         }
-        checkMag = checkMag+1;
+        checkMag = checkMag + 1;
       }
-      
+
       magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_SENSOR);
     }
-    
-    else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+1)
-      magnetometer_data_read_send(validMeasurement,pktCounter);
-    else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+2)
-      magnetometer_read_sample_config(MAGNETOMETER_SINGLE);   
-    else if(magneto_first_readTemp == (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE)/2+3)
+
+    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 1)
+      magnetometer_data_read_send(validMeasurement, pktCounter);
+    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 2)
+      magnetometer_read_sample_config(MAGNETOMETER_SINGLE);
+    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 3)
       magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_TOREAD);
-    
   }
 
-// Point to register bank 0 for reading the data from sensors.
-  spiReadWriteIMU(m_tx_buf,2, m_rx_buf, 2);	
-  //printf("q0=%f,q1=%f,q2=%f,q3=%f\n", 
-  //  quaternionResult_1[0],quaternionResult_1[1],
-  //  quaternionResult_1[2],quaternionResult_1[3]);
-  if (the_device->gyro_first_read == 0){
-    spiReadWriteIMU(burst_tx,7, burst_rx, 7);  		  
-    for(int i=0; i<6; i++)
-      blePktMotion[i] = burst_rx[i+1];
-    
-    
+  // Point to register bank 0 for reading the data from sensors.
+  spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
+  // printf("q0=%f,q1=%f,q2=%f,q3=%f\n",
+  //   quaternionResult_1[0],quaternionResult_1[1],
+  //   quaternionResult_1[2],quaternionResult_1[3]);
+  if (the_device->gyro_first_read == 0)
+  {
+    spiReadWriteIMU(burst_tx, 7, burst_rx, 7);
+    for (int i = 0; i < 6; i++)
+      blePktMotion[i] = burst_rx[i + 1];
+
     prepare_gyros(quaternionResult_1);
 
     dataReadAccX = (burst_rx[1] << 8) | burst_rx[2];
-    if((burst_rx[1] & 0x80) == 0x80)
-      dataReadAccX = -(~(dataReadAccX) + 1); 
+    if ((burst_rx[1] & 0x80) == 0x80)
+      dataReadAccX = -(~(dataReadAccX) + 1);
     dataReadAccY = (burst_rx[3] << 8) | burst_rx[4];
-    if((burst_rx[3] & 0x80) == 0x80)
+    if ((burst_rx[3] & 0x80) == 0x80)
       dataReadAccY = -(~(dataReadAccY) + 1);
     dataReadAccZ = (burst_rx[5] << 8) | burst_rx[6];
-    if((burst_rx[5] & 0x80) == 0x80)
+    if ((burst_rx[5] & 0x80) == 0x80)
       dataReadAccZ = -(~(dataReadAccZ) + 1);
 
-    #if CONFIG_LOG_LEVEL_IMU_COLLECTION >= 4
+#if CONFIG_LOG_LEVEL_IMU_COLLECTION >= 4
     log_counter++;
-    if (log_counter > 10){
-    LOG_DBG("AccelX: %i, AccelY: %i, AccelZ: %i", dataReadAccX, dataReadAccY, dataReadAccZ);
+    if (log_counter > 10)
+    {
+      LOG_DBG("AccelX: %i, AccelY: %i, AccelZ: %i", dataReadAccX, dataReadAccY, dataReadAccZ);
       log_counter = 0;
     }
-    #endif
+#endif
     currentAccData.accx = dataReadAccX;
     currentAccData.accy = dataReadAccY;
     currentAccData.accz = dataReadAccZ;
 
-    accelX = dataReadAccX*dividerAcc/1.0;
-    accelY = dataReadAccY*dividerAcc/1.0;
-    accelZ = dataReadAccZ*dividerAcc/1.0;
+    accelX = dataReadAccX * dividerAcc / 1.0;
+    accelY = dataReadAccY * dividerAcc / 1.0;
+    accelZ = dataReadAccZ * dividerAcc / 1.0;
     currentAccData.accx_val = accelX;
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
     calculate_enmo(accelX, accelY, accelZ);
 
-
     temp1[0].float_val = quaternionResult_1[0];
     temp1[1].float_val = quaternionResult_1[1];
     temp1[2].float_val = quaternionResult_1[2];
-	  
 
-    for (uint8_t i=0; i<3; i++)
-      quaternionResult_1[i] = 0.0;	  
+    for (uint8_t i = 0; i < 3; i++)
+      quaternionResult_1[i] = 0.0;
     quaternionResult_1[3] = 1.0;
 
-    //collect gyroscope for values 6-12
+    // collect gyroscope for values 6-12
     gyroscope_measurement(quaternionResult_1);
-    //blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
+    // blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
 
-    //blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
-    //blePktMotion[8] = ((uint16_t)dataReadGyroY >> 8) & 0xFF;
-    //blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
-    //blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
-    //blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
+    // blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
+    // blePktMotion[8] = ((uint16_t)dataReadGyroY >> 8) & 0xFF;
+    // blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
+    // blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
+    // blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
 
-    
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
-    //int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
-    //memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
-
+    // int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
+    // memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
     int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ};
 
     memcpy(&accel_and_gyro[3], temp1[0].floatcast, sizeof(temp1[0].floatcast));
     memcpy(&accel_and_gyro[5], temp1[1].floatcast, sizeof(temp1[1].floatcast));
     memcpy(&accel_and_gyro[7], temp1[2].floatcast, sizeof(temp1[2].floatcast));
-		  
+
     uint64_t current_time = get_current_unix_time();
     uint64_t ticks = k_uptime_get();
-    //int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
-    
+    // int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
 
     memcpy(&accel_and_gyro[9], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
     memcpy(&accel_and_gyro[11], &global_counter, sizeof(global_counter));
 
-
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
-
-
-    //this function seperately fills blePktMotion with the desired size
-    //TODO: Make sure packets are in correct size/order
-    //ppg_bluetooth_fill(blePktMotion);
-    
+    // this function seperately fills blePktMotion with the desired size
+    // TODO: Make sure packets are in correct size/order
+    // ppg_bluetooth_fill(blePktMotion);
 
     blePktMotion[18] = blePktMotion[18] | ((pktCounter >> 8) & 0x03);
 
-    //collect packet counter
-    //blePktMotion[18] = (pktCounter&) >> 14;
+    // collect packet counter
+    // blePktMotion[18] = (pktCounter&) >> 14;
     blePktMotion[19] = ((pktCounter) & 0xFF);
-    
-    
 
-    
-    
-    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
-    if(accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE){
-      if (counterAcc == -1){
-      k_work_submit(&my_motionData.work);
+    if (accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE)
+    {
+      if (counterAcc == -1)
+      {
+        k_work_submit(&my_motionData.work);
       }
     }
-    #endif
+#endif
   }
-  else {
+  else
+  {
     gyroscope_measurement(quaternionResult_1);
-
-    
   }
   /*
   int64_t timer_value = stop_timer();
@@ -824,10 +815,7 @@ void motion_data_timeout_handler(struct k_work *item){
     LOG_WRN("Timer Value: %lli ms", timer_value);
   }
   */
-
 }
-
-
 
 void magnetometer_config(void){
   if (magnetoConfig.isEnabled){

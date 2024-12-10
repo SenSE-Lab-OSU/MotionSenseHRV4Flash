@@ -132,7 +132,7 @@ def counter_validity_check(df:pd.DataFrame):
         diff_arr = numpy.diff(counter_arr)
         check_array = (diff_arr == 8) | (diff_arr == -65528)
         print("pass counter check: " + str(numpy.all(check_array)))
-
+        print("and number of non matching samples: " + str(numpy.count_nonzero(check_array==0)))
     except Exception as e:
         print(e)
 

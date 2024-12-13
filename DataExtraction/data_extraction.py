@@ -12,7 +12,7 @@ except ImportError:
     print("unable to import packages, please install numpy or pandas if you would like to use the graph display functionality!")
 
 
-
+export_file_name_time_data = False
 
 def process_data_test(data) -> int:
 
@@ -45,7 +45,7 @@ struct_key = {"f":4,
               "Q": 8
               }
 
-def process_data(data, categories: list[list], format: list, use_check=False) -> int:
+def process_data(data, categories: list[list], format: list, use_check=False, time_ref=0.0) -> int:
     # we always assume that the last category is the packet counter
     #assert len(categories) == len(format)
     errors = 0
@@ -55,6 +55,9 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
     current_index = 0
     data_position = 0
     num_of_categories = len(categories)
+    if export_file_name_time_data:
+        num_of_categories -= 1
+
     end_trim_size = calculate_file_end(data)
     data_length = len(data) - end_trim_size
     while data_position + struct_key[format[current_index][1]] <= data_length:

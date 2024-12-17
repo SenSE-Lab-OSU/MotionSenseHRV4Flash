@@ -431,7 +431,7 @@ void ppg_led_update(void)
           if (meanIR > chLED_upperBound || meanIR < chLED_lowerBound)
             badDataCounterCh1++;
           // if it is bad for 10 cycles, trigger the collection 
-          if (badDataCounterCh1 > 10)
+          if (badDataCounterCh1 > 15)
           {
             adapt_counterCh1 = 0;
             adapt_Ch1 = 1;
@@ -443,7 +443,7 @@ void ppg_led_update(void)
         {
           if (meanGreen > chLED_upperBound || meanGreen < chLED_lowerBound)
             badDataCounterCh2++;
-          if (badDataCounterCh2 > 10)
+          if (badDataCounterCh2 > 15)
           {
             adapt_counterCh2 = 0;
             adapt_Ch2 = 1;

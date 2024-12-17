@@ -927,7 +927,7 @@ void magnetometer_config(void){
 void motion_config(void){
   LOG_INF("configuring imu..");
   if(gyroConfig.isEnabled){
-    static uint8_t m_tx_buf[2] = {0xF5,SPI_FILL};	/**< TX buffer. */
+    static uint8_t m_tx_buf[2] = {0xF5, SPI_FILL};	/**< TX buffer. */
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
 
@@ -943,10 +943,10 @@ void motion_config(void){
                             //  rate of Gyroscope = 550 Hz	
       GYRO_CONFIG_1,GYRO_DLPFCFG_51HZ | GYRO_FS_SEL_500, 
                             // gyro full scale =500 dps, LPF = 119.5 Hz 
-      ACCEL_CONFIG,ACCEL_DLPFCFG_12HZ | ACCEL_FS_SEL_4g |
+      ACCEL_CONFIG, ACCEL_DLPFCFG_12HZ | ACCEL_FS_SEL_4g |
         ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 11.6 Hz
       ACCEL_SMPLRT_DIV_1,0x00, // sample rate accel MSB
-      ACCEL_SMPLRT_DIV_2,0x01, // sampling rate accel =560 Hz
+      ACCEL_SMPLRT_DIV_2,0x01, // sampling rate accel = 560 Hz 
       REG_BANK_SEL,REG_BANK_3,
       I2C_MST_ODR_CONFIG, 0x01, // i2c master dutycycle configuration = 550 Hz,
       I2C_MST_DELAY_CTRL, DELAY_ES_SHADOW, // i2c_mst_delay_ctl = delays shadowing of external sensor
@@ -956,7 +956,9 @@ void motion_config(void){
       REG_BANK_SEL,REG_BANK_0
     };	/**< IMU configuration commands. */
     
+    // edit ACCEL_CONFIG 
     imu_config[19] = 0x01 | accelConfig.sensitivity | accelConfig.sample_bw;
+    // edit GYRO_CONFIG1
     imu_config[17] = 0x11 | gyroConfig.sensitivity;
     for(int i = 0; i < sizeof(imu_config); i += 2){
       m_tx_buf[0] = imu_config[i];

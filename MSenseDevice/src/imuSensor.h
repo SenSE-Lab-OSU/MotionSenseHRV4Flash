@@ -92,7 +92,7 @@
 #define I2C_MST_CLK_345KHZ_46DUTY 0x0E
 #define MAGNETOMETER_ID 0x00
 #define GYRO_SAMPLING_RATE 200
-#define MAGNETO_SAMPLING_RATE 25
+#define MAGNETO_SAMPLING_RATE 32
  
 extern const struct device *spi_dev_imu;
 extern struct spi_config spi_cfg_imu;

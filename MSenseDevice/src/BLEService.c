@@ -320,7 +320,7 @@ void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
-#define TIMER_US 3125
+#define TIMER_US 3125 
 #define TIMER_PRIORITY 1
 
 

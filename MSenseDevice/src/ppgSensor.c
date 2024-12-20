@@ -575,6 +575,8 @@ void read_ppg_fifo_buffer(struct k_work *item)
   txLen = 3;
   rxLen = 3;
   spiReadWritePPG(cmd_array, txLen, sampleCount, rxLen);
+  // we get count as a 24 bit number, but the actual size doesn't exceed 8 bits, so we just read (sampleCount[2]).
+  
 
   // Reading the actual PPG samples
   cmd_array[0] = PPG_FIFO_DATA;
@@ -632,6 +634,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_print_counter++;
   if (ppg_print_counter >= 24)
   {
+    LOG_DBG("sample count: %d", sampleCount[2]);
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
   }
   ppg_packet_counter++;

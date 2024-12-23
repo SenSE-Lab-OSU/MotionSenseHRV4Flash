@@ -16,7 +16,7 @@ LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
-float enmo_store[25];
+float enmo_store[32];
 uint16_t testcounter = 0;
 int log_counter = 0;
 

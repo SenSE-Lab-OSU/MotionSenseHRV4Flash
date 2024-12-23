@@ -513,7 +513,7 @@ void start_stop_device_collection(uint8_t val){
     #endif
     // we sleep for a tiny bit to let the ppg and accel config power up, 
     //as we get junk values in the initial seconds of turning them on.
-    //k_sleep(K_MSEC(500));
+    k_sleep(K_MSEC(100));
     timer_init();
     global_counter = 0;
     gyro_first_read = 0;

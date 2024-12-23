@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
+    .sample_avg = PPG_SMP_AVE_4,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x28,
     .sampling_time = 0x28,
@@ -30,21 +30,13 @@ struct ppg_configData ppgConfig = {
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
+    .sample_avg = PPG_SMP_AVE_4,
     .sampling_time = 0x28,
     .numCounts = 5,
     .txPacketEnable = false,
 };
 
-const struct ppg_configData ppg_default_config = {
-    .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
-    .green_intensity = 0x28,
-    .infraRed_intensity = 0x28,
-    .sampling_time = 0x28,
-    .numCounts = 5,
-    .txPacketEnable = false,
-};
+
 
 uint32_t timeWindow = 50;
 
@@ -281,7 +273,6 @@ void ppg_changeIntensity(void)
 
 void ppg_turn_on()
 {
-  ppgConfig = ppg_default_config;
   ppg_config();
 }
 
@@ -637,13 +628,15 @@ void read_ppg_fifo_buffer(struct k_work *item)
     LOG_DBG("sample count: %d", sampleCount[2]);
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
   }
+  for (int i = 0; i < sampleCount[2] / 4; i++){
   ppg_packet_counter++;
   ppg_samples[0] = led1A[0];
   ppg_samples[1] = led1B[0];
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
   ppg_samples[4] = global_counter;
-  store_data(ppg_samples, sizeof(ppg_samples), 0);
+  //store_data(ppg_samples, sizeof(ppg_samples), 0);
+  }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};
   //store_data(test_fill_arr, sizeof(test_fill_arr), 0);
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES

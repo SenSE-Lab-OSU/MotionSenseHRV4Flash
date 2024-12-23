@@ -187,7 +187,7 @@ if __name__ == '__main__':
     ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
     ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter", ]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter",]
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f","<i"]
 
     ids = obtain_prefix_ids(path)

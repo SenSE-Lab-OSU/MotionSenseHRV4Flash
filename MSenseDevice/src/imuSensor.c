@@ -507,7 +507,7 @@ int last_activated_trigger_counter = 0;
 uint8_t enmo_threshold_packet[9] = {0};
 
 float fifteen_second_enmo = 0;
-const int enmo_update_rate = 15;
+const int enmo_update_rate = 2;
 uint8_t enmo_packet[6];
 /**@brief Function for calculating and sending the enmo when necessary.
  *

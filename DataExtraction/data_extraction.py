@@ -83,6 +83,11 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
         except Exception as e:
             errors += 1
             print(e)
+    
+    if len(categories[0]) > len(categories[1]):
+        print("0xff-trim issue found, fixing...")
+        categories[0].pop()
+
 
     print("errors: " + str(errors))
     return errors
@@ -175,7 +180,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "F:/" #"D:/8088-5/8088-5/11122024/"
+    path = "H:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

@@ -24,6 +24,7 @@
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
+#include "drivers/nand/nand_disk.h"
 #endif
 
 #define CONFIG_NAME "Configure sensor"
@@ -49,7 +50,11 @@ bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_colle
 int num_of_status_registers = 5;
 bool ble_status_register_send[8] = { 0 };
 
-void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+uint32_t uptime;
+
+static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset);
+void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
@@ -138,6 +143,7 @@ struct bt_uuid_128 bt_uuid_name = BT_UUID_INIT_128(WRITE_DEVICE_NAME_CHARACTERIS
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
 struct bt_uuid_128 bt_uuid_read_status = BT_UUID_INIT_128(READ_STATUS_REGISTER_UUID);
+struct bt_uuid_128 bt_uuid_read_uptime = BT_UUID_INIT_128(READ_UPTIME_UUID);
 struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_enmothreshold_notify = BT_UUID_INIT_128(NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID);
@@ -201,7 +207,7 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
   BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
-    read_generic_one, write_enable_value, &collecting_data),
+    read_generic_one, write_enable_value, &host_wants_collection),
   BT_GATT_CHARACTERISTIC(&bt_uuid_datetime, 
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_eight, bt_write_date_time, &set_date_time),
@@ -223,6 +229,9 @@ BT_GATT_SERVICE_DEFINE(status_service,
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
+    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    update_uptime, NULL, &uptime),
 );
 
 /* update service: read ENMO updates */
@@ -306,13 +315,20 @@ bool read_status_register(int position){
     return *status_registers[position];
 }
 
-void update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+    uptime = k_uptime_get();
+  
+    return read_generic_four(conn, attr, buf, len, offset);
+}
+
+
+static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
   }
-  read_generic_eight(conn, attr, buf, len, offset);
-
+  return read_generic_eight(conn, attr, buf, len, offset);
 }
 
 
@@ -508,6 +524,11 @@ void start_stop_device_collection(uint8_t val){
   if (val){
     ppg_config();
     motion_config();
+
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(false);
+    #endif
+
     #ifndef CONFIG_USB_ALWAYS_ON
       usb_disable();
     #endif
@@ -527,9 +548,15 @@ void start_stop_device_collection(uint8_t val){
     timer_deinit();
     close_all_files();
     enmo_sample_counter = 0;
+
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+    #endif
+
     #ifndef CONFIG_USB_ALWAYS_ON
     usb_enable(NULL);	
     #endif
+
     collecting_data = false;
     
   }

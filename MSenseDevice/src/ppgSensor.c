@@ -20,8 +20,8 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
     .sample_avg = PPG_SMP_AVE_16,
-    .green_intensity = 0x28,
-    .infraRed_intensity = 0x28,
+    .green_intensity = 0x40,
+    .infraRed_intensity = 0x18,
     .sampling_time = 0x28,
     .numCounts = 8,
     .txPacketEnable = false,
@@ -40,7 +40,7 @@ const struct ppg_configData ppg_default_config = {
     .isEnabled = true,
     .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x28,
-    .infraRed_intensity = 0x28,
+    .infraRed_intensity = 0x18,
     .sampling_time = 0x28,
     .numCounts = 8,
     .txPacketEnable = false,
@@ -633,6 +633,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   if (ppg_print_counter >= 24)
   {
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
+    LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
   }
   ppg_packet_counter++;
   ppg_samples[0] = led1A[0];
@@ -664,8 +665,10 @@ void read_ppg_fifo_buffer(struct k_work *item)
     }
   }
 #endif
+#if !CONFIG_USE_FIXED_PPG_BRIGHTNESS
 
-  ppg_led_update();
+      ppg_led_update();
+#endif
 
   int64_t timer_value = stop_timer();
   if (rand() % 100 == 5){

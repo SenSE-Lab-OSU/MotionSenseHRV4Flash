@@ -187,7 +187,7 @@ if __name__ == '__main__':
         file_prefix = ""
     #files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
 
-    ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
+    ppg_labels = ["ir1", "ir2","g1", "g2", "counter"]
     ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
 
     acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter", ]

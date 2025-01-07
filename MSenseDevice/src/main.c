@@ -301,6 +301,9 @@ static void bt_ready(int err)
 
   write_uuid_file();
   #ifndef CONFIG_DEBUG
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
     usb_enable(usb_status_cb);
   #endif
 }
@@ -513,7 +516,10 @@ void main(void)
   // Setup our Flash Filesystem
   setup_disk();
   
-  #ifdef CONFIG_DEBUG
+  #ifdef CONFIG_DEBUG  
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
     usb_enable(usb_status_cb);
   #endif
   k_sleep(K_SECONDS(2));
@@ -596,7 +602,6 @@ void main(void)
 
   int global_update = 0;
   int update_time = SLEEP_TIME_MS;
-  enable_read_only(true);
   
 
   while (1)

@@ -9,7 +9,8 @@ try:
     import pandas as pd
     import graph_generation
 except ImportError:
-    print("unable to import pandas, please install this package if you would like to view files!")
+    print(
+        "unable to import packages, please install numpy or pandas if you would like to use the graph functionality!")
 
 
 
@@ -156,7 +157,7 @@ def counter_validity_check(df:pd.DataFrame):
         diff_arr = numpy.diff(counter_arr)
         check_array = (diff_arr == 8) | (diff_arr == -65528)
         print("pass counter check: " + str(numpy.all(check_array)))
-
+        print("and number of non matching samples: " + str(numpy.count_nonzero(check_array == 0)))
     except Exception as e:
         print(e)
 
@@ -215,8 +216,8 @@ if __name__ == '__main__':
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f","<i"]
 
     ids = obtain_prefix_ids(path)
-    if len(ids) == 0:
-        ids.append("")
+
+    ids.append("")
 
     for id in ids:
         search_prefix = id + "ac"

@@ -106,12 +106,14 @@ def resultant_end_trim_workaround(categories):
         return
     if max_diff == 1:
         print("warning: end length of array differs by 1. Implementing fix.")
+        print("mismatch array: " + str(length_array))
         max_value = max(length_array)
         for element in categories:
             if max_value == len(element):
                 element.pop()
     elif max_diff > 1:
         print("error: end lengths of array differs by too much. Data is potentially corrupt.")
+        print("mismatch array: " + str(length_array))
 
 
 def file_sort(element1:str):

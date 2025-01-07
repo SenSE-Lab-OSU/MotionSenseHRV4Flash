@@ -88,13 +88,30 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
         print("0xff-trim issue found, fixing...")
         categories[0].pop()
 
+    resultant_end_trim_workaround(categories)
 
     print("errors: " + str(errors))
     return errors
 
 
 
+def resultant_end_trim_workaround(categories):
 
+    length_array = []
+    for element in categories:
+        length_array.append(len(element))
+
+    max_diff = numpy.max(length_array) - numpy.min(length_array)
+    if max_diff == 0:
+        return
+    if max_diff == 1:
+        print("warning: end length of array differs by 1. Implementing fix.")
+        max_value = max(length_array)
+        for element in categories:
+            if max_value == len(element):
+                element.pop()
+    elif max_diff > 1:
+        print("error: end lengths of array differs by too much. Data is potentially corrupt.")
 
 
 def file_sort(element1:str):
@@ -180,7 +197,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "H:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path = "F:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

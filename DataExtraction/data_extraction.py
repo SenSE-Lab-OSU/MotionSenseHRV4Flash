@@ -3,6 +3,7 @@ import sys
 import struct
 import re
 import datetime
+import traceback
 
 try:
     import numpy
@@ -155,7 +156,7 @@ def counter_validity_check(df:pd.DataFrame):
         counter_columns = df.iloc[:,-1:]
         counter_arr = numpy.array(counter_columns).flatten()
         diff_arr = numpy.diff(counter_arr)
-        check_array = (diff_arr == 5) | (diff_arr == -65528)
+        check_array = (diff_arr == 8) | (diff_arr == -65528)
         print("pass counter check: " + str(numpy.all(check_array)))
         print("and number of non matching samples: " + str(numpy.count_nonzero(check_array == 0)))
     except Exception as e:
@@ -174,7 +175,10 @@ def collect_all_data_by_prefix(path, prefix:str, labels:list[str], types:list[st
         print(full_path)
         test_file = open(full_path, "rb")
         data = test_file.read()
-        total_errors += process_data(data, all_data, types)
+        if len(data) != 0:
+            total_errors += process_data(data, all_data, types)
+        else:
+            print("empty file found")
     full_dict = {}
     for index in range(len(labels)):
         full_dict[labels[index]] = all_data[index]
@@ -195,12 +199,13 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
         graph_generation.pd_graph_generation(search_key, data_set)
 
     except Exception as e:
+        traceback.print_exc()
         print(e)
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "F:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path =  "I:/8088-5/8088-5/12192024/" #"C:/Users/Devan/Downloads/Right_drive/Right_drive/" #"F:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

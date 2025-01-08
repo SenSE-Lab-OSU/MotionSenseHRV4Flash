@@ -322,7 +322,8 @@ void work_write(struct k_work* item){
         CONTAINER_OF(item, memory_container, work);
 	start_timer();
 	sensor_write_to_file(container->address, container->size, container->sensor);
-	stop_timer();
+	int64_t time_value = stop_timer();
+	LOG_INF("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	

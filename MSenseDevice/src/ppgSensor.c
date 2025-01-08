@@ -531,7 +531,7 @@ uint32_t ppg_samples[5];
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
-  start_timer();
+  //start_timer();
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
   uint16_t pktCounter = the_device->pktCounter;
@@ -663,7 +663,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
 
   ppg_led_update();
 
-  int64_t timer_value = stop_timer();
+  int64_t timer_value = 0; //stop_timer();
   if (rand() % 100 == 5){
     LOG_WRN("Timer Value: %lli ms", timer_value);
   }

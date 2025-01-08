@@ -170,7 +170,10 @@ def collect_all_data_by_prefix(path, prefix: str, labels: list[str], types: list
         print(full_path)
         test_file = open(full_path, "rb")
         data = test_file.read()
-        total_errors += process_data(data, all_data, types)
+        if len(data) != 0:
+            total_errors += process_data(data, all_data, types)
+        else:
+            print("Warning: found empty file!")
     full_dict = {}
     for index in range(len(labels)):
         full_dict[labels[index]] = all_data[index]

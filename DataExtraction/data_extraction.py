@@ -205,7 +205,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix:str, search_key:str, label
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path =  "I:/8088-5/8088-5/12192024/" #"C:/Users/Devan/Downloads/Right_drive/Right_drive/" #"F:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path =   "F:/"# "I:/8088-5/8088-5/12192024/" #"C:/Users/Devan/Downloads/Right_drive/Right_drive/" #"F:/" #"C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

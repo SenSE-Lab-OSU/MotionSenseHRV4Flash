@@ -47,7 +47,9 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 struct k_work_q my_work_q;
 
-memory_container work_item;
+memory_container ppg_work_item;
+
+memory_container accel_work_item;
 
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
@@ -152,28 +154,46 @@ void enable_read_only(bool enable){
 }
 
 
-void create_test_files(){
-	printk("trying to write files...\n");
-	struct fs_file_t test_file;
-	fs_file_t_init(&test_file);
+void create_test_file(int sectors){
+	printk("trying to write file...\n");
+	
 	char destination[50] = "";
 	int ID = 0;
-	ID = sys_rand32_get() % 900;
-	char IDString[5];
-	itoa(ID, IDString,  10);
 	struct fs_mount_t* mp = &fs_mnt;
+	char IDString[5];
+
+
+	struct fs_file_t test_file;
+	fs_file_t_init(&test_file);
+	
+	ID = sys_rand32_get() % 90000;
+	itoa(ID, IDString,  10);
+
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
 	strcat(destination, IDString);
-	strcat(destination, "test.txt"); 
+	strcat(destination, "testing.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
-	if (file_create == 0){
-		char a[] = "hello world";
-		printk("trying to write...\n");
-		fs_write(&test_file, a, sizeof(a));
+	if (file_create == 0)
+	{
+		char a[4096 * 2] = "hello world";
+		for (int i = 0; i < 64; i++)
+		{
+			printk("trying to write...\n");
+			fs_write(&test_file, a, sizeof(a));
+		}
 		printk("done writing\n");
 		fs_close(&test_file);
 	}
+}
+
+void create_test_files(int number_of_files){
+
+	for (int x = 0; x < number_of_files; x++){
+		create_test_file(256);
+	}
+
+
 }
 
 void create_sensor_file(MotionSenseFile* MSenseFile){
@@ -335,15 +355,24 @@ void work_write(struct k_work* item){
 void submit_write(const void* data, size_t size, enum sensor_type type){
 	
 	//memcpy(work_item.address, data, size);
-	work_item.address = data;
-	work_item.size = size;
-	work_item.sensor = type;
+	memory_container* work_item;
+	if (type == ppg){
+		work_item = &ppg_work_item;
+	}
+	else if (type == accelorometer){
+		work_item == &accel_work_item;
+	}
+
+	work_item->address = data;
+	work_item->size = size;
+	work_item->sensor = type;
 	packet_number++;
-	work_item.packet_num = packet_number;
-	int ret = k_work_submit_to_queue(&my_work_q, &work_item.work);
+	work_item->packet_num = packet_number;
+	int ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
 	if (ret != 1){
-		LOG_ERR("bad ret value: %i", ret);
 		upload_timeout_errors += 1;
+		LOG_ERR("bad ret value: %i, total_errors: %d", ret, upload_timeout_errors);
+		
 	}
 	LOG_INF("ret value: %i", ret);
 
@@ -649,7 +678,7 @@ void start_timer(){
 int64_t stop_timer(){
 	int64_t length = k_uptime_get() - start_time;
 	start_time = 0;
-	//LOG_WRN("Timer Value: %lli ms", length);
+	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }
 

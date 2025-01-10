@@ -536,11 +536,11 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
   blePktPPG_noFilter[11] = (pktCounter & 0x00FF);
 }
 
-uint32_t ppg_samples[5];
+uint32_t ppg_samples[6];
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
-  start_timer();
+  //start_timer();
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
   uint16_t pktCounter = the_device->pktCounter;
@@ -640,7 +640,9 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_samples[1] = led1B[0];
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
-  ppg_samples[4] = global_counter;
+  ppg_samples[3] = get_current_unix_time();
+  ppg_samples[5] = global_counter;
+  
   store_data(ppg_samples, sizeof(ppg_samples), 0);
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};
   //store_data(test_fill_arr, sizeof(test_fill_arr), 0);
@@ -670,9 +672,9 @@ void read_ppg_fifo_buffer(struct k_work *item)
       ppg_led_update();
 #endif
 
-  int64_t timer_value = stop_timer();
+  //int64_t timer_value = stop_timer();
   if (rand() % 100 == 5){
-    LOG_WRN("Timer Value: %lli ms", timer_value);
+    //LOG_WRN("Timer Value: %lli ms", timer_value);
   }
 }
 

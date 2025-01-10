@@ -293,7 +293,7 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
-	if (!read_only){
+	if (!false){
 	LOG_DBG("performing disk write at sector %i", sector);
 	if (count > 1){
 	LOG_INF("count: %i", count);

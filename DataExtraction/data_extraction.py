@@ -199,7 +199,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "F:/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path =   "F:/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:
@@ -208,11 +208,11 @@ if __name__ == '__main__':
         file_prefix = ""
     # files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"
 
-    ppg_labels = ["g1", "g2", "ir1", "ir2", "counter"]
-    ppg_formats = ["<i", "<i", "<i", "<i", "<i"]
+    ppg_labels = ["g1", "g2", "ir1", "ir2", "Timestamp", "counter"]
+    ppg_formats = ["<i", "<i", "<i", "<i", "<i", "<i"]
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter", ]
-    acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f", "<i"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Timestamp", "Counter", ]
+    acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f", "<i", "<i"]
 
     ids = obtain_prefix_ids(path)
 

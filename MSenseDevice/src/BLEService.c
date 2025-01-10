@@ -317,7 +317,7 @@ bool read_status_register(int position){
 
 void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
-    uptime = k_uptime_get();
+    uptime = k_uptime_get() / 1000;
   
     return read_generic_four(conn, attr, buf, len, offset);
 }
@@ -521,45 +521,48 @@ void reset_device(){
 
 void start_stop_device_collection(uint8_t val){
 
-  if (val){
-    ppg_config();
-    motion_config();
-
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(false);
-    #endif
-
-    #ifndef CONFIG_USB_ALWAYS_ON
-      usb_disable();
-    #endif
-    // we sleep for a tiny bit to let the ppg and accel config power up, 
-    //as we get junk values in the initial seconds of turning them on.
-    k_sleep(K_MSEC(500));
-    timer_init();
-    global_counter = 0;
-    gyro_first_read = 0;
-    magneto_first_read = 0;  
-    ppgRead = 0;
-    host_wants_collection = true;
-    collecting_data = true;
+  if (val != collecting_data){
     
-  } 
-  else{
-    timer_deinit();
-    close_all_files();
-    enmo_sample_counter = 0;
+    if (val){
+      ppg_config();
+      motion_config();
 
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-    #endif
+      #if CONFIG_DISK_DRIVER_RAW_NAND
+      set_read_only(false);
+      #endif
 
-    #ifndef CONFIG_USB_ALWAYS_ON
-    usb_enable(NULL);	
-    #endif
+      #ifndef CONFIG_USB_ALWAYS_ON
+        usb_disable();
+      #endif
+      // we sleep for a tiny bit to let the ppg and accel config power up, 
+      //as we get junk values in the initial seconds of turning them on.
+      k_sleep(K_MSEC(500));
+      timer_init();
+      global_counter = 0;
+      gyro_first_read = 0;
+      magneto_first_read = 0;  
+      ppgRead = 0;
+      host_wants_collection = true;
+      collecting_data = true;
+      
+    } 
+    else{
+      timer_deinit();
+      close_all_files();
+      enmo_sample_counter = 0;
 
-    collecting_data = false;
+      #if CONFIG_DISK_DRIVER_RAW_NAND
+      set_read_only(true);
+      #endif
+
+      #ifndef CONFIG_USB_ALWAYS_ON
+      usb_enable(NULL);	
+      #endif
+
+      collecting_data = false;
     
   }
+}
 
 }
 
@@ -585,8 +588,10 @@ uint16_t offset, uint8_t flags){
   }
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
+  if (host_wants_collection == collecting_data){
   host_wants_collection = val;
   start_stop_device_collection(val);
+  }
   return len;
 }
 

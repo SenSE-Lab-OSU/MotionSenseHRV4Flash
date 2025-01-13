@@ -634,13 +634,14 @@ void read_ppg_fifo_buffer(struct k_work *item)
   {
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
     LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
+    LOG_DBG("new IR intensity: %d\n", ppgConfig.infraRed_intensity);
   }
   ppg_packet_counter++;
   ppg_samples[0] = led1A[0];
   ppg_samples[1] = led1B[0];
   ppg_samples[2] = led2A[0];
   ppg_samples[3] = led2B[0];
-  ppg_samples[3] = get_current_unix_time();
+  ppg_samples[4] = get_current_unix_time();
   ppg_samples[5] = global_counter;
   
   store_data(ppg_samples, sizeof(ppg_samples), 0);

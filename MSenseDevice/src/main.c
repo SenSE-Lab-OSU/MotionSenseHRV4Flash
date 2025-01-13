@@ -127,8 +127,7 @@ struct ppgData ppgData1;
 const struct device *spi_dev_ppg, *spi_dev_imu;
 const struct device *i2c_dev;
 
-struct bq274xx_data batteryMonitor;
-struct bq274xx_config batteryMonitorConfig;
+
 
 uint8_t blePktTFMicro[ble_tfMicroPktLength];
 
@@ -477,7 +476,7 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (collecting_data || host_wants_collection){
-        if (battery_level < 5 && collecting_data){
+        if (battery_level < 10 && collecting_data){
             battery_low = true;
             start_stop_device_collection(false);
         }

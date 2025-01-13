@@ -168,6 +168,7 @@ int erase_file_table() {
 
 
 
+
 char nor_buffer[256];
 static int flash_nor_adjustment_write(const struct device* dev, off_t address, char* buf, size_t size){
 	int ret;
@@ -228,6 +229,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 
 
 static int disk_acess_init2(struct disk_info *disk){
+
 	return 0;
 } 
 
@@ -250,7 +252,7 @@ static int disk_nand_access_status(struct disk_info *disk)
 	*/
 	//uint8_t status = spi_rdsr(dev);
 	if (read_only){
-		return DISK_STATUS_WR_PROTECT;
+		return DISK_STATUS_OK;
 	}
 	return DISK_STATUS_OK;
 
@@ -293,7 +295,7 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
-	if (!false){
+	if (!read_only){
 	LOG_DBG("performing disk write at sector %i", sector);
 	if (count > 1){
 	LOG_INF("count: %i", count);

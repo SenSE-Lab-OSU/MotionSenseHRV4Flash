@@ -177,7 +177,7 @@ void create_test_file(int sectors){
 	if (file_create == 0)
 	{
 		char a[4096 * 2] = "hello world";
-		for (int i = 0; i < 64; i++)
+		for (int i = 0; i < sectors; i++)
 		{
 			printk("trying to write...\n");
 			fs_write(&test_file, a, sizeof(a));
@@ -501,7 +501,8 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 
 #if CONFIG_FAT_FILESYSTEM_ELM
 	static FATFS fat_fs;
-
+	//FS_MOUNT_FLAG_USE_DISK_ACCESS
+	//mnt->flags = FS_MOUNT_FLAG_READ_ONLY;
 	mnt->type = FS_FATFS;
 	mnt->fs_data = &fat_fs;
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {

@@ -301,7 +301,7 @@ static void bt_ready(int err)
   write_uuid_file();
   #ifndef CONFIG_DEBUG
   #if CONFIG_DISK_DRIVER_RAW_NAND
-    //set_read_only(true);
+    set_read_only(true);
   #endif
     usb_enable(usb_status_cb);
   #endif
@@ -514,7 +514,7 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-  create_test_files(3000);
+  create_test_files(900);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);

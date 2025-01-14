@@ -48,7 +48,7 @@ bool file_system_full = false;
 bool battery_charging = false;
 
 bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full, &battery_charging};
-int num_of_status_registers = 5;
+int num_of_status_registers = 6;
 bool ble_status_register_send[8] = { 0 };
 
 uint32_t uptime;

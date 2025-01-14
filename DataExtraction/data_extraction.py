@@ -3,6 +3,7 @@ import sys
 import struct
 import re
 import datetime
+import traceback
 
 try:
     import numpy
@@ -11,6 +12,7 @@ try:
 except ImportError:
     print(
         "unable to import packages, please install numpy or pandas if you would like to use the graph functionality!")
+
 
 
 def process_data_test(data) -> int:
@@ -83,6 +85,12 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
         except Exception as e:
             errors += 1
             print(e)
+    
+    if len(categories[0]) > len(categories[1]):
+        print("0xff-trim issue found, fixing...")
+        categories[0].pop()
+
+    resultant_end_trim_workaround(categories)
 
     if len(categories[0]) > len(categories[1]):
         print("0xff-trim issue found, fixing...")
@@ -113,6 +121,20 @@ def resultant_end_trim_workaround(categories):
         print("error: end lengths of array differs by too much. Data is potentially corrupt.")
         print("mismatch array: " + str(length_array))
 
+
+    max_diff = numpy.max(length_array) - numpy.min(length_array)
+    if max_diff == 0:
+        return
+    if max_diff == 1:
+        print("warning: end length of array differs by 1. Implementing fix.")
+        print("mismatch array: " + str(length_array))
+        max_value = max(length_array)
+        for element in categories:
+            if max_value == len(element):
+                element.pop()
+    elif max_diff > 1:
+        print("error: end lengths of array differs by too much. Data is potentially corrupt.")
+        print("mismatch array: " + str(length_array))
 
 def file_sort(element1: str):
     numeric_index = element1.find(it_prefix)
@@ -175,7 +197,9 @@ def collect_all_data_by_prefix(path, prefix: str, labels: list[str], types: list
         if len(data) != 0:
             total_errors += process_data(data, all_data, types)
         else:
+
             print("Warning: found empty file!")
+
     full_dict = {}
     for index in range(len(labels)):
         full_dict[labels[index]] = all_data[index]
@@ -197,12 +221,15 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
             graph_generation.pd_graph_generation(search_key, data_set)
 
     except Exception as e:
+        traceback.print_exc()
         print(e)
 
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path =   "F:/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+
+    path =   "F:/" 
+
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:
@@ -214,8 +241,11 @@ if __name__ == '__main__':
     ppg_labels = ["ir1", "ir2", "g1", "g2",  "Timestamp", "counter"]
     ppg_formats = ["<i", "<i", "<i", "<i", "<i", "<i"]
 
+
     acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Timestamp", "Counter"]
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f", "<i", "<i"]
+
+
 
     ids = obtain_prefix_ids(path)
 

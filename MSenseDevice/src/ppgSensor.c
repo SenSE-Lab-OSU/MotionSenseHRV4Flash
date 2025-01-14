@@ -22,17 +22,18 @@ struct ppg_configData ppgConfig = {
     .sample_avg = PPG_SMP_AVE_16,
     .green_intensity = 0x30,
     .infraRed_intensity = 0x12,
+
     .sampling_time = 0x28,
-    .numCounts = 8,
+    .numCounts = 5,
     .txPacketEnable = false,
 };
 
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_16,
+    .sample_avg = PPG_SMP_AVE_8,
     .sampling_time = 0x28,
-    .numCounts = 8,
+    .numCounts = 5,
     .txPacketEnable = false,
 };
 
@@ -45,6 +46,7 @@ const struct ppg_configData ppg_default_config = {
     .numCounts = 8,
     .txPacketEnable = false,
 };
+
 
 uint32_t timeWindow = 50;
 
@@ -166,7 +168,7 @@ void ppg_config()
 
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
-    cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
+    cmd_array[2] = PPG_SR_512_1 | ppgConfig.sample_avg;
     spiWritePPG(cmd_array, txLen);
 
     // PPG coniguration 3- LED settling time =12us
@@ -281,7 +283,6 @@ void ppg_changeIntensity(void)
 
 void ppg_turn_on()
 {
-  ppgConfig = ppg_default_config;
   ppg_config();
 }
 
@@ -297,7 +298,7 @@ void ppg_changeSamplingRate(void)
     rxLen = 3;
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
-    cmd_array[2] = PPG_SR_400_1 | ppgConfig.sample_avg;
+    cmd_array[2] = PPG_SR_512_1 | ppgConfig.sample_avg;
     spiWritePPG(cmd_array, txLen);
   }
 }
@@ -431,7 +432,7 @@ void ppg_led_update(void)
           if (meanIR > chLED_upperBound || meanIR < chLED_lowerBound)
             badDataCounterCh1++;
           // if it is bad for 10 cycles, trigger the collection 
-          if (badDataCounterCh1 > 10)
+          if (badDataCounterCh1 > 15)
           {
             adapt_counterCh1 = 0;
             adapt_Ch1 = 1;
@@ -443,7 +444,7 @@ void ppg_led_update(void)
         {
           if (meanGreen > chLED_upperBound || meanGreen < chLED_lowerBound)
             badDataCounterCh2++;
-          if (badDataCounterCh2 > 10)
+          if (badDataCounterCh2 > 15)
           {
             adapt_counterCh2 = 0;
             adapt_Ch2 = 1;
@@ -575,6 +576,8 @@ void read_ppg_fifo_buffer(struct k_work *item)
   txLen = 3;
   rxLen = 3;
   spiReadWritePPG(cmd_array, txLen, sampleCount, rxLen);
+  // we get count as a 24 bit number, but the actual size doesn't exceed 8 bits, so we just read (sampleCount[2]).
+  
 
   // Reading the actual PPG samples
   cmd_array[0] = PPG_FIFO_DATA;
@@ -632,19 +635,22 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_print_counter++;
   if (ppg_print_counter >= 24)
   {
+    LOG_DBG("sample count: %d", sampleCount[2]);
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
     LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
     LOG_DBG("new IR intensity: %d\n", ppgConfig.infraRed_intensity);
   }
+  for (int i = 0; i < sampleCount[2] / 4; i++){
   ppg_packet_counter++;
-  ppg_samples[0] = led1A[0];
-  ppg_samples[1] = led1B[0];
-  ppg_samples[2] = led2A[0];
-  ppg_samples[3] = led2B[0];
+  ppg_samples[0] = led1A[i];
+  ppg_samples[1] = led1B[i];
+  ppg_samples[2] = led2A[i];
+  ppg_samples[3] = led2B[i];
   ppg_samples[4] = get_current_unix_time();
   ppg_samples[5] = global_counter;
-  
+
   store_data(ppg_samples, sizeof(ppg_samples), 0);
+  }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};
   //store_data(test_fill_arr, sizeof(test_fill_arr), 0);
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -673,7 +679,9 @@ void read_ppg_fifo_buffer(struct k_work *item)
       ppg_led_update();
 #endif
 
+
   //int64_t timer_value = stop_timer();
+
   if (rand() % 100 == 5){
     //LOG_WRN("Timer Value: %lli ms", timer_value);
   }

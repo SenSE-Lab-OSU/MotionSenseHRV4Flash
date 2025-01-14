@@ -12,6 +12,7 @@
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/../../drivers/sensor/bq274xx/bq274xx.h> // screw you zephyr 
 #include "batteryMonitor.h"
+#include "BLEService.h"
 
 int battery_level = 100;
 
@@ -243,13 +244,7 @@ void dt_update_battery(const struct device *dev)
 		uint16_t flags_value;
 		const struct device* battery_device = DEVICE_DT_GET(DT_INST(0, ti_bq274xx));
 		bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
-		bool lsb = !(flags_value & 1);
+		battery_charging = !(flags_value & 1);
 		printk("register status: %hu \n", flags_value); 
 		printk("is charging: %d \n", lsb);
-		
-		
-
-		
-	
 }
-

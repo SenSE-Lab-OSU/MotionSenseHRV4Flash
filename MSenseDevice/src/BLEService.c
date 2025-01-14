@@ -45,8 +45,9 @@ bool collecting_data = false;
 bool host_wants_collection = false;
 bool battery_low = false;
 bool file_system_full = false;
+bool battery_charging = false;
 
-bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full};
+bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full, &battery_charging};
 int num_of_status_registers = 5;
 bool ble_status_register_send[8] = { 0 };
 

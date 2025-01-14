@@ -176,7 +176,8 @@ void create_test_file(int sectors){
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
 	if (file_create == 0)
 	{
-		char a[4096 * 2] = "hello world";
+		char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
+		every day for miles. he wandered and wandered for miles.";
 		for (int i = 0; i < sectors; i++)
 		{
 			printk("trying to write...\n");

@@ -165,6 +165,8 @@ def collect_all_data_by_prefix(path, prefix: str, labels: list[str], types: list
     for element in range(len(labels)):
         all_data.append([])
     files = gather_files_by_prefix(prefix, path)
+    if len(files) == 0:
+        return
     for file in files:
         full_path = path + file
         print(full_path)
@@ -189,9 +191,10 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
         file_name += type_prefix
         data_set = collect_all_data_by_prefix(path, search_key, labels, formats)
-        data_set.to_csv(file_name)
-        counter_validity_check(data_set)
-        graph_generation.pd_graph_generation(search_key, data_set)
+        if data_set is not None:
+            data_set.to_csv(file_name)
+            counter_validity_check(data_set)
+            graph_generation.pd_graph_generation(search_key, data_set)
 
     except Exception as e:
         print(e)
@@ -199,7 +202,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path =   "I:/FullData/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path =   "F:/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

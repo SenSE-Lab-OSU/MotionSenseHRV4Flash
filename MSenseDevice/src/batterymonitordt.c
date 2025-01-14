@@ -16,8 +16,8 @@
 int battery_level = 100;
 
 
-/* I had to copy over this bullshit from zephyr/drivers/sensor/bq274xx.c because it has static scope thus preventing me from internally linking it here.
- whoever the fuck's idea it was to make these functions static, I have no clue */
+/* I had to copy over this from zephyr/drivers/sensor/bq274xx.c because it has static scope thus preventing me from internally linking it here.
+ whoever's idea it was to make these functions static, I have no clue */
 int bq274xx_cmd_reg_read(const struct device *dev, uint8_t reg_addr,
 				int16_t *val)
 {
@@ -243,9 +243,9 @@ void dt_update_battery(const struct device *dev)
 		uint16_t flags_value;
 		const struct device* battery_device = DEVICE_DT_GET(DT_INST(0, ti_bq274xx));
 		bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
-		int lsb = flags_value & 1;
-		printk("register status: %hu", flags_value); 
-		printk("is charging: %d", lsb);
+		bool lsb = !(flags_value & 1);
+		printk("register status: %hu \n", flags_value); 
+		printk("is charging: %d \n", lsb);
 		
 		
 

@@ -587,9 +587,11 @@ uint16_t offset, uint8_t flags){
   }
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
-  if (host_wants_collection == collecting_data){
   host_wants_collection = val;
-  start_stop_device_collection(val);
+  if (!(battery_low && val)){
+
+    start_stop_device_collection(val);
+    
   }
   return len;
 }

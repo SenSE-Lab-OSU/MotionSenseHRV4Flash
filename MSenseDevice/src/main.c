@@ -48,7 +48,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 4000
+#define SLEEP_TIME_MS 5000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -481,8 +481,9 @@ void battery_maintenance()
             start_stop_device_collection(false);
         }
         else if (battery_level > 15 && host_wants_collection && !collecting_data){
-            start_stop_device_collection(true);
             battery_low = false;
+            start_stop_device_collection(true);
+            
         }
   }
   #endif
@@ -514,7 +515,7 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-  create_test_files(900);
+  //create_test_files(950);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);

@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
     .sample_avg = PPG_SMP_AVE_16,
-    .green_intensity = 0x40,
+    .green_intensity = 0x30,
     .infraRed_intensity = 0x18,
     .sampling_time = 0x28,
     .numCounts = 8,

@@ -19,9 +19,10 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
-    .green_intensity = 0x28,
-    .infraRed_intensity = 0x28,
+    .sample_avg = PPG_SMP_AVE_16,
+    .green_intensity = 0x30,
+    .infraRed_intensity = 0x12,
+
     .sampling_time = 0x28,
     .numCounts = 5,
     .txPacketEnable = false,
@@ -36,6 +37,15 @@ struct ppg_configData ppg_saved_config = {
     .txPacketEnable = false,
 };
 
+const struct ppg_configData ppg_default_config = {
+    .isEnabled = true,
+    .sample_avg = PPG_SMP_AVE_16,
+    .green_intensity = 0x28,
+    .infraRed_intensity = 0x12,
+    .sampling_time = 0x28,
+    .numCounts = 8,
+    .txPacketEnable = false,
+};
 
 
 uint32_t timeWindow = 50;
@@ -527,7 +537,7 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
   blePktPPG_noFilter[11] = (pktCounter & 0x00FF);
 }
 
-uint32_t ppg_samples[5];
+uint32_t ppg_samples[6];
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
@@ -627,6 +637,8 @@ void read_ppg_fifo_buffer(struct k_work *item)
   {
     LOG_DBG("sample count: %d", sampleCount[2]);
     LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
+    LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
+    LOG_DBG("new IR intensity: %d\n", ppgConfig.infraRed_intensity);
   }
   for (int i = 0; i < sampleCount[2] / 4; i++){
   ppg_packet_counter++;
@@ -634,7 +646,9 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_samples[1] = led1B[i];
   ppg_samples[2] = led2A[i];
   ppg_samples[3] = led2B[i];
-  ppg_samples[4] = global_counter;
+  ppg_samples[4] = get_current_unix_time();
+  ppg_samples[5] = global_counter;
+
   store_data(ppg_samples, sizeof(ppg_samples), 0);
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};
@@ -660,12 +674,16 @@ void read_ppg_fifo_buffer(struct k_work *item)
     }
   }
 #endif
+#if !CONFIG_USE_FIXED_PPG_BRIGHTNESS
 
-  ppg_led_update();
+      ppg_led_update();
+#endif
 
-  int64_t timer_value = 0; //stop_timer();
+
+  //int64_t timer_value = stop_timer();
+
   if (rand() % 100 == 5){
-    LOG_WRN("Timer Value: %lli ms", timer_value);
+    //LOG_WRN("Timer Value: %lli ms", timer_value);
   }
 }
 

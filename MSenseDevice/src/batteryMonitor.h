@@ -68,8 +68,8 @@
 #define BQ274XX_EXTENDED_BLOCKDATA_TAPERRATE_HIGH 0x5B
 #define BQ274XX_EXTENDED_BLOCKDATA_TAPERRATE_LOW 0x5C
 
-#define BQ274XX_DELAY 1000
-extern const struct device *i2c_dev;
+
+
 
 extern int battery_level;
 
@@ -77,26 +77,8 @@ extern int battery_level;
 void dt_update_battery(const struct device *dev);
 
 
-struct bq274xx_data {
-	uint16_t voltage;
-	uint16_t avg_current;
-	uint16_t stdby_current;
-	uint16_t max_load_current;
-	uint16_t avg_power;
-	uint16_t state_of_charge;
-	uint16_t state_of_health;
-	uint16_t internal_temperature;
-	uint16_t full_charge_capacity;
-	uint16_t remaining_charge_capacity;
-	uint16_t nom_avail_capacity;
-	uint16_t full_avail_capacity;
-};
 
-struct bq274xx_config {
-	uint16_t design_capacity;
-	uint16_t taper_current;
-	uint16_t terminate_voltage;
-};
+
 
 struct ble_battery_info {
     struct k_work work;

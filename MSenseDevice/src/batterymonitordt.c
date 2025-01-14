@@ -246,5 +246,5 @@ void dt_update_battery(const struct device *dev)
 		bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
 		battery_charging = !(flags_value & 1);
 		printk("register status: %hu \n", flags_value); 
-		printk("is charging: %d \n", lsb);
+		printk("is charging: %d \n", battery_charging);
 }

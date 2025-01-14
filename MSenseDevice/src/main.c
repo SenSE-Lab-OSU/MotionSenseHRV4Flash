@@ -48,7 +48,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 3000
+#define SLEEP_TIME_MS 5000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -127,8 +127,7 @@ struct ppgData ppgData1;
 const struct device *spi_dev_ppg, *spi_dev_imu;
 const struct device *i2c_dev;
 
-struct bq274xx_data batteryMonitor;
-struct bq274xx_config batteryMonitorConfig;
+
 
 uint8_t blePktTFMicro[ble_tfMicroPktLength];
 
@@ -193,6 +192,26 @@ static int settings_runtime_load(void)
 #endif
 */
   return 0;
+}
+
+void write_uuid_file(){
+  bt_addr_le_t address = {0};
+  size_t count = 1;
+  char addr_str[800]; 
+  //bt_le_oob_get_local()
+  bt_id_get(&address, &count);
+  bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
+  printk("advertising with address: %s \n", addr_str);
+  strcat(addr_str, "\n Name:");
+  strcat(addr_str, CONFIG_BT_DEVICE_NAME);
+  strcat(addr_str, "\n Version: ");
+  strcat(addr_str, CONFIG_BT_DIS_MODEL);
+  
+  
+  int result = write_ble_uuid(addr_str);
+  if (result > 0){
+    
+  }
 }
 
 static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
@@ -278,6 +297,14 @@ static void bt_ready(int err)
   }
 
   k_sem_give(&ble_init_ok);
+
+  write_uuid_file();
+  #ifndef CONFIG_DEBUG
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
+    usb_enable(usb_status_cb);
+  #endif
 }
 
 // Initialize BLE
@@ -437,6 +464,10 @@ static void i2c_init(void)
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
+
+
+
+
 void battery_maintenance()
 {
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
@@ -445,24 +476,29 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (collecting_data || host_wants_collection){
-        if (battery_level < 5 && collecting_data){
+        if (battery_level < 10 && collecting_data){
             battery_low = true;
             start_stop_device_collection(false);
         }
         else if (battery_level > 15 && host_wants_collection && !collecting_data){
-            start_stop_device_collection(true);
             battery_low = false;
+            start_stop_device_collection(true);
+            
         }
   }
   #endif
     
 }
 
+
+
 void blink_led(gpio_pin_t pin){
   gpio_pin_set(gpio0_device, pin, 1);
   k_sleep(K_MSEC(200));
   gpio_pin_set(gpio0_device, pin, 0);
 }
+
+
 
 void storage_clear_led(){
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
@@ -479,8 +515,13 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-
-  usb_enable(usb_status_cb);
+  //create_test_files(950);
+  #ifdef CONFIG_DEBUG  
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
+    usb_enable(usb_status_cb);
+  #endif
   k_sleep(K_SECONDS(2));
 
   
@@ -551,15 +592,18 @@ void main(void)
 #endif
 
   
-  k_work_init(&work_item.work, work_write);
+  k_work_init(&ppg_work_item.work, work_write);
+
+  k_work_init(&accel_work_item.work, work_write);
 
   ble_init();
   
   get_storage_percent_full();
   
+  
+
   int global_update = 0;
   int update_time = SLEEP_TIME_MS;
-  enable_read_only(true);
   
 
   while (1)

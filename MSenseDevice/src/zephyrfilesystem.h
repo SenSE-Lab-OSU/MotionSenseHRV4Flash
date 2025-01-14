@@ -17,7 +17,9 @@ extern struct k_work_q my_work_q;
 
 void setup_disk(void);
 
-void create_test_files();
+void create_test_file(int sectors);
+
+void create_test_files(int number_of_files);
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type);
 
@@ -33,6 +35,8 @@ void store_data(const void* data, size_t size, enum sensor_type sensor);
 int get_storage_percent_full();
 
 extern int storage_percent_full;
+
+int write_ble_uuid(const char* ble_string);
 
 //k work item
 void work_write(struct k_work* item);
@@ -53,5 +57,6 @@ extern int patient_num;
 
 extern uint64_t set_date_time;
 
-extern memory_container work_item;
+extern memory_container ppg_work_item;
+extern memory_container accel_work_item;
 

@@ -161,7 +161,7 @@ compatible = "nordic,nrf-spim";
 		compatible = "ti,bq274xx";
         reg = <0x55>;
         design-voltage = <3700>;
-        design-capacity = <170>;
+        design-capacity = <250>;
         taper-current = <2>;
         terminate-voltage = <3000>;
 	};

@@ -129,13 +129,13 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg and uint32 global counter"
+	.sensor_format = "4 channels of uint32 ppg, uint32 timer and uint32 counter"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
 	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 global counter"
+	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 timer, uint32 counter"
 };
 
 
@@ -230,8 +230,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		
 		
 		int ID = 0;
-		char IDString[5];
-		char patient_id[6];
+		// max itoa can do is 33 with binary, but theoretically it will be < 9
+		char IDString[33];
+		char patient_id[33];
 		if (use_random_files){
 			
 		

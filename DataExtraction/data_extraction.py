@@ -126,7 +126,7 @@ def gather_files_by_prefix(prefix: str, path):
     all_files = []
     files = os.listdir(path)
     for file in files:
-        if prefix in file:
+        if file.startswith(prefix):
             all_files.append(file)
     all_files.sort(key=file_sort)
     return all_files
@@ -202,7 +202,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path =   "F:/"  # "C:/Users/mallory.115/Downloads/Left1_drive/Left1_drive/" #"F:/" #"D:/8088-5/8088-5/11122024/"
+    path = "F:/"
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:

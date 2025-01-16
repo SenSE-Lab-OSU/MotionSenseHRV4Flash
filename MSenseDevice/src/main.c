@@ -601,8 +601,8 @@ void main(void)
   get_storage_percent_full();
   
   
-
-  int global_update = 0;
+  // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
+  int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
 

@@ -157,10 +157,10 @@ void enable_read_only(bool enable){
 void create_test_file(int sectors){
 	printk("trying to write file...\n");
 	
-	char destination[50] = "";
+	char destination[60] = "";
 	int ID = 0;
 	struct fs_mount_t* mp = &fs_mnt;
-	char IDString[5];
+	char IDString[33];
 
 
 	struct fs_file_t test_file;
@@ -172,7 +172,7 @@ void create_test_file(int sectors){
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
 	strcat(destination, IDString);
-	strcat(destination, "testing.txt");
+	strcat(destination, "longfilenametesting.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
 	if (file_create == 0)
 	{

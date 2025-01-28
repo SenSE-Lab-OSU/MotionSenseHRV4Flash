@@ -543,7 +543,6 @@ void start_stop_device_collection(uint8_t val){
       gyro_first_read = 0;
       magneto_first_read = 0;  
       ppgRead = 0;
-      host_wants_collection = true;
       collecting_data = true;
       
     } 

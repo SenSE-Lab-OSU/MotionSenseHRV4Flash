@@ -983,11 +983,14 @@ void motion_config(void){
 }
 
 void getIMUID(){
-    uint8_t m_tx_buf[2] = {0, 0};	/**< TX buffer. */
-    uint8_t m_rx_buf[1] = {1};  /**< RX buffer. */
-    const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
-    spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, 1);
-    LOG_INF("IMU ID: %04x", &m_rx_buf);
+
+  uint8_t tx_buffer[4],rx_buffer[4];
+  tx_buffer[0] = READMASTER | 0x00;
+  tx_buffer[1] = 0xFF;
+  uint8_t txLen=2,rxLen=2;
+  spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
+  LOG_INF("Chip ID from motion sensor=%x\n",rx_buffer[1]);
+    
 }
 
 void motionSensitivitySampling_config(void){

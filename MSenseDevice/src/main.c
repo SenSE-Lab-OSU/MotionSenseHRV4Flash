@@ -623,7 +623,7 @@ void main(void)
       battery_maintenance();
       get_current_unix_time();
       #if CONFIG_LOG_LEVEL_IMU_COLLECTION == 4 
-      spi_verify_sensor_ids();
+      if (!collecting_data){spi_verify_sensor_ids();}
       #endif
       if (!file_lock){
       }

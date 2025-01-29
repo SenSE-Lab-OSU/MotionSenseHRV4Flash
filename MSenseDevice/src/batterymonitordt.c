@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020 Linumiz
+ * Copyright (c) 2025 The Ohio State University SENSE Lab
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,10 +8,34 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/services/bas.h>
+#include <zephyr/../../drivers/sensor/bq274xx/bq274xx.h> // screw you zephyr 
 #include "batteryMonitor.h"
+#include "BLEService.h"
 
 int battery_level = 100;
+
+
+/* I had to copy over this from zephyr/drivers/sensor/bq274xx.c because it has static scope thus preventing me from internally linking it here.
+ whoever's idea it was to make these functions static, I have no clue */
+int bq274xx_cmd_reg_read(const struct device *dev, uint8_t reg_addr,
+				int16_t *val)
+{
+	const struct bq274xx_config *config = dev->config;
+	uint8_t i2c_data[2];
+	int ret;
+
+	ret = i2c_burst_read_dt(&config->i2c, reg_addr, i2c_data, sizeof(i2c_data));
+	if (ret < 0) {
+		printk("Unable to read register");
+		return -EIO;
+	}
+
+	*val = sys_get_le16(i2c_data);
+
+	return 0;
+}
 
 
 void bq274xx_show_values(const char *type, struct sensor_value value)
@@ -215,10 +239,12 @@ void dt_update_battery(const struct device *dev)
 
 		printk("Gauge Temperature: %d.%06d C\n", int_temp.val1,
 		       int_temp.val2);
-		
-		
 
 		
-	
+		uint16_t flags_value;
+		const struct device* battery_device = DEVICE_DT_GET(DT_INST(0, ti_bq274xx));
+		bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
+		battery_charging = !(flags_value & 1);
+		printk("register status: %hu \n", flags_value); 
+		printk("is charging: %d \n", battery_charging);
 }
-

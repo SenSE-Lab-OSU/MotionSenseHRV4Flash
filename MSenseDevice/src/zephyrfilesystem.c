@@ -47,7 +47,9 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 
 struct k_work_q my_work_q;
 
-memory_container work_item;
+memory_container ppg_work_item;
+
+memory_container accel_work_item;
 
 //data limit per file in bytes
 static int data_limit = MAX_BUFFER_SIZE;
@@ -74,7 +76,7 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
-const int max_writes = 64;
+const int max_writes = 256;
 
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;
@@ -127,13 +129,13 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg and uint32 global counter"
+	.sensor_format = "4 channels of uint32 ppg, uint32 timer and uint32 counter"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
 	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 global counter"
+	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 timer, uint32 counter"
 };
 
 
@@ -152,28 +154,47 @@ void enable_read_only(bool enable){
 }
 
 
-void create_test_files(){
-	printk("trying to write files...\n");
-	struct fs_file_t test_file;
-	fs_file_t_init(&test_file);
+void create_test_file(int sectors){
+	printk("trying to write file...\n");
+	
 	char destination[50] = "";
 	int ID = 0;
-	ID = sys_rand32_get() % 900;
-	char IDString[5];
-	itoa(ID, IDString,  10);
 	struct fs_mount_t* mp = &fs_mnt;
+	char IDString[5];
+
+
+	struct fs_file_t test_file;
+	fs_file_t_init(&test_file);
+	
+	ID = sys_rand32_get() % 90000;
+	itoa(ID, IDString,  10);
+
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
 	strcat(destination, IDString);
-	strcat(destination, "test.txt"); 
+	strcat(destination, "testing.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
-	if (file_create == 0){
-		char a[] = "hello world";
-		printk("trying to write...\n");
-		fs_write(&test_file, a, sizeof(a));
+	if (file_create == 0)
+	{
+		char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
+		every day for miles. he wandered and wandered for miles.";
+		for (int i = 0; i < sectors; i++)
+		{
+			printk("trying to write...\n");
+			fs_write(&test_file, a, sizeof(a));
+		}
 		printk("done writing\n");
 		fs_close(&test_file);
 	}
+}
+
+void create_test_files(int number_of_files){
+
+	for (int x = 0; x < number_of_files; x++){
+		create_test_file(256);
+	}
+
+
 }
 
 void create_sensor_file(MotionSenseFile* MSenseFile){
@@ -209,8 +230,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		
 		
 		int ID = 0;
-		char IDString[5];
-		char patient_id[6];
+		// max itoa can do is 33 with binary, but theoretically it will be < 9
+		char IDString[33];
+		char patient_id[33];
 		if (use_random_files){
 			
 		
@@ -322,7 +344,8 @@ void work_write(struct k_work* item){
         CONTAINER_OF(item, memory_container, work);
 	start_timer();
 	sensor_write_to_file(container->address, container->size, container->sensor);
-	stop_timer();
+	int64_t time_value = stop_timer();
+	LOG_INF("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -335,15 +358,24 @@ void work_write(struct k_work* item){
 void submit_write(const void* data, size_t size, enum sensor_type type){
 	
 	//memcpy(work_item.address, data, size);
-	work_item.address = data;
-	work_item.size = size;
-	work_item.sensor = type;
+	memory_container* work_item;
+	if (type == ppg){
+		work_item = &ppg_work_item;
+	}
+	else if (type == accelorometer){
+		work_item == &accel_work_item;
+	}
+
+	work_item->address = data;
+	work_item->size = size;
+	work_item->sensor = type;
 	packet_number++;
-	work_item.packet_num = packet_number;
-	int ret = k_work_submit_to_queue(&my_work_q, &work_item.work);
+	work_item->packet_num = packet_number;
+	int ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
 	if (ret != 1){
-		LOG_ERR("bad ret value: %i", ret);
 		upload_timeout_errors += 1;
+		LOG_ERR("bad ret value: %i, total_errors: %d", ret, upload_timeout_errors);
+		
 	}
 	LOG_INF("ret value: %i", ret);
 
@@ -414,7 +446,7 @@ int write_ble_uuid(const char* uuid){
 		strcat(uuid, "\n accel format: ");
   		strcat(uuid, accel_file.sensor_format);
 		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
-		res = f_expand(name_file.filep, 4096 * 4, 1);
+		//res = f_expand(name_file.filep, 4096 * 4, 1);
 		res = fs_write(&name_file, uuid, strlen(uuid));
 		res = 1;
 	}
@@ -472,7 +504,8 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 
 #if CONFIG_FAT_FILESYSTEM_ELM
 	static FATFS fat_fs;
-
+	//FS_MOUNT_FLAG_USE_DISK_ACCESS
+	//mnt->flags = FS_MOUNT_FLAG_READ_ONLY;
 	mnt->type = FS_FATFS;
 	mnt->fs_data = &fat_fs;
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
@@ -616,6 +649,28 @@ uint64_t get_current_unix_time(){
 	return current_time;
 }
 
+// for now we will use Mountain Time (UTC -7)
+#define TIMEZONE_SHIFT -8
+// To make this work with the file system, you will need to set FF_FS_NORTC to 0 in  zephyr\modules\fatfs (line 82).
+DWORD get_fattime(void)
+{
+	time_t t;
+	struct tm *stm;
+
+	t = get_current_unix_time();
+	// stm = localtime(&t);
+	if (set_date_time != 0)
+	{
+		stm = gmtime(&t);
+		return (DWORD)(stm->tm_year - 80) << 25 |
+			   (DWORD)(stm->tm_mon + 1) << 21 |
+			   (DWORD)stm->tm_mday << 16 |
+			   (DWORD)(stm->tm_hour + TIMEZONE_SHIFT) << 11 |
+			   (DWORD)stm->tm_min << 5 |
+			   (DWORD)stm->tm_sec >> 1;
+	}
+	return 0;
+}
 
 int64_t start_time;
 
@@ -627,7 +682,7 @@ void start_timer(){
 int64_t stop_timer(){
 	int64_t length = k_uptime_get() - start_time;
 	start_time = 0;
-	//LOG_WRN("Timer Value: %lli ms", length);
+	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }
 

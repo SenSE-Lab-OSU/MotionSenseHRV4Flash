@@ -48,7 +48,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 3000
+#define SLEEP_TIME_MS 5000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -127,8 +127,7 @@ struct ppgData ppgData1;
 const struct device *spi_dev_ppg, *spi_dev_imu;
 const struct device *i2c_dev;
 
-struct bq274xx_data batteryMonitor;
-struct bq274xx_config batteryMonitorConfig;
+
 
 uint8_t blePktTFMicro[ble_tfMicroPktLength];
 
@@ -301,6 +300,9 @@ static void bt_ready(int err)
 
   write_uuid_file();
   #ifndef CONFIG_DEBUG
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
     usb_enable(usb_status_cb);
   #endif
 }
@@ -474,13 +476,14 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (collecting_data || host_wants_collection){
-        if (battery_level < 5 && collecting_data){
+        if (battery_level < 10 && collecting_data){
             battery_low = true;
             start_stop_device_collection(false);
         }
         else if (battery_level > 15 && host_wants_collection && !collecting_data){
-            start_stop_device_collection(true);
             battery_low = false;
+            start_stop_device_collection(true);
+            
         }
   }
   #endif
@@ -512,8 +515,11 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-  
-  #ifdef CONFIG_DEBUG
+  //create_test_files(950);
+  #ifdef CONFIG_DEBUG  
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
     usb_enable(usb_status_cb);
   #endif
   k_sleep(K_SECONDS(2));
@@ -586,17 +592,18 @@ void main(void)
 #endif
 
   
-  k_work_init(&work_item.work, work_write);
+  k_work_init(&ppg_work_item.work, work_write);
+
+  k_work_init(&accel_work_item.work, work_write);
 
   ble_init();
   
   get_storage_percent_full();
   
   
-
-  int global_update = 0;
+  // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
+  int global_update = 9;
   int update_time = SLEEP_TIME_MS;
-  enable_read_only(true);
   
 
   while (1)

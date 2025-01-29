@@ -54,14 +54,9 @@ def pd_graph_generation(title:str, data_set:pd.DataFrame):
 
 
 if __name__ == "__main__":
-    data = pd.read_csv("H:/ppg_signal/for_MATLAB_tool/BILATERAL_reading_564_on_2024-06-02.csv", delimiter="\t", header=1)
+    path = "H:/ppg_signal/for_MATLAB_tool/BILATERAL_reading_564_on_2024-06-02.csv"
+    data = pd.read_csv(path)
 
-    ppg = data["PPG"]
-    left_ppg = data.loc[data["Laterality"] == "LEFT_ARM"]["PPG"]
-    right_ppg = data.loc[data["Laterality"] == "RIGHT_ARM"]["PPG"].reset_index(drop=True)
-    left_time = data.loc[data["Laterality"] == "LEFT_ARM"]["Time"]
-    right_time = data.loc[data["Laterality"] == "RIGHT_ARM"]["Time"].reset_index(drop=True)
-    ppg_alone = {"Left PPG": left_ppg, "Left Time":left_time, "Right PPG": right_ppg, "Right Time":right_time }
-    processed_df = pd.concat(ppg_alone, axis=1)
-    pd_graph_generation("ppg", processed_df)
+
+    pd_graph_generation(path, data)
     print("done")

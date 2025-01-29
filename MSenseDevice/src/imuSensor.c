@@ -940,14 +940,14 @@ void motion_config(void){
       LP_CONFIG,I2C_MST_CYCLE,
       INT_PIN_CFG,0x00,
       REG_BANK_SEL,REG_BANK_2, // changing the register bank to 2
-      GYRO_SMPLRT_DIV,0x01, // 1100/(1+GYRO_SMPLRT_DIV) 
-                            //  rate of Gyroscope = 550 Hz	
+      GYRO_SMPLRT_DIV,0x03, // 1100/(1+GYRO_SMPLRT_DIV) 
+                            //  rate of Gyroscope = 275 Hz	
       GYRO_CONFIG_1,GYRO_DLPFCFG_51HZ | GYRO_FS_SEL_500, 
                             // gyro full scale =500 dps, LPF = 119.5 Hz 
       ACCEL_CONFIG,ACCEL_DLPFCFG_12HZ | ACCEL_FS_SEL_4g |
         ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 11.6 Hz
       ACCEL_SMPLRT_DIV_1,0x00, // sample rate accel MSB
-      ACCEL_SMPLRT_DIV_2,0x01, // sampling rate accel =560 Hz
+      ACCEL_SMPLRT_DIV_2,0x10, // sampling rate accel = 66 Hz (1125/(1+DIV))
       REG_BANK_SEL,REG_BANK_3,
       I2C_MST_ODR_CONFIG, 0x01, // i2c master dutycycle configuration = 550 Hz,
       I2C_MST_DELAY_CTRL, DELAY_ES_SHADOW, // i2c_mst_delay_ctl = delays shadowing of external sensor

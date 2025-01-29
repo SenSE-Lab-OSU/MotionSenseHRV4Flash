@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 
-LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
+LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_IMU_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;

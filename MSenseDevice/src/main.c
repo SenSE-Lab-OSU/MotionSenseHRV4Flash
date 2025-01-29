@@ -43,6 +43,7 @@
 #endif
 #endif
 
+// for some reason, logging does not work initially, but in the while loop, this log (LOG_INF) will work.
 LOG_MODULE_REGISTER(main);
 
 #define READMASTER 0x80
@@ -616,9 +617,14 @@ void main(void)
       global_update = 0;
     }
 
+    
+
     if (global_update % 10 == 0){
       battery_maintenance();
       get_current_unix_time();
+      #if CONFIG_LOG_LEVEL_IMU_COLLECTION == 4 
+      spi_verify_sensor_ids();
+      #endif
       if (!file_lock){
       }
     }

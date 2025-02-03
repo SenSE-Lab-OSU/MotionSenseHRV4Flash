@@ -542,7 +542,7 @@ uint32_t ppg_samples[6] = {0};
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
-  store_data(ppg_samples, sizeof(ppg_samples), 0);
+  
   //start_timer();
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
@@ -651,7 +651,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   ppg_samples[4] = get_current_unix_time();
   ppg_samples[5] = global_counter;
 
-  //store_data(ppg_samples, sizeof(ppg_samples), 0);
+  store_data(ppg_samples, sizeof(ppg_samples), 0);
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};
   //store_data(test_fill_arr, sizeof(test_fill_arr), 0);

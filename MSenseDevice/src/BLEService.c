@@ -337,6 +337,7 @@ static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_g
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
+#define TIMER_US 3125 
 #define TIMER_PRIORITY 1
 
 
@@ -364,9 +365,9 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
             LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
           }
         }  
-        // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
+        // gyroConfig.tot_samples is 10 and ppg.numCounts is set in main.c at 5
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-        magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+        magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
         
         gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
         
@@ -410,10 +411,9 @@ printk("timer init\n");
   }
   else
           printk("nrfx_timer_init success with: %d\n", err);
-  time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
-  printk("time ticks = %d\n", time_ticks);
-
-
+  
+  //time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
+  time_ticks = nrfx_timer_us_to_ticks(&timer_global, TIMER_US);
   nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks, 
   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
 
@@ -522,8 +522,8 @@ void reset_device(){
 
 void start_stop_device_collection(uint8_t val){
 
+
   if (val != collecting_data){
-    
     if (val){
       ppg_config();
       motion_config();

@@ -392,7 +392,7 @@ static void spi_init(void)
 
   gyroConfig.isEnabled = true;
   gyroConfig.txPacketEnable = true;
-  gyroConfig.tot_samples = 8;
+  gyroConfig.tot_samples = 10;
   gyroConfig.sensitivity = GYRO_FS_SEL_500;
   orientationConfig.isEnabled = true;
   orientationConfig.txPacketEnable = true;

@@ -650,7 +650,7 @@ uint64_t get_current_unix_time(){
 }
 
 // for now we will use Mountain Time (UTC -7)
-#define TIMEZONE_SHIFT -7
+#define TIMEZONE_SHIFT -8
 // To make this work with the file system, you will need to set FF_FS_NORTC to 0 in  zephyr\modules\fatfs (line 82).
 DWORD get_fattime(void)
 {

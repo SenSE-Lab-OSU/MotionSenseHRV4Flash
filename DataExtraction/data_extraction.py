@@ -227,7 +227,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "F:/"
+    path = "C:/Users/Devan/Downloads/motion/motion/Left_drive/"
 
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
@@ -241,7 +241,7 @@ if __name__ == '__main__':
     ppg_formats = ["<i", "<i", "<i", "<i", "<i", "<i"]
 
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Timestamp", "Counter"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter"]
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f", "<i", "<i"]
 
 

@@ -9,6 +9,7 @@ typedef struct memory_container {
 	size_t size;
 	enum sensor_type sensor;
 	int packet_num;
+	bool in_use;
 	struct k_work work;
 
 } memory_container;

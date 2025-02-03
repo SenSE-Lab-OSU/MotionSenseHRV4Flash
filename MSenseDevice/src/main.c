@@ -593,9 +593,10 @@ void main(void)
 
   
   k_work_init(&ppg_work_item.work, work_write);
+  ppg_work_item.sensor = ppg;
 
   k_work_init(&accel_work_item.work, work_write);
-
+  accel_work_item.sensor = accelorometer;
   ble_init();
   
   get_storage_percent_full();
@@ -619,6 +620,7 @@ void main(void)
     if (global_update % 10 == 0){
       battery_maintenance();
       get_current_unix_time();
+      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
       if (!file_lock){
       }
     }

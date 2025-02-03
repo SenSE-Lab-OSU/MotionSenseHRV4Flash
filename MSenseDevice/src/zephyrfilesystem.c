@@ -277,7 +277,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file, bytes written = %i ! \n", total_written);
+		LOG_INF("sucessfully wrote to file for %d, bytes written = %i ! \n", sensor, total_written);
 		data_counter += total_written;
 	}
 	if (MSenseFile->current_writes >= max_writes){
@@ -342,7 +342,10 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
+	
 	start_timer();
+	LOG_INF("writing true for container %d", container->sensor);
+	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer();
 	LOG_INF("write timer: %lli", time_value);
@@ -352,6 +355,8 @@ void work_write(struct k_work* item){
 	}
 	LOG_INF("Processing packet %i", container->packet_num);
 	last_packet_number_processed = container->packet_num;
+	LOG_INF("writing false for container %d", container->sensor);
+	container->in_use = false;
 
 }
 
@@ -363,8 +368,11 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		work_item = &ppg_work_item;
 	}
 	else if (type == accelorometer){
-		work_item == &accel_work_item;
+		work_item = &accel_work_item;
 	}
+	LOG_INF("state: %d", k_work_busy_get(work_item));
+	
+	if (!work_item->in_use){
 
 	work_item->address = data;
 	work_item->size = size;
@@ -374,11 +382,14 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	int ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
 	if (ret != 1){
 		upload_timeout_errors += 1;
-		LOG_ERR("bad ret value: %i, total_errors: %d", ret, upload_timeout_errors);
+		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
 		
 	}
-	LOG_INF("ret value: %i", ret);
-
+	LOG_INF("ret value for %i: %i", type, ret);
+	}
+	else{
+		LOG_ERR("work item attempted schedule while still running for type: %i", type);
+	}
 }
 
 

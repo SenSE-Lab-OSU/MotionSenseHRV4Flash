@@ -766,7 +766,7 @@ void motion_data_timeout_handler(struct k_work *item)
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
     // int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
     // memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
-
+    //former value was 15
     int16_t accel_and_gyro[15] = {dataReadAccX, dataReadAccY, dataReadAccZ};
 
     memcpy(&accel_and_gyro[3], temp1[0].floatcast, sizeof(temp1[0].floatcast));

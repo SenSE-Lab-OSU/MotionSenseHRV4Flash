@@ -363,7 +363,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		work_item = &ppg_work_item;
 	}
 	else if (type == accelorometer){
-		work_item == &accel_work_item;
+		work_item = &accel_work_item;
 	}
 
 	work_item->address = data;

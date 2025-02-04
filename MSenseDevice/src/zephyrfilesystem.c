@@ -370,7 +370,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == accelorometer){
 		work_item = &accel_work_item;
 	}
-	LOG_INF("state: %d", k_work_busy_get(work_item));
+	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
 	
 	if (!work_item->in_use){
 
@@ -472,11 +472,11 @@ int write_ble_uuid(const char* uuid){
 
 int close_all_files(){
 
-	int code = fs_close(&file);
+	
 	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
 	
-	return code;
+	return 0;
 
 }
 

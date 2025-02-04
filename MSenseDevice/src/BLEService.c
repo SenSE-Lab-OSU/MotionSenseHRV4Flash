@@ -549,6 +549,7 @@ void start_stop_device_collection(uint8_t val){
     } 
     else{
       timer_deinit();
+      k_sleep(K_MSEC(500));
       close_all_files();
       enmo_sample_counter = 0;
 

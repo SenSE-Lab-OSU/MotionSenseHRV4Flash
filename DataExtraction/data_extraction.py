@@ -241,7 +241,7 @@ if __name__ == '__main__':
     ppg_formats = ["<i", "<i", "<i", "<i", "<i", "<i"]
 
 
-    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Counter"]
+    acc_labels = ["AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "ENMO", "Timestamp", "Counter"]
     acc_formats = ["<h", "<h", "<h", "<f", "<f", "<f", "<f", "<i", "<i"]
 
 

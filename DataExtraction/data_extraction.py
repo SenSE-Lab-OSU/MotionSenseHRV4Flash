@@ -58,6 +58,7 @@ def process_data(data, categories: list[list], format: list, use_check=False) ->
     data_position = 0
     num_of_categories = len(categories)
     end_trim_size = calculate_file_end(data)
+    print("info: end trim size is " + str(end_trim_size))
     data_length = len(data) - end_trim_size
     while data_position + struct_key[format[current_index][1]] <= data_length:
         try:
@@ -211,7 +212,7 @@ def collect_all_data_by_prefix(path, prefix: str, labels: list[str], types: list
 
 def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, labels, formats):
     try:
-        file_name = file_prefix + str(search_key) + "_at_" + str(int(datetime.datetime.now().timestamp()))
+        file_name = file_prefix + str(search_key) + "_graph_generated_on_" + str(int(datetime.datetime.now().timestamp()))
 
         file_name += type_prefix
         data_set = collect_all_data_by_prefix(path, search_key, labels, formats)

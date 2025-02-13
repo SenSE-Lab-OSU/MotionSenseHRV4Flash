@@ -338,11 +338,19 @@ static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_g
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
 #define TIMER_US 3125 
-#define TIMER_PRIORITY -5
+#define TIMER_PRIORITY 7
 
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
+  #ifdef CONFIG_LOG
   LOG_DBG("Timer Executing");
+  static uint64_t prev_time = 0;
+  if (k_uptime_get()-prev_time > 8){
+    LOG_ERR("Timer: %d", );
+  }
+  prev_time = k_uptime_get();
+  #endif 
+
   if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
@@ -398,9 +406,12 @@ printk("timer init\n");
           .frequency = 1000000,
           .mode      = NRF_TIMER_MODE_TIMER,
           .bit_width = NRF_TIMER_BIT_WIDTH_24,
+          // timer priority is according to cortex m, not zephyr . Lower is still better, but 7 is the closest without
+          // interfering with ble.
           .interrupt_priority = TIMER_PRIORITY,
           .p_context = NULL,
   };  
+  
   
   uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
   nrfx_timer_config_t config = timer_cfg; 
@@ -411,6 +422,8 @@ printk("timer init\n");
   }
   else
           printk("nrfx_timer_init success with: %d\n", err);
+  IRQ_CONNECT(TIMER1_IRQn, 0, nrfx_timer_1_irq_handler, NULL, 0);
+  irq_enable(TIMER1_IRQn);
   
   //time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
   time_ticks = nrfx_timer_us_to_ticks(&timer_global, TIMER_US);

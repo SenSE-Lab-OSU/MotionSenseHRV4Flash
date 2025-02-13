@@ -536,12 +536,6 @@ void main(void)
 #endif
 #endif
 
-  // the "1" is the timer priority
-  IRQ_CONNECT(TIMER1_IRQn, 1,
-              nrfx_timer_1_irq_handler, NULL, 0);
-
-
-  
   
   
   

@@ -346,7 +346,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   LOG_DBG("Timer Executing");
   static uint64_t prev_time = 0;
   if (k_uptime_get()-prev_time > 8){
-    LOG_ERR("Timer: %d", );
+    LOG_ERR("Timer: %d", k_uptime_get()-prev_time);
   }
   prev_time = k_uptime_get();
   #endif 
@@ -632,7 +632,7 @@ uint16_t offset, uint8_t flags){
   }
 
   uint64_t val = *((uint64_t *)buff);
-  LOG_INF("write: %llu", val);
+  LOG_INF("writing: %llu", val);
   set_date_time_bt(val);
   return len;
 }

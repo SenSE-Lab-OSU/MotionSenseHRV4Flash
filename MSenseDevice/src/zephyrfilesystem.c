@@ -229,7 +229,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		fs_file_t_init(&MSenseFile->self_file);
 		
 		
-		int ID = 0;
+		uint64_t ID = 0;
 		// max itoa can do is 33 with binary, but theoretically it will be < 9
 		char IDString[33];
 		char patient_id[33];
@@ -240,11 +240,15 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			
 		}
 		else {
-			uint64_t current_time = get_current_unix_time();
+			/* Lance TODO: replace this get_current_unix_time() with a variable that represents 
+			 the actual start time of collection. Something like MSenseFile->start_time */ 
+			uint64_t current_time = get_current_unix_time(); 
+			
 			ID = current_time;
 
 		}
-		itoa(ID, IDString,  10);
+		sprintf(IDString, "%llu", ID);
+		//itoa(ID, IDString,  10);
 		
 
 		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));

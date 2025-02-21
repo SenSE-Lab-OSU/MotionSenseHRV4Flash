@@ -76,6 +76,8 @@ float32_t std_ppgThreshold = 150;
 uint8_t adaptIterMax = 30;
 uint8_t binarySteps = 0;
 
+bool use_fixed_ppg_brightness = false;
+
 // static float ppg_num[400];
 
 int ppg_print_counter;
@@ -690,11 +692,11 @@ void read_ppg_fifo_buffer(struct k_work *item)
     }
   }
 #endif
-#if !CONFIG_USE_FIXED_PPG_BRIGHTNESS
+ if (!(use_fixed_ppg_brightness || CONFIG_USE_FIXED_PPG_BRIGHTNESS)){
 
       ppg_led_update();
-#endif
 
+  }
 
   //int64_t timer_value = stop_timer();
 

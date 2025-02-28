@@ -1062,13 +1062,14 @@ void magnetometer_sleep(void){
   
 void motion_sleep(void){
   if(gyroConfig.isEnabled){
-    uint8_t m_tx_buf[2] = {0xF5,0xFF};		/**< TX buffer. */
+    uint8_t m_tx_buf[2] = {0xF5, 0xFF};		/**< TX buffer. */
     uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
  
-    const uint8_t imu_config[4] = { 
+    const uint8_t imu_config[6] = { 
       REG_BANK_SEL,REG_BANK_0,
-      PWR_MGMT_1,IMU_SLEEP | IMU_CLK_SEL_BEST_SEL  // sleep mode and temparature disable
+      PWR_MGMT_1, IMU_RESET,
+      PWR_MGMT_1, IMU_SLEEP | IMU_CLK_SEL_BEST_SEL  // sleep mode enable
     };	/**< IMU configuration commands. */
 		
     for(int i = 0; i < sizeof(imu_config); i += 2){

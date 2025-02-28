@@ -225,13 +225,13 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
 BT_GATT_SERVICE_DEFINE(status_service, 
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_uptime, NULL, &uptime),
 );
 
@@ -324,7 +324,7 @@ void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *b
 }
 
 
-static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_ble_status_register(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
@@ -1096,6 +1096,53 @@ void enmo_threshold_send(uint8_t* data, uint8_t len){
     }
   } 
 
+}
+
+
+int status_reg_ble_notification(){
+
+  for (int x = 0; x < num_of_status_registers; x++){
+    ble_status_register_send[x] = *status_registers[x];
+  }
+  const struct bt_gatt_attr *attr = &status_service.attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+}
+
+int storage_ble_notification(uint8_t* data, uint8_t len){
+
+  const struct bt_gatt_attr *attr = &status_service.attrs[2];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+}
+
+
+int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
+
+  const struct bt_service_static* selected_service;
+  switch (service){
+    case 0:
+      selected_service = &tfMicro_service;
+
+  }
+  const struct bt_gatt_attr *attr; //= selected_service->attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
 }
 
 

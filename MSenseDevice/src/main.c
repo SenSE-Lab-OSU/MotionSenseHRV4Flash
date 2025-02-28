@@ -374,7 +374,6 @@ static void spi_init(void)
   spi_cfg_imu.cs = imu_cs;
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
-  getIMUID();
   
   // high_pass_filter_init_25();
 
@@ -413,10 +412,7 @@ static void spi_init(void)
 
 void spi_verify_sensor_ids()
 {
-  uint8_t tx_buffer[4], rx_buffer[4];
-  tx_buffer[0] = READMASTER | 0x00;
-  tx_buffer[1] = 0xFF;
-  uint8_t txLen = 2, rxLen = 2;
+  
   if (device_is_ready(spi_dev_imu))
   {
     getIMUID();
@@ -425,7 +421,9 @@ void spi_verify_sensor_ids()
   {
     LOG_WRN("IMU not ready, setup was avoided");
   }
-
+  
+  uint8_t tx_buffer[4], rx_buffer[4];
+  uint8_t txLen = 3, rxLen = 3;
   tx_buffer[0] = PPG_CHIP_ID_1;
   tx_buffer[1] = READMASTER;
   tx_buffer[2] = 0x00;
@@ -548,7 +546,7 @@ void main(void)
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
   // initialize imu ground pin
-  //ret = gpio_pin_configure(gpio0_device, 27, GPIO_OUTPUT_INACTIVE);
+  ret = gpio_pin_configure(gpio0_device, 27, GPIO_OUTPUT_INACTIVE);
   if (ret < 0)
   {
     printk("Error: Can't initialize LED");
@@ -614,7 +612,7 @@ void main(void)
       global_update = 0;
     }
 
-    if (global_update % 10 == 0){
+    if (global_update % 5 == 0){
       battery_maintenance();
       get_current_unix_time();
       LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));

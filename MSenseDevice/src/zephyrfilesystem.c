@@ -8,6 +8,8 @@
 
 
 #include <stdlib.h>
+
+#include "BLEService.h"
 #include "zephyrfilesystem.h"
 
 
@@ -636,6 +638,7 @@ int get_storage_percent_full(){
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
 	storage_percent_full = (int)storage_percent;
+	storage_ble_notification(&storage_percent_full, sizeof(storage_percent_full));
 	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 

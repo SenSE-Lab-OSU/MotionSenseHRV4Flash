@@ -230,9 +230,11 @@ BT_GATT_SERVICE_DEFINE(status_service,
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
     BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
+    BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_uptime, NULL, &uptime),
+    BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 /* update service: read ENMO updates */

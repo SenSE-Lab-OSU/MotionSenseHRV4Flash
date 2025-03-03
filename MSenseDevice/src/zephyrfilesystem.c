@@ -113,6 +113,8 @@ typedef struct MotionSenseFile {
 	int write_size;
 	int current_writes;
 	int data_counter;
+	uint64_t start_time;
+	bool first_sample_init;
 	char sensor_string[5];
 	char file_name[50];
 	char sensor_format[80];
@@ -244,7 +246,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		else {
 			/* Lance TODO: replace this get_current_unix_time() with a variable that represents 
 			 the actual start time of collection. Something like MSenseFile->start_time */ 
-			uint64_t current_time = get_current_unix_time(); 
+			uint64_t current_time = MSenseFile->start_time; 
 			
 			ID = current_time;
 
@@ -419,6 +421,11 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		current_buffer = &MSenseFile->buffer1;
 	}
 
+	if (!MSenseFile->first_sample_init){
+		MSenseFile->start_time = get_current_unix_time();
+		MSenseFile->first_sample_init = true;
+	}
+
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
 	//memcpy(arr, address_to_write, size);
@@ -426,6 +433,9 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
 			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
+		}
+		if ((MSenseFile->current_writes + 1) >= max_writes){
+			MSenseFile->first_sample_init = false;
 		}
 		LOG_INF("Submitting File!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);

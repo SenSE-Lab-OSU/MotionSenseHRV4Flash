@@ -223,8 +223,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
 	
-	int sucess = spi_init(dev);
-	return 0;
+	return spi_init(dev);
 }
 
 

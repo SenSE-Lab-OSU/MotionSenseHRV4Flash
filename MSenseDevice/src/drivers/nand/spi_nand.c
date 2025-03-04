@@ -297,10 +297,11 @@ static int spi_nand_access(const struct device *const dev, spi_send_request* req
 	// get parameters needed for spi_transceive and spi_write
 	struct spi_dt_spec spi_spec = driver_cfg->spi;
 	struct spi_config spi_flash_cfg = spi_spec.config;
-
-	gpio_pin_t flash_pin = cs_pins[current_flash];
-	spi_flash_cfg.cs.gpio.pin = flash_pin;
-
+	if (current_flash) {
+		gpio_pin_t flash_pin = cs_pins[current_flash];
+		spi_flash_cfg.cs.gpio.pin = flash_pin;
+	}
+	
 	int ret;
 	
 	uint8_t buf[5] = { 0 };

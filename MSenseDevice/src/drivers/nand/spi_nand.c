@@ -88,7 +88,7 @@ int current_reads = 0;
 int current_erases = 0;
 
 // die select for each flash
-int current_die[4] = 0;
+int current_die[4] = {0};
 
 
 // parameter for multiple flashes.

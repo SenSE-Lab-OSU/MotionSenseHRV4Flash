@@ -12,17 +12,19 @@
 
 
 LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
-
+float32_t grad1_x_L1t=0.0,grad1_y_L1t=0.0,grad1_z_L1t=0.0;
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[32];
 uint16_t testcounter = 0;
 int log_counter = 0;
-
+float32_t stepSize = 0.2e-3;
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
+const float gyroThresholdTighter= 0.3f;
+
 uint8_t blePktMagneto[ble_magnetometerPktLength];
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
@@ -128,12 +130,12 @@ static void gyroscope_measurement(float * quaternionResult){
   angularVelY = angularVelY*deg_rad;
   angularVelZ = angularVelZ*deg_rad;
 				
-  runningMeanGyro = newMagGyro/(4*timeWindow) + runningMeanGyro;
-  runningSquaredMeanGyro = newMagGyro*newMagGyro/((4*timeWindow)-1.0f) 
+  runningMeanGyro = newMagGyro/(4*) + runningMeanGyro;
+  runningSquaredMeanGyro = newMagGyro*newMagGyro/((4*)-1.0f) 
    + runningSquaredMeanGyro;
 			
   counterGyro++;
-  //printf("counterGyro=%d,timeWindow=%d\n",counterGyro,timeWindow);
+  //printf("counterGyro=%d,=%d\n",counterGyro,timeWindow);
 
   if(counterGyro >4*timeWindow ){
     counterGyro=0;
@@ -146,6 +148,12 @@ static void gyroscope_measurement(float * quaternionResult){
     else 
       current_gyro_data.movingFlag=true;
   }
+    if(stdGyro <= gyroThresholdTighter) 
+       current_gyro_data.movingFlagAdapt=false;
+     else 
+        current_gyro_data.movingFlagAdapt=true;
+  }
+
   //printf("movingFlag=%d\n",current_gyro_data.movingFlag);
     arm_sqrt_f32(angularVelX*angularVelX +angularVelY*angularVelY
     +angularVelZ*angularVelZ, &thetaRate );
@@ -523,7 +531,15 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     float AccelZ2 = accelZ*accelZ;
 
     //float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
-    float32_t enmo;
+    float32_t enmo,mag_sub,L1t;
+    
+    mag_sub = AccelX2+AccelY2+AccelZ2;
+    L1t = mag_sub -1;
+    grad1_x_L1t = grad1_x_L1tv+L1t*accelX;
+    grad1_y_L1t = grad1_y_L1t+L1t*accelY;
+    grad1_z_L1t = grad1_z_L1t+L1t*accelZ;
+	
+	
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
     if(enmo < 0 ) enmo=0;
@@ -531,7 +547,14 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     enmo_store[counterAcc] = enmo;
     counterAcc++;
     if (counterAcc >= 32){
-      
+      if(current_gyro_data.movingFlagAdapt==True){
+          currentAccData.bias_x = currentAccData.bias_x + stepSize*4*grad1_x_L1t;
+   	  currentAccData.bias_y = currentAccData.bias_y + stepSize*4*grad1_y_L1t;
+          currentAccData.bias_z = currentAccData.bias_z + stepSize*4*grad1_z_L1t;
+      }
+      grad1_x_L1t = 0.0;
+      grad1_y_L1t = 0.0; 
+      grad1_z_L1t = 0.0;	    
       counterAcc = 0;
       //calculate the enmo as an average of 25 samples
       enmo = 0;
@@ -745,10 +768,17 @@ void motion_data_timeout_handler(struct k_work *item)
     accelX = dataReadAccX * dividerAcc / 1.0;
     accelY = dataReadAccY * dividerAcc / 1.0;
     accelZ = dataReadAccZ * dividerAcc / 1.0;
+    accelX = accelX-currentAccData.bias_x;
+    accelY = accelY-currentAccData.bias_y;
+    accelZ = accelZ-currentAccData.bias_z;
+	  
+
+
+    		  
     currentAccData.accx_val = accelX;
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
-    calculate_enmo(accelX, accelY, accelZ);
+    _enmo(accelX, accelY, accelZ);
 
     float_cast_arr[0].float_val = quaternionResult_1[0];
     float_cast_arr[1].float_val = quaternionResult_1[1];
@@ -759,7 +789,7 @@ void motion_data_timeout_handler(struct k_work *item)
     quaternionResult_1[3] = 1.0;
 
     // collect gyroscope for values 6-12
-    gyroscope_measurement(quaternionResult_1);
+    urement(quaternionResult_1);
     // blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
 
     // blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
@@ -824,7 +854,7 @@ void motion_data_timeout_handler(struct k_work *item)
   }
   else
   {
-    gyroscope_measurement(quaternionResult_1);
+    urement(quaternionResult_1);
   }
   /*
   int64_t timer_value = stop_timer();

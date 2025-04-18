@@ -125,9 +125,6 @@ struct accData {
   float accz_val;
   float ENMO;
   uint64_t time;
-  float bias_x; //bias for the accelerometer 
-  float bias_y;
-  float bias_z;
 };
 struct gyroData {
   uint16_t quaternion_1;
@@ -141,8 +138,6 @@ struct gyroData {
   float gyroy_val;
   float gyroz_val;
   bool movingFlag;
-  bool movingFlagAdapt; // will be used for taking the bias out of the accelerator. 
-                        // The threshold will be set tighter to only update rarely
 };
 struct magnetoData {
   int16_t Hx;

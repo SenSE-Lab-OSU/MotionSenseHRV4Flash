@@ -1,12 +1,12 @@
 /*
- * Copyright (c) 2018 Savoir-Faire Linux.
- * Copyright (c) 2020 Peter Bigot Consulting, LLC
- * Copyright (c) 2024 SENSE Lab Ohio State
- * 
- * This driver is heavily inspired from the spi_flash_w25qxxdv.c SPI NOR driver.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+* Copyright (c) 2018 Savoir-Faire Linux.
+* Copyright (c) 2020 Peter Bigot Consulting, LLC
+* Copyright (c) 2024 SENSE Lab Ohio State
+* 
+* This driver is heavily inspired from the spi_flash_w25qxxdv.c SPI NOR driver.
+*
+* SPDX-License-Identifier: Apache-2.0
+*/
 
 
 #define CONFIG_NORDIC_QSPI_NOR_STACK_WRITE_BUFFER_SIZE 4
@@ -30,24 +30,24 @@ int erase_file_table();
 LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 
 /* Device Power Management Notes
- *
- * These flash devices have several modes during operation:
- * * When CSn is asserted (during a SPI operation) the device is
- *   active.
- * * When CSn is deasserted the device enters a standby mode.
- * * Some devices support a Deep Power-Down mode which reduces current
- *   to as little as 0.1% of standby.
- *
- * The power reduction from DPD is sufficient to warrant allowing its
- * use even in cases where Zephyr's device power management is not
- * available.  This is selected through the SPI_NOR_IDLE_IN_DPD
- * Kconfig option.
- *
- * When mapped to the Zephyr Device Power Management states:
- * * PM_DEVICE_STATE_ACTIVE covers both active and standby modes;
- * * PM_DEVICE_STATE_SUSPENDED, and PM_DEVICE_STATE_OFF all correspond to
- *   deep-power-down mode.
- */
+*
+* These flash devices have several modes during operation:
+* * When CSn is asserted (during a SPI operation) the device is
+*   active.
+* * When CSn is deasserted the device enters a standby mode.
+* * Some devices support a Deep Power-Down mode which reduces current
+*   to as little as 0.1% of standby.
+*
+* The power reduction from DPD is sufficient to warrant allowing its
+* use even in cases where Zephyr's device power management is not
+* available.  This is selected through the SPI_NOR_IDLE_IN_DPD
+* Kconfig option.
+*
+* When mapped to the Zephyr Device Power Management states:
+* * PM_DEVICE_STATE_ACTIVE covers both active and standby modes;
+* * PM_DEVICE_STATE_SUSPENDED, and PM_DEVICE_STATE_OFF all correspond to
+*   deep-power-down mode.
+*/
 
 #define SPI_NOR_MAX_ADDR_WIDTH 4
 
@@ -87,19 +87,18 @@ int current_writes = 0;
 int current_reads = 0;
 int current_erases = 0;
 
-
-int current_die = 0;
-
-// Second die for the second flash.
-int current_die2 = 0;
+// die select for each flash
+int current_die[4] = {0};
 
 
 // parameter for multiple flashes.
 int current_flash = 0;
 
 // TODO: put these in device tree
-const int num_of_flashes = 2;
+const int num_of_flashes = 4;
 const int die_per_flash = 2;
+
+const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
 
 static int spi_nor_write_protection_set(const struct device *dev,
 					bool write_protect);
@@ -108,8 +107,8 @@ struct jesd216_erase_type erasetype = {
 		.cmd = SPI_NOR_CMD_BE
 	};
 /* Get pointer to array of supported erase types.  Static const for
- * minimal, data for runtime and devicetree.
- */
+* minimal, data for runtime and devicetree.
+*/
 static inline const struct jesd216_erase_type* dev_erase_types(const struct device *dev)
 {
 	
@@ -117,8 +116,8 @@ static inline const struct jesd216_erase_type* dev_erase_types(const struct devi
 }
 
 /* Get the size of the flash device.  Data for runtime, constant for
- * minimal and devicetree.
- */
+* minimal and devicetree.
+*/
 inline uint32_t dev_flash_size(const struct device *dev)
 {
 #ifdef CONFIG_SPI_NOR_SFDP_RUNTIME
@@ -137,8 +136,8 @@ inline int dev_die_size(const struct device* dev){
 }
 
 /* Get the flash device page size.  Constant for minimal, data for
- * runtime and devicetree.
- */
+* runtime and devicetree.
+*/
 inline uint16_t dev_page_size(const struct device *dev)
 {
 #ifdef CONFIG_SPI_NOR_SFDP_MINIMAL
@@ -171,8 +170,8 @@ static inline void record_entered_dpd(const struct device *const dev)
 }
 
 /* Check the current time against the time DPD was entered and delay
- * until it's ok to initiate the DPD exit process.
- */
+* until it's ok to initiate the DPD exit process.
+*/
 static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 {
 #if DT_INST_NODE_HAS_PROP(0, has_dpd)
@@ -180,11 +179,11 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 	int32_t since = (int32_t)(k_uptime_get_32() - driver_data->ts_enter_dpd);
 
 	/* If the time is negative the 32-bit counter has wrapped,
-	 * which is certainly long enough no further delay is
-	 * required.  Otherwise we have to check whether it's been
-	 * long enough taking into account necessary delays for
-	 * entering and exiting DPD.
-	 */
+	* which is certainly long enough no further delay is
+	* required.  Otherwise we have to check whether it's been
+	* long enough taking into account necessary delays for
+	* entering and exiting DPD.
+	*/
 	if (since >= 0) {
 		/* Subtract time required for DPD to be reached */
 		since -= T_DP_MS;
@@ -193,8 +192,8 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 		since -= T_DPDD_MS;
 
 		/* If the adjusted time is negative we have to wait
-		 * until it reaches zero before we can proceed.
-		 */
+		* until it reaches zero before we can proceed.
+		*/
 		if (since < 0) {
 			k_sleep(K_MSEC((uint32_t)-since));
 		}
@@ -203,23 +202,23 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 }
 
 /* Indicates that an access command includes bytes for the address.
- * If not provided the opcode is not followed by address bytes.
- */
+* If not provided the opcode is not followed by address bytes.
+*/
 #define NOR_ACCESS_ADDRESSED BIT(0)
 
 /* Indicates that addressed access uses a 24-bit address regardless of
- * spi_nor_data::flag_32bit_addr.
- */
+* spi_nor_data::flag_32bit_addr.
+*/
 #define NOR_ACCESS_24BIT_ADDR BIT(1)
 
 /* Indicates that addressed access uses a 32-bit address regardless of
- * spi_nor_data::flag_32bit_addr.
- */
+* spi_nor_data::flag_32bit_addr.
+*/
 #define NOR_ACCESS_32BIT_ADDR BIT(2)
 
 /* Indicates that an access command is performing a write.  If not
- * provided access is a read.
- */
+* provided access is a read.
+*/
 #define NOR_ACCESS_WRITE BIT(7)
 
 
@@ -229,37 +228,23 @@ off_t convert_to_address(uint32_t page, uint32_t block){
 
 // The pages representing a block are from block - 65.
 // 4 gigabit is 536870912 bytes / 4096 = 131072 pages (131071 is last address)
-off_t convert_page_to_address(const struct device* dev, uint32_t page){
+// TODO: update for 4 nand
+off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 
 	// total number of sectors per die. 
 	int die_size = 131072;
 	int selected_die_num = page / die_size;
 	LOG_DBG("die/flash  number: %d", selected_die_num);
-	if (page < die_size){
-		
-		set_flash(dev, 0);
-		set_die(dev, 0);
-		
-	}
-	else if (page < die_size*2){
-		
-		set_flash(dev, 0);
-		set_die(dev, 1);
-	}
-	else if (page < die_size*3) {
-		
-		set_flash(dev, 1);
-		set_die(dev, 0);
-		
-	}
-	else if (page < die_size*4){
-		
-		set_flash(dev, 1);
-		set_die(dev, 1);
-		
-	}
-	return page - die_size*selected_die_num;
 
+	// this works because the flash goes up by 1 every 2 die
+	// and the die alternates between 0 or 1 since each flash has 2 die
+	int flash = selected_die_num / 2;
+	int die = selected_die_num % 2;
+
+	set_flash(dev, flash);
+	set_die(dev, die);
+
+	return page - die_size * selected_die_num;
 }
 
 off_t convert_block_to_address(uint32_t block){
@@ -292,17 +277,17 @@ static void release_device_inner(const struct device *dev)
 
 
 /*
- * @brief Send an SPI command
- *
- * @param dev Device struct
- * @param opcode The command to send
- * @param access flags that determine how the command is constructed.
- *        See NOR_ACCESS_*.
- * @param addr The address to send
- * @param data The buffer to store or read the value
- * @param length The size of the buffer
- * @return 0 on success, negative errno code otherwise
- */
+* @brief Send an SPI command
+*
+* @param dev Device struct
+* @param opcode The command to send
+* @param access flags that determine how the command is constructed.
+*        See NOR_ACCESS_*.
+* @param addr The address to send
+* @param data The buffer to store or read the value
+* @param length The size of the buffer
+* @return 0 on success, negative errno code otherwise
+*/
 static int spi_nand_access(const struct device *const dev, spi_send_request* request)
 {
 	acquire_device_inner(dev);
@@ -312,10 +297,11 @@ static int spi_nand_access(const struct device *const dev, spi_send_request* req
 	// get parameters needed for spi_transceive and spi_write
 	struct spi_dt_spec spi_spec = driver_cfg->spi;
 	struct spi_config spi_flash_cfg = spi_spec.config;
-	if (current_flash){
-		gpio_pin_t pin2 = 4;
-		spi_flash_cfg.cs.gpio.pin = pin2;
+	if (current_flash) {
+		gpio_pin_t flash_pin = cs_pins[current_flash];
+		spi_flash_cfg.cs.gpio.pin = flash_pin;
 	}
+	
 	int ret;
 	
 	uint8_t buf[5] = { 0 };
@@ -368,8 +354,6 @@ static int spi_cmd(const struct device* dev, uint8_t opcode, void* dest, size_t 
 	return spi_nand_access(dev, &request); 
 }
 
-
-
 static uint8_t get_status(const struct device* dev){
 
 	uint8_t data;
@@ -414,18 +398,13 @@ int reset(const struct device* dev){
 int set_die(const struct device* dev, int die_select){
 	
 	uint8_t feature = 0x0;
-    if (die_select == 1) {
+	if (die_select == 1) {
 		feature = 0x40;
 	}
 	int ret = set_features(dev, REGISTER_DIESELECT, feature);
 	if (ret == 0){
-		if (current_flash){
-			current_die2 = die_select;
-		}
-		else {
-			current_die = die_select;
-		}
-		LOG_DBG("current die %d second flash current die: %d", current_die, current_die2);
+		current_die[current_flash] = die_select;
+		LOG_DBG("flash 1 die: %d. flash 2 die: %d. flash 3 die: %d, flash 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
 	}
 	else{
 		LOG_WRN("error with die setting");
@@ -469,7 +448,7 @@ uint8_t get_features(const struct device* dev, uint8_t register_select){
 
 // Should only be used to set all features. to only set an induvidual feature, use set_feature 
 int set_features(const struct device* dev, uint8_t register_select, uint8_t data){
-	 
+	
 	//LOG_INF("setting features for value: %d", data);
 	uint8_t data_arr[] = {
 		register_select,
@@ -534,10 +513,10 @@ int spi_flash_wait_until_ready(const struct device *dev)
 
 
 /* Everything necessary to acquire owning access to the device.
- *
- * This means taking the lock and, if necessary, waking the device
- * from deep power-down mode.
- */
+*
+* This means taking the lock and, if necessary, waking the device
+* from deep power-down mode.
+*/
 static void acquire_device(const struct device *dev)
 {
 	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
@@ -551,10 +530,10 @@ static void acquire_device(const struct device *dev)
 
 
 /* Everything necessary to release access to the device.
- *
- * This means (optionally) putting the device into deep power-down
- * mode, and releasing the lock.
- */
+*
+* This means (optionally) putting the device into deep power-down
+* mode, and releasing the lock.
+*/
 static void release_device(const struct device *dev)
 {
 
@@ -582,7 +561,7 @@ uint8_t spi_rdsr(const struct device *dev)
 {
 	uint8_t status = get_status(dev);
 	if (status > 3){
-	 LOG_WRN("status register: %d", status);
+	LOG_WRN("status register: %d", status);
 	}
 	
 	return status;
@@ -838,8 +817,8 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 
 
 static int spi_nand_write(const struct device *dev, off_t addr,
-			 const void *src,
-			 size_t size)
+			const void *src,
+			size_t size)
 {
 	
 	const size_t flash_size = dev_die_size(dev);
@@ -966,13 +945,12 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 }
 
 int spi_nand_multi_chip_erase(const struct device* dev){
-
-	set_flash(dev, 0);
-	spi_nand_whole_chip_erase(dev);
-	LOG_INF("first chip erase complete, starting second...");
-	k_sleep(K_MSEC(500));
-	set_flash(dev, 1);
-	spi_nand_whole_chip_erase(dev);
+	for (int i = 0; i < num_of_flashes; i++) {
+		set_flash(dev, i);
+		spi_nand_whole_chip_erase(dev);
+		LOG_INF("chip %i has been erased.", i + 1);
+		k_sleep(K_MSEC(500));
+	}
 	set_flash(dev, 0);
 	erase_file_table();
 	LOG_INF("all chip erases complete!");
@@ -1020,9 +998,9 @@ static int spi_nand_erase(const struct device *dev, off_t addr, size_t size)
 					&erase_types[ei];
 
 				if ((etp->exp != 0)
-				    && SPI_NOR_IS_ALIGNED(addr, etp->exp)
-				    && (size >= BIT(etp->exp))
-				    && ((bet == NULL)
+					&& SPI_NOR_IS_ALIGNED(addr, etp->exp)
+					&& (size >= BIT(etp->exp))
+					&& ((bet == NULL)
 					|| (etp->exp > bet->exp))) {
 					bet = etp;
 				}
@@ -1040,12 +1018,12 @@ static int spi_nand_erase(const struct device *dev, off_t addr, size_t size)
 
 #ifdef __XCC__
 		/*
-		 * FIXME: remove this hack once XCC is fixed.
-		 *
-		 * Without this volatile return value, XCC would segfault
-		 * compiling this file complaining about failure in CGPREP
-		 * phase.
-		 */
+		* FIXME: remove this hack once XCC is fixed.
+		*
+		* Without this volatile return value, XCC would segfault
+		* compiling this file complaining about failure in CGPREP
+		* phase.
+		*/
 		volatile int xcc_ret =
 #endif
 		spi_flash_wait_until_ready(dev);
@@ -1063,8 +1041,8 @@ static int spi_nand_erase(const struct device *dev, off_t addr, size_t size)
 }
 
 /* @note The device must be externally acquired before invoking this
- * function.
- */
+* function.
+*/
 static int spi_nor_write_protection_set(const struct device *dev,
 					bool write_protect)
 {
@@ -1078,8 +1056,8 @@ static int spi_nor_write_protection_set(const struct device *dev,
 	}
 
 	if (IS_ENABLED(DT_INST_PROP(0, requires_ulbpr))
-	    && (ret == 0)
-	    && !write_protect) {
+		&& (ret == 0)
+		&& !write_protect) {
 		//ret = spi_nor_cmd_write(dev, SPI_NOR_CMD_ULBPR);
 	}
 
@@ -1089,7 +1067,7 @@ static int spi_nor_write_protection_set(const struct device *dev,
 #if defined(CONFIG_FLASH_JESD216_API) || defined(CONFIG_SPI_NOR_SFDP_RUNTIME)
 
 static int spi_nor_sfdp_read(const struct device *dev, off_t addr,
-			     void *dest, size_t size)
+				void *dest, size_t size)
 {
 	acquire_device(dev);
 
@@ -1103,7 +1081,7 @@ static int spi_nor_sfdp_read(const struct device *dev, off_t addr,
 #endif /* CONFIG_FLASH_JESD216_API || CONFIG_SPI_NOR_SFDP_RUNTIME */
 
 static int spi_read_jedec_id(const struct device *dev,
-				 uint8_t *id)
+				uint8_t *id)
 {
 	if (id == NULL) {
 		return -EINVAL;
@@ -1118,41 +1096,41 @@ static int spi_read_jedec_id(const struct device *dev,
 }
 
 /* Put the device into the appropriate address mode, if supported.
- *
- * On successful return spi_nor_data::flag_access_32bit has been set
- * (cleared) if the device is configured for 4-byte (3-byte) addresses
- * for read, write, and erase commands.
- *
- * @param dev the device
- *
- * @param enter_4byte_addr the Enter 4-Byte Addressing bit set from
- * DW16 of SFDP BFP.  A value of all zeros or all ones is interpreted
- * as "not supported".
- *
- * @retval -ENOTSUP if 4-byte addressing is supported but not in a way
- * that the driver can handle.
- * @retval negative codes if the attempt was made and failed
- * @retval 0 if the device is successfully left in 24-bit mode or
- *         reconfigured to 32-bit mode.
- */
+*
+* On successful return spi_nor_data::flag_access_32bit has been set
+* (cleared) if the device is configured for 4-byte (3-byte) addresses
+* for read, write, and erase commands.
+*
+* @param dev the device
+*
+* @param enter_4byte_addr the Enter 4-Byte Addressing bit set from
+* DW16 of SFDP BFP.  A value of all zeros or all ones is interpreted
+* as "not supported".
+*
+* @retval -ENOTSUP if 4-byte addressing is supported but not in a way
+* that the driver can handle.
+* @retval negative codes if the attempt was made and failed
+* @retval 0 if the device is successfully left in 24-bit mode or
+*         reconfigured to 32-bit mode.
+*/
 static int spi_nor_set_address_mode(const struct device* dev,
-				    uint8_t enter_4byte_addr)
+					uint8_t enter_4byte_addr)
 {
 	int ret = 0;
 
 	/* Do nothing if not provided (either no bits or all bits
-	 * set).
-	 */
+	* set).
+	*/
 	if ((enter_4byte_addr == 0)
-	    || (enter_4byte_addr == 0xff)) {
+		|| (enter_4byte_addr == 0xff)) {
 		return 0;
 	}
 
 	LOG_DBG("Checking enter-4byte-addr %02x", enter_4byte_addr);
 
 	/* This currently only supports command 0xB7 (Enter 4-Byte
-	 * Address Mode), with or without preceding WREN.
-	 */
+	* Address Mode), with or without preceding WREN.
+	*/
 	if ((enter_4byte_addr & 0x03) == 0) {
 		return -ENOTSUP;
 	}
@@ -1183,10 +1161,10 @@ static int flash_reset_and_unlock(const struct device* dev){
 	
 
 	/* Check for block protect bits that need to be cleared.  This
-	 * information cannot be determined from SFDP content, so the
-	 * devicetree node property must be set correctly for any device
-	 * that powers up with block protect enabled.
-	 */
+	* information cannot be determined from SFDP content, so the
+	* devicetree node property must be set correctly for any device
+	* that powers up with block protect enabled.
+	*/
 	acquire_device(dev);
 	reset(dev);
 	spi_flash_wait_until_ready(dev);
@@ -1237,12 +1215,12 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 #endif
 
 	/* After a soft-reset the flash might be in DPD or busy writing/erasing.
-	 * Exit DPD and wait until flash is ready.
-	 */
+	* Exit DPD and wait until flash is ready.
+	*/
 
 	/* now the spi bus is configured, we can verify SPI
-	 * connectivity by reading the JEDEC ID.
-	 */
+	* connectivity by reading the JEDEC ID.
+	*/
 
 	rc = spi_read_jedec_id(dev, jedec_id);
 	if (rc != 0) {
@@ -1252,9 +1230,9 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 
 #ifndef CONFIG_SPI_NOR_SFDP_RUNTIME
 	/* For minimal and devicetree we need to check the JEDEC ID
-	 * against the one from devicetree, to ensure we didn't find a
-	 * device that has different parameters.
-	 */
+	* against the one from devicetree, to ensure we didn't find a
+	* device that has different parameters.
+	*/
 
 	if (memcmp(jedec_id, cfg->jedec_id, sizeof(jedec_id)) != 0) {
 		LOG_ERR("Device id %02x %02x %02x does not match config %02x %02x %02x",
@@ -1289,8 +1267,8 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 
 #ifdef CONFIG_SPI_NOR_SFDP_MINIMAL
 	/* For minimal we support some overrides from specific
-	 * devicertee properties.
-	 */
+	* devicertee properties.
+	*/
 	if (cfg->enter_4byte_addr != 0) {
 		rc = spi_nor_set_address_mode(dev, cfg->enter_4byte_addr);
 
@@ -1318,7 +1296,7 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 #endif 
 
 	if (IS_ENABLED(CONFIG_SPI_NOR_IDLE_IN_DPD)
-	    && (enter_dpd(dev) != 0)) {
+		&& (enter_dpd(dev) != 0)) {
 		return -ENODEV;
 	}
 */
@@ -1381,23 +1359,26 @@ int spi_init(const struct device *dev)
 	struct spi_flash_config *cfg = dev->config;
 	// TODO: go through device tree and get multiple config options
 	ret = spi_configure(dev, cfg);
-	if (ret == 0){
-		// Configure the second spi_flash
-		gpio_pin_t second_pin = 4;
-		struct spi_cs_control cs_control = cfg->spi.config.cs;
-		cs_control.gpio.pin = second_pin;
-		set_flash(dev, 1);
+	if (ret != 0)
+		return ret;
+
+	for (int i = 1; i < 4; i++) {
+		cfg->spi.config.cs.gpio.pin = cs_pins[i];
+		set_flash(dev, i + 1);
 		ret = spi_configure(dev, cfg);
-		set_flash(dev, 0); 
+		if (ret != 0)
+			return ret;
 	}
+
+	set_flash(dev, 0); 
 	return ret;
 }
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 
 static void spi_nor_pages_layout(const struct device *dev,
-				 const struct flash_pages_layout **layout,
-				 size_t *layout_size)
+				const struct flash_pages_layout **layout,
+				size_t *layout_size)
 {
 	/* Data for runtime, const for devicetree and minimal. */
 #ifdef CONFIG_SPI_NOR_SFDP_RUNTIME

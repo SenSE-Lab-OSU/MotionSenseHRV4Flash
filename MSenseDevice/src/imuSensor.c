@@ -973,10 +973,7 @@ void magnetometer_config(void){
 
 void motion_config(void){
   LOG_INF("configuring imu..");
-  currentAccData.bias_x = 0.0;
-  currentAccData.bias_y = 0.0;
-  currentAccData.bias_z = 0.0;
-		
+
   if(gyroConfig.isEnabled){
     static uint8_t m_tx_buf[2] = {0xF5, SPI_FILL};	/**< TX buffer. */
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */

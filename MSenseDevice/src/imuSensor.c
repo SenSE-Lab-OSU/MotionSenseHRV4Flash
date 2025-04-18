@@ -546,8 +546,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     // when we send the enmo, we send as an average of 25
     enmo_store[counterAcc] = enmo;
     counterAcc++;
-    if (counterAcc >= 32){
-      if(current_gyro_data.movingFlagAdapt==True){
+    if (counterAcc >= 32){ // Update the Bias after every second if the sensor is stationary
+      if(current_gyro_data.movingFlagAdapt==False){
           currentAccData.bias_x = currentAccData.bias_x + stepSize*4*grad1_x_L1t;
    	  currentAccData.bias_y = currentAccData.bias_y + stepSize*4*grad1_y_L1t;
           currentAccData.bias_z = currentAccData.bias_z + stepSize*4*grad1_z_L1t;

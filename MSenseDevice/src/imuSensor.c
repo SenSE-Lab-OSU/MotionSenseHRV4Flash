@@ -19,10 +19,12 @@ uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[32];
 uint16_t testcounter = 0;
 int log_counter = 0;
-
+float32_t grad1_x_L1t=0.0,grad1_y_L1t=0.0,grad1_z_L1t=0.0;
+float32_t stepSize = 0.2e-3;
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
+const float gyroThresholdTighter= 0.3f;
 uint8_t blePktMagneto[ble_magnetometerPktLength];
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
@@ -145,6 +147,11 @@ static void gyroscope_measurement(float * quaternionResult){
       current_gyro_data.movingFlag=false;
     else 
       current_gyro_data.movingFlag=true;
+    
+    if(stdGyro <= gyroThresholdTighter) 
+      current_gyro_data.movingFlagAdapt=false;
+    else 
+       current_gyro_data.movingFlagAdapt=true;  
   }
   //printf("movingFlag=%d\n",current_gyro_data.movingFlag);
     arm_sqrt_f32(angularVelX*angularVelX +angularVelY*angularVelY
@@ -521,6 +528,13 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     float AccelX2 = accelX*accelX;
     float AccelY2 = accelY*accelY;
     float AccelZ2 = accelZ*accelZ;
+    float32_t enmo,mag_sub,L1t;
+    
+    mag_sub = AccelX2+AccelY2+AccelZ2;
+    L1t = mag_sub -1;
+    grad1_x_L1t = grad1_x_L1tv+L1t*accelX;
+    grad1_y_L1t = grad1_y_L1t+L1t*accelY;
+    grad1_z_L1t = grad1_z_L1t+L1t*accelZ;
 
     //float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
     float32_t enmo;
@@ -531,7 +545,14 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     enmo_store[counterAcc] = enmo;
     counterAcc++;
     if (counterAcc >= 32){
-      
+      if(current_gyro_data.movingFlagAdapt==False){
+          currentAccData.bias_x = currentAccData.bias_x + stepSize*4*grad1_x_L1t;
+   	  currentAccData.bias_y = currentAccData.bias_y + stepSize*4*grad1_y_L1t;
+          currentAccData.bias_z = currentAccData.bias_z + stepSize*4*grad1_z_L1t;
+      }
+      grad1_x_L1t = 0.0;
+      grad1_y_L1t = 0.0; 
+      grad1_z_L1t = 0.0;
       counterAcc = 0;
       //calculate the enmo as an average of 25 samples
       enmo = 0;
@@ -745,6 +766,10 @@ void motion_data_timeout_handler(struct k_work *item)
     accelX = dataReadAccX * dividerAcc / 1.0;
     accelY = dataReadAccY * dividerAcc / 1.0;
     accelZ = dataReadAccZ * dividerAcc / 1.0;
+    accelX = accelX-currentAccData.bias_x;
+    accelY = accelY-currentAccData.bias_y;
+    accelZ = accelZ-currentAccData.bias_z;
+
     currentAccData.accx_val = accelX;
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
@@ -943,7 +968,9 @@ void magnetometer_config(void){
 
 void motion_config(void){
   LOG_INF("configuring imu..");
-
+  currentAccData.bias_x = 0.0;
+  currentAccData.bias_y = 0.0;
+  currentAccData.bias_z = 0.0
   if(gyroConfig.isEnabled){
     static uint8_t m_tx_buf[2] = {0xF5, SPI_FILL};	/**< TX buffer. */
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */

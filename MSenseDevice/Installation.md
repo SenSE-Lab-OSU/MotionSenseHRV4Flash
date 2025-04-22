@@ -1,7 +1,9 @@
+**Install Guide**
+
 Welcome to the MSense4 Development guide! For those that not yet developed with Zephyr or the NrfConnect Sdk, this guide exists as a tool to help you find your ropes around this project, as our build system has become complex. This is partly due to the way that Zephyr wants software to be built, and partly because our embedded software in it of itself is complex, requiring multiple partitions, dual core functionality for bluetooth low energy, and lots of other sensors.
 
 
-Steps to install:
+**Steps to install**:
 
 1. Clone this repository. 
 2. Follow the instructions to install the Nrf Connect SDK (https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/installation/install_ncs.html ). It should instruct you to install nRF Util, visual studio code, their corresponding vs code plugins, and SEGGER J-Link. Make sure you have all these things. The SDK version to install is 2.5.3. 
@@ -10,7 +12,12 @@ Steps to install:
 5. In the build configuration, select the board to be nrf_5340dk_nrf_5340_cpuapp. Everything else should be fine as default, the project config should be prj.conf and the board file will be auto set.
 6. You are now almost ready to build, there are only 2 extra steps to make the project link correctly. First, there is a function zephyrfilesystem.c called f_expand, which zephyr turns off by default. To enable this, go to the file yourtoolchaindirectory/v2.5.3/modules/fs/fatfs/include/ffconfig.h and on line 41 set:
 #define FF_USE_EXPAND 1 (should be at 0 previously)
+![image](https://github.com/user-attachments/assets/9813e651-c49d-41b3-aa45-09411bf0ace5)
+![image](https://github.com/user-attachments/assets/9c28736b-4162-45c1-8a61-b34aa34c8780) 
 7. our nand flash has a page size of 4096, which unfortunetly in the usb module is hardcoded in to 512. To fix this, go to yourtoolchaindirectory/v2.5.3/zephyr/subsys/usb/device/class/msc.c and on line 111, change to #define BLOCK_SIZE 4096 (should be at 512 previously)
+
+![image](https://github.com/user-attachments/assets/1b7cfb80-060e-463c-9ed1-fcc5e2e8ecaf)
+![image](https://github.com/user-attachments/assets/7aef17d0-4818-4cef-a7ca-811a998a0163)
 8. (optional) if you would like the MSense to record datetime stamps on the file system, go to ff.c (findable through) zephyrfilesystem.c DWORD get_fattime(void)
 find all references -> ff.h
 and set #define FF_FS_NORTC 1 (0 previously)
@@ -18,7 +25,7 @@ and set #define FF_FS_NORTC 1 (0 previously)
 
 
 
-My Tips and Tricks
+**My Tips and Tricks**
 
 
 First off: nrfconnect routes many things through two major systems: devicetree, and KConfig. Both of them can use parameters from each other, and can be used (and are supposed to be used) in C code to reference global variables and hardware abstracted code. DeviceTree specifically is very important, because it is the full code link to any hardware. It is a nodebased system that has it's own language where you can build hiearichal nodes representing the hardware components of your device. Thankfully, the nrf5r340 devkit device tree setup covers just about all the nodes we have on our board, but we did have to make some specific modifications to account for some of the customized hardware we did differently fromt the dk (see nrf5340dk_nrf5340_cpuapp.overlay).  I recommend studying both of these systems, and their interactions, very extensively, in order to understand what may be going on in the code.

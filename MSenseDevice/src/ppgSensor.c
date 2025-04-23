@@ -692,7 +692,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
     }
   }
 #endif
- if (!(use_fixed_ppg_brightness || CONFIG_USE_FIXED_PPG_BRIGHTNESS)){
+ if (!(use_fixed_ppg_brightness)){
 
       ppg_led_update();
 

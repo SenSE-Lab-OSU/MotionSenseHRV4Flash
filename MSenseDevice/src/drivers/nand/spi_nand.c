@@ -244,7 +244,7 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 	set_flash(dev, flash);
 	set_die(dev, die);
 
-	return page - die_size * selected_die_num;
+	return page - (die_size * selected_die_num);
 }
 
 off_t convert_block_to_address(uint32_t block){
@@ -252,9 +252,6 @@ off_t convert_block_to_address(uint32_t block){
 	return (block * 64);
 }
 
-int convert_block_to_first_page_address(uint32_t block){
-
-}
 
 static void acquire_device_inner(const struct device *dev)
 {
@@ -417,7 +414,6 @@ int set_die(const struct device* dev, int die_select){
 
 
 int set_flash(const struct device* dev, int flash_id){
-	const struct spi_flash_config* const driver_cfg = dev->config;
 	current_flash = flash_id;
 	return 0;
 }
@@ -1359,16 +1355,15 @@ int spi_init(const struct device *dev)
 	const struct spi_flash_config* cfg = dev->config;
 	struct spi_flash_config cfg_copy = *cfg;
 	// TODO: go through device tree and get multiple config options
-	ret = spi_configure(dev, &cfg_copy);
+	ret = spi_configure(dev, cfg);
 	if (ret != 0)
 		return ret;
 
 	for (int i = 1; i < 4; i++) {
 		cfg_copy.spi.config.cs.gpio.pin = cs_pins[i];
-		set_flash(dev, i + 1);
+		set_flash(dev, i);
 		ret = spi_configure(dev, cfg);
-		if (ret != 0)
-			return ret;
+		
 	}
 
 	set_flash(dev, 0); 

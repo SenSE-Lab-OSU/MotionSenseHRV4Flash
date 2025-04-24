@@ -1356,14 +1356,15 @@ int spi_init(const struct device *dev)
 		k_sem_init(&driver_data->sem, 1, K_SEM_MAX_LIMIT);
 		k_sem_init(&driver_data->sem_inner, 1, K_SEM_MAX_LIMIT);
 	}
-	struct spi_flash_config *cfg = dev->config;
+	const struct spi_flash_config* cfg = dev->config;
+	struct spi_flash_config cfg_copy = *cfg;
 	// TODO: go through device tree and get multiple config options
-	ret = spi_configure(dev, cfg);
+	ret = spi_configure(dev, &cfg_copy);
 	if (ret != 0)
 		return ret;
 
 	for (int i = 1; i < 4; i++) {
-		cfg->spi.config.cs.gpio.pin = cs_pins[i];
+		cfg_copy.spi.config.cs.gpio.pin = cs_pins[i];
 		set_flash(dev, i + 1);
 		ret = spi_configure(dev, cfg);
 		if (ret != 0)

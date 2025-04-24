@@ -127,7 +127,7 @@
 
 //uart cannot also be in operation with spi0, however, this means we have to use segger RTT, because uart is used for console output
 &uart0 {
-	status = "okay";
+	status = "disabled";
 };
 
  
@@ -161,7 +161,7 @@ compatible = "nordic,nrf-spim";
 		compatible = "ti,bq274xx";
         reg = <0x55>;
         design-voltage = <3700>;
-        design-capacity = <250>;
+        design-capacity = <300>;
         taper-current = <2>;
         terminate-voltage = <3000>;
 	};

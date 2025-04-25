@@ -191,20 +191,19 @@ compatible = "nordic,nrf-spim";
 };
 
 
-/* External Flash, MX66U NOR 
+//External Flash, MX25 NOR 
 
-&spi4 {
-	status = "disabled";
+&spi0 {
+	status = "okay";
 	pinctrl-0 = <&spi_flash_default>;
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
-	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>,<&gpio0 4 GPIO_ACTIVE_LOW>;
-	mx66u: mx66u2g45g@0 {
+	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+	mx25u8035f: mx25u8035f@0 {
 		compatible = "jedec,spi-nor";
-		//size = <4194304000>;
-		// size needs to be in bytes
+		// size needs to be in bits for nor
 		//size = <1073725440>;
-		size = <2147450880>;
+		size = <6000000>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [c2 25 3c];
@@ -212,7 +211,7 @@ compatible = "nordic,nrf-spim";
 	};
 
 };
-*/
+
 
 // External Flash, MT29 NAND
 
@@ -226,7 +225,7 @@ compatible = "nordic,nrf-spim";
 		compatible = "senselab,nanddisk";
 		// size parameter needs to be in bytes
 		// 4294901760 bytes is aproximately 4 GB. Updated from 2147450880 bytes (1.99 GB)
-		size = <2147450880>;
+		size = <4294901760>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [00 2c 47];

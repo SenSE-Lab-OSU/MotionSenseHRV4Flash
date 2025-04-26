@@ -120,15 +120,11 @@ static inline const struct jesd216_erase_type* dev_erase_types(const struct devi
 */
 inline uint32_t dev_flash_size(const struct device *dev)
 {
-#ifdef CONFIG_SPI_NOR_SFDP_RUNTIME
-	const struct spi_nor_data *data = dev->data;
 
-	return data->flash_size;
-#else /* CONFIG_SPI_NOR_SFDP_RUNTIME */
 	const struct spi_flash_config* cfg = dev->config;
 
 	return cfg->flash_size;
-#endif /* CONFIG_SPI_NOR_SFDP_RUNTIME */
+
 }
 
 inline int dev_die_size(const struct device* dev){
@@ -140,9 +136,6 @@ inline int dev_die_size(const struct device* dev){
 */
 inline uint16_t dev_page_size(const struct device *dev)
 {
-#ifdef CONFIG_SPI_NOR_SFDP_MINIMAL
-	return 256;
-#else /* CONFIG_SPI_NOR_SFDP_MINIMAL */
 	const struct spi_nor_data *data = dev->data;
 	uint16_t size = data->page_size;
 	if (size == 0){
@@ -151,7 +144,6 @@ inline uint16_t dev_page_size(const struct device *dev)
 	else{
 		return size;
 	}
-#endif /* CONFIG_SPI_NOR_SFDP_MINIMAL */
 }
 
 static const struct flash_parameters flash_nor_parameters = {

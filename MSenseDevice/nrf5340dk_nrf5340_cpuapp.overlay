@@ -203,7 +203,7 @@ compatible = "nordic,nrf-spim";
 		compatible = "jedec,spi-nor";
 		// size needs to be in bits for nor
 		//size = <1073725440>;
-		size = <6000000>;
+		size = <8388608>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [c2 25 3c];

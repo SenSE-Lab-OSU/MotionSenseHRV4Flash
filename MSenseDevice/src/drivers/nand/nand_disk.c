@@ -40,6 +40,7 @@ struct sdmmc_data {
 
 
 // File System Controls
+
 bool CheckDuplicateAccess = false;
 bool VerifyWrites = true;
 
@@ -75,7 +76,11 @@ bool read_only = false;
 #define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
 #endif 
 
- 
+//#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(spi0))
+//#define FILETABLE_PARTITION_OFFSET 0
+
+
+
 // eventually we should just change this to blocks.
 static int register_bad_sector(uint32_t sector_num){
 	

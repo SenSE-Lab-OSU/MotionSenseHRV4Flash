@@ -514,12 +514,12 @@ void main(void)
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  create_test_files(200);
+  //create_test_files(200);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    usb_enable(usb_status_cb);
+    //usb_enable(usb_status_cb);
   #endif
   k_sleep(K_SECONDS(2));
 

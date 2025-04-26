@@ -68,20 +68,6 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 #endif /* DPD_WAKEUP_SEQUENCE */
 
 
-#ifdef CONFIG_SPI_NOR_SFDP_MINIMAL
-/* The historically supported erase sizes. */
-static const struct jesd216_erase_type minimal_erase_types[JESD216_NUM_ERASE_TYPES] = {
-	{
-		.cmd = SPI_NOR_CMD_BE,
-		.exp = 16,
-	},
-	{
-		.cmd = SPI_NOR_CMD_SE,
-		.exp = 12,
-	},
-};
-#endif /* CONFIG_SPI_NOR_SFDP_MINIMAL */
-
 
 int current_writes = 0;
 int current_reads = 0;
@@ -136,14 +122,7 @@ inline int dev_die_size(const struct device* dev){
 */
 inline uint16_t dev_page_size(const struct device *dev)
 {
-	const struct spi_nor_data *data = dev->data;
-	uint16_t size = data->page_size;
-	if (size == 0){
-		return 4096;
-	}
-	else{
-		return size;
-	}
+	return 4096;
 }
 
 static const struct flash_parameters flash_nor_parameters = {
@@ -1028,45 +1007,8 @@ static int spi_nand_erase(const struct device *dev, off_t addr, size_t size)
 	return ret;
 }
 
-/* @note The device must be externally acquired before invoking this
-* function.
-*/
-static int spi_nor_write_protection_set(const struct device *dev,
-					bool write_protect)
-{
-	int ret;
 
-	if (write_protect){
-	ret = write_enable(dev); 
-	}
-	else{ 
-		ret = write_disable(dev);
-	}
 
-	if (IS_ENABLED(DT_INST_PROP(0, requires_ulbpr))
-		&& (ret == 0)
-		&& !write_protect) {
-		//ret = spi_nor_cmd_write(dev, SPI_NOR_CMD_ULBPR);
-	}
-
-	return ret;
-}
-
-#if defined(CONFIG_FLASH_JESD216_API) || defined(CONFIG_SPI_NOR_SFDP_RUNTIME)
-
-static int spi_nor_sfdp_read(const struct device *dev, off_t addr,
-				void *dest, size_t size)
-{
-	acquire_device(dev);
-
-	int ret = read_sfdp(dev, addr, dest, size);
-
-	release_device(dev);
-
-	return ret;
-}
-
-#endif /* CONFIG_FLASH_JESD216_API || CONFIG_SPI_NOR_SFDP_RUNTIME */
 
 static int spi_read_jedec_id(const struct device *dev,
 				uint8_t *id)

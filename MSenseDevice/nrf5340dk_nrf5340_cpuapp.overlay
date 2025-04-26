@@ -108,6 +108,7 @@
     aliases {
         customspi = &spi1;
 		spi-flash0 = &mt29;
+		spi-flash1 = &mx25u80;
     };
 };
 
@@ -199,7 +200,7 @@ compatible = "nordic,nrf-spim";
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
 	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
-	mx25u8035f: mx25u8035f@0 {
+	mx25u80: mx25u8035f@0 {
 		compatible = "jedec,spi-nor";
 		// size needs to be in bits for nor
 		//size = <1073725440>;

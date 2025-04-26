@@ -40,7 +40,6 @@ struct sdmmc_data {
 
 
 // File System Controls
-
 bool CheckDuplicateAccess = false;
 bool VerifyWrites = true;
 
@@ -76,8 +75,8 @@ bool read_only = false;
 #define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
 #endif 
 
-//#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(spi0))
-//#define FILETABLE_PARTITION_OFFSET 0
+#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
+#define FILETABLE_PARTITION_OFFSET 0
 
 
 
@@ -166,7 +165,7 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 #endif
 
 int erase_file_table() {
-	const struct device* soc_flash = DEVICE_DT_GET(DT_NODELABEL(spi0));
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, 4096*file_table_sector_num);
 }
 
@@ -228,7 +227,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
 	
-	spi_init(dev);
+	int sucess = spi_init(dev);
 	return 0;
 }
 

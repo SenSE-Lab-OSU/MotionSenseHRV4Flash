@@ -1083,68 +1083,6 @@ static int spi_read_jedec_id(const struct device *dev,
 	return ret;
 }
 
-/* Put the device into the appropriate address mode, if supported.
-*
-* On successful return spi_nor_data::flag_access_32bit has been set
-* (cleared) if the device is configured for 4-byte (3-byte) addresses
-* for read, write, and erase commands.
-*
-* @param dev the device
-*
-* @param enter_4byte_addr the Enter 4-Byte Addressing bit set from
-* DW16 of SFDP BFP.  A value of all zeros or all ones is interpreted
-* as "not supported".
-*
-* @retval -ENOTSUP if 4-byte addressing is supported but not in a way
-* that the driver can handle.
-* @retval negative codes if the attempt was made and failed
-* @retval 0 if the device is successfully left in 24-bit mode or
-*         reconfigured to 32-bit mode.
-*/
-static int spi_nor_set_address_mode(const struct device* dev,
-					uint8_t enter_4byte_addr)
-{
-	int ret = 0;
-
-	/* Do nothing if not provided (either no bits or all bits
-	* set).
-	*/
-	if ((enter_4byte_addr == 0)
-		|| (enter_4byte_addr == 0xff)) {
-		return 0;
-	}
-
-	LOG_DBG("Checking enter-4byte-addr %02x", enter_4byte_addr);
-
-	/* This currently only supports command 0xB7 (Enter 4-Byte
-	* Address Mode), with or without preceding WREN.
-	*/
-	if ((enter_4byte_addr & 0x03) == 0) {
-		return -ENOTSUP;
-	}
-
-	acquire_device(dev);
-
-	if ((enter_4byte_addr & 0x02) != 0) {
-		/* Enter after WREN. */
-		ret = write_enable(dev);
-	}
-	
-	if (ret == 0) {
-		ret = spi_cmd(dev, SPI_NOR_CMD_4BA, NULL, 0);
-	}
-
-	if (ret == 0) {
-		struct spi_nor_data *data = dev->data;
-
-		data->flag_access_32bit = true;
-	}
-
-	release_device(dev);
-
-	return ret;
-}
-
 static int flash_reset_and_unlock(const struct device* dev){
 	
 
@@ -1216,7 +1154,6 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 		return -ENODEV;
 	}
 
-#ifndef CONFIG_SPI_NOR_SFDP_RUNTIME
 	/* For minimal and devicetree we need to check the JEDEC ID
 	* against the one from devicetree, to ensure we didn't find a
 	* device that has different parameters.
@@ -1231,7 +1168,6 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 	else {
 		LOG_INF("ID %02x %02x %02x correct!", jedec_id[0], jedec_id[1], jedec_id[2]);
 	}
-#endif
 
 	flash_reset_and_unlock(dev); 
 	
@@ -1251,23 +1187,6 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 		}
 	*/
 		
-	
-
-#ifdef CONFIG_SPI_NOR_SFDP_MINIMAL
-	/* For minimal we support some overrides from specific
-	* devicertee properties.
-	*/
-	if (cfg->enter_4byte_addr != 0) {
-		rc = spi_nor_set_address_mode(dev, cfg->enter_4byte_addr);
-
-		if (rc != 0) {
-			LOG_ERR("Unable to enter 4-byte mode: %d\n", rc);
-			return -ENODEV;
-		}
-	}
-
-#else 
-
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 	//rc = setup_pages_layout(dev);
 	if (rc != 0) {
@@ -1275,19 +1194,8 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 		return -ENODEV;
 	}
 #endif /* CONFIG_FLASH_PAGE_LAYOUT */
-#endif /* CONFIG_SPI_NOR_SFDP_MINIMAL */
 
-/*
-#if DT_INST_NODE_HAS_PROP(0, mxicy_mx25r_power_mode)
-	
-	(void) mxicy_configure(dev, jedec_id);
-#endif 
 
-	if (IS_ENABLED(CONFIG_SPI_NOR_IDLE_IN_DPD)
-		&& (enter_dpd(dev) != 0)) {
-		return -ENODEV;
-	}
-*/
 	return 0;
 }
 
@@ -1369,23 +1277,18 @@ static void spi_nor_pages_layout(const struct device *dev,
 				size_t *layout_size)
 {
 	/* Data for runtime, const for devicetree and minimal. */
-#ifdef CONFIG_SPI_NOR_SFDP_RUNTIME
-	const struct spi_nor_data *data = dev->data;
 
-	*layout = &data->layout;
-#else /* CONFIG_SPI_NOR_SFDP_RUNTIME */
+
 	const struct spi_flash_config *cfg = dev->config;
 
 	*layout = &cfg->layout;
-#endif /* CONFIG_SPI_NOR_SFDP_RUNTIME */
 
 	*layout_size = 1;
 }
 
 #endif /* CONFIG_FLASH_PAGE_LAYOUT */
 
-static const struct flash_parameters *
-flash_nor_get_parameters(const struct device *dev)
+static const struct flash_parameters* flash_nor_get_parameters(const struct device *dev)
 {
 	ARG_UNUSED(dev);
 

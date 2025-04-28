@@ -228,7 +228,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "E:/"
+    path = "F:/"
 
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]

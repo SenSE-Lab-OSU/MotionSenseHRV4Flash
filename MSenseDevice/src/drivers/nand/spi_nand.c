@@ -919,8 +919,12 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 		k_sleep(K_MSEC(500));
 	}
 	set_flash(dev, 0);
-	erase_file_table();
+	int ret = erase_file_table();
+	if (ret != 0){
+		LOG_ERR("failed to erase file table");
+	}
 	LOG_INF("all chip erases complete!");
+	return 0;
 }
 
 

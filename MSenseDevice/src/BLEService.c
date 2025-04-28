@@ -505,9 +505,6 @@ void reset_device(){
   usb_disable();
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
-  const struct qspi_cmd chip_erase = {
-    .op_code = 0xC7 // qspi chip erase command
-  };
 
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){

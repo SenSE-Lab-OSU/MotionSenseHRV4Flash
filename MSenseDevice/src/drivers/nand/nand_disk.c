@@ -19,7 +19,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 2);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -58,7 +58,7 @@ int sector_write_list[5000] = { 0 };
 int unique_sectors_written = 0;
 
 
-int file_table_sector_num = 60;
+int file_table_sector_num = 120;
 
 bool read_only = false;
 
@@ -166,7 +166,8 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, 4096*file_table_sector_num);
+	//1048576
+	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
 
 

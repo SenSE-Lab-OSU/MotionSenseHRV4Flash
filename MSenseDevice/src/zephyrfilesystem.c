@@ -195,7 +195,7 @@ void create_test_file(int sectors){
 void create_test_files(int number_of_files){
 
 	for (int x = 0; x < number_of_files; x++){
-		create_test_file(256);
+		create_test_file(512);
 	}
 
 

@@ -19,7 +19,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 3);
+LOG_MODULE_REGISTER(nand_disk, 4);
 
 enum sd_status {
 	SD_UNINIT,
@@ -58,7 +58,7 @@ int sector_write_list[5000] = { 0 };
 int unique_sectors_written = 0;
 
 
-int file_table_sector_num = 120;
+int file_table_sector_num = 180;
 
 bool read_only = false;
 

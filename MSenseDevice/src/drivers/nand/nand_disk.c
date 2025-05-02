@@ -19,7 +19,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 2);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -58,7 +58,7 @@ int sector_write_list[5000] = { 0 };
 int unique_sectors_written = 0;
 
 
-int file_table_sector_num = 60;
+int file_table_sector_num = 180;
 
 bool read_only = false;
 
@@ -75,7 +75,11 @@ bool read_only = false;
 #define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
 #endif 
 
- 
+#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
+#define FILETABLE_PARTITION_OFFSET 0
+
+
+
 // eventually we should just change this to blocks.
 static int register_bad_sector(uint32_t sector_num){
 	
@@ -162,7 +166,8 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, 4096*file_table_sector_num);
+	//1048576
+	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
 
 
@@ -299,9 +304,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	if (!read_only){
 	LOG_DBG("performing disk write at sector %i", sector);
 
-	if (count > 1){
-	LOG_INF("count: %i", count);
-	}
+	
+	LOG_DBG("count: %i", count);
+	
 	const struct device *dev = disk->dev;
 	struct sdmmc_data *data = dev->data;
 	int ret = 0;

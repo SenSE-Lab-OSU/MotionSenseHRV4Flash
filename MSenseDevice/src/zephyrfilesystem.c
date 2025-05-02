@@ -184,7 +184,7 @@ void create_test_file(int sectors){
 		every day for miles. he wandered and wandered for miles.";
 		for (int i = 0; i < sectors; i++)
 		{
-			printk("trying to write...\n");
+			
 			fs_write(&test_file, a, sizeof(a));
 		}
 		printk("done writing\n");
@@ -211,6 +211,7 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 	MSenseFile->buffer2.current_size = 0;
 	MSenseFile->switch_buffer = false;
 	MSenseFile->current_writes = 0;
+	MSenseFile->first_sample_init = false;
 }
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){

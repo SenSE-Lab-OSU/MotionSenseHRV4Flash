@@ -77,6 +77,8 @@ static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, c
 uint16_t offset, uint8_t flags);
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
+static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+  uint16_t offset, uint8_t flags);
 
 
 
@@ -218,7 +220,7 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_name, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
@@ -228,7 +230,7 @@ BT_GATT_SERVICE_DEFINE(status_service,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
@@ -503,9 +505,6 @@ void reset_device(){
   usb_disable();
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
-  const struct qspi_cmd chip_erase = {
-    .op_code = 0xC7 // qspi chip erase command
-  };
 
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
@@ -759,6 +758,40 @@ uint16_t offset, uint8_t flags){
   return -1;
 }
 
+static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+  uint16_t offset, uint8_t flags){
+    LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+      (void *)conn, len);
+  
+    
+    LOG_INF("Write length: %i", len);
+    if (len != 1){
+      LOG_WRN("invalid packet length: %i", len);
+    }
+    
+    if (offset != 0) {
+      LOG_INF("Write: Incorrect data offset");
+      return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+  
+    uint8_t val = *((uint8_t *)buff);
+    LOG_INF("entered value: %i", val);
+    if (!collecting_data){
+      if (val == 0){
+        LOG_INF("Turning on auto brightness");
+        use_fixed_ppg_brightness = false;
+      }
+      else if (val > 0 && val < 121){
+        LOG_INF("Turning on manual brightness");
+        use_fixed_ppg_brightness = true;
+        ppgConfig.green_intensity = val;
+        ppgConfig.infraRed_intensity = val - 10;
+      }
+      return NRFX_SUCCESS;  
+    }
+    
+    return -1;
+  }
 
 
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
@@ -1108,7 +1141,7 @@ int status_reg_ble_notification(){
   }
   const struct bt_gatt_attr *attr = &status_service.attrs[4];
   if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
+    LOG_INF("sending status reg...");
     int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
     if (ret != 0){
       printk("Error, unable to send notification\n");

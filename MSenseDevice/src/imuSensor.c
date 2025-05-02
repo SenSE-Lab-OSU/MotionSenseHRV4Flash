@@ -528,6 +528,9 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     float AccelX2 = accelX*accelX;
     float AccelY2 = accelY*accelY;
     float AccelZ2 = accelZ*accelZ;
+
+  
+    // nithin lab code
     float32_t enmo,mag_sub,L1t;
     
     mag_sub = AccelX2+AccelY2+AccelZ2;
@@ -535,6 +538,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     grad1_x_L1t = grad1_x_L1tv+L1t*accelX;
     grad1_y_L1t = grad1_y_L1t+L1t*accelY;
     grad1_z_L1t = grad1_z_L1t+L1t*accelZ;
+  // end nithin lab code
 
     //float enmo = sqrt(AccelX2 + AccelY2 + AccelZ2) - 1;
     float32_t enmo;
@@ -561,6 +565,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 32;
       currentAccData.ENMO = enmo;
+      LOG_WRN("%f, %f, %f", accelX, accelY, accelZ);
       LOG_WRN("Enmo: %f", enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
@@ -736,9 +741,7 @@ void motion_data_timeout_handler(struct k_work *item)
 
 
     spiReadWriteIMU(burst_tx, 7, burst_rx, 7);
-    for (int i = 0; i < 6; i++)
-      blePktMotion[i] = burst_rx[i + 1];
-
+    
     prepare_gyros(quaternionResult_1);
 
     dataReadAccX = (burst_rx[1] << 8) | burst_rx[2];
@@ -759,9 +762,9 @@ void motion_data_timeout_handler(struct k_work *item)
       log_counter = 0;
     }
 #endif
-    currentAccData.accx = dataReadAccX;
-    currentAccData.accy = dataReadAccY;
-    currentAccData.accz = dataReadAccZ;
+    currentAccData.raw_accx = dataReadAccX;
+    currentAccData.raw_accy = dataReadAccY;
+    currentAccData.raw_accz = dataReadAccZ;
 
     accelX = dataReadAccX * dividerAcc / 1.0;
     accelY = dataReadAccY * dividerAcc / 1.0;
@@ -828,6 +831,11 @@ void motion_data_timeout_handler(struct k_work *item)
     // this function seperately fills blePktMotion with the desired size
     // TODO: Make sure packets are in correct size/order
     // ppg_bluetooth_fill(blePktMotion);
+
+    for (int i = 0; i < 6; i++){
+      blePktMotion[i] = burst_rx[i + 1];
+    }
+
 
     blePktMotion[18] = blePktMotion[18] | ((pktCounter >> 8) & 0x03);
 

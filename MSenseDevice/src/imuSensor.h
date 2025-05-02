@@ -117,9 +117,9 @@ extern struct motionInfo my_motionSensor;
 extern struct magnetoInfo my_magnetoSensor; 
 extern struct orientationInfo my_orientaionSensor;
 struct accData {
-  int16_t accx;
-  int16_t accy;
-  int16_t accz;
+  int16_t raw_accx;
+  int16_t raw_accy;
+  int16_t raw_accz;
   float accx_val;
   float accy_val;
   float accz_val;

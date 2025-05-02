@@ -474,7 +474,7 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (collecting_data || host_wants_collection){
-        if (battery_level < 10 && collecting_data){
+        if (battery_level < 5 && collecting_data){
             battery_low = true;
             start_stop_device_collection(false);
         }
@@ -514,12 +514,12 @@ void main(void)
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  //create_test_files(10);
+  //create_test_files(800);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    usb_enable(usb_status_cb);
+    //usb_enable(usb_status_cb);
   #endif
   k_sleep(K_SECONDS(2));
 

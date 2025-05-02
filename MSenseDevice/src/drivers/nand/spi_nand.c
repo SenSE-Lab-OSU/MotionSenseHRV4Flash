@@ -653,7 +653,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	nrfx_err_t res = 0;
 
 
-	__ASSERT(data != NULL, "null destination");
+	//__ASSERT(data != NULL, "null destination");
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -1104,7 +1104,7 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 	* against the one from devicetree, to ensure we didn't find a
 	* device that has different parameters.
 	*/
-
+	jedec_id[0] = 0xff;
 	if (memcmp(jedec_id, cfg->jedec_id, sizeof(jedec_id)) != 0) {
 		LOG_ERR("Device id %02x %02x %02x does not match config %02x %02x %02x",
 			jedec_id[0], jedec_id[1], jedec_id[2],

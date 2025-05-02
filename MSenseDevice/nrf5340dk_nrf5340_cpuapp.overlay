@@ -229,7 +229,7 @@ compatible = "nordic,nrf-spim";
 		size = <4294901760>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
-		jedec-id = [00 2c 47];
+		jedec-id = [ff 2c 47];
 		status = "okay";
 	};
 

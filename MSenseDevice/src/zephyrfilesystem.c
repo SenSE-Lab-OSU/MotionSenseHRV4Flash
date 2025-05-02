@@ -184,7 +184,7 @@ void create_test_file(int sectors){
 		every day for miles. he wandered and wandered for miles.";
 		for (int i = 0; i < sectors; i++)
 		{
-			printk("trying to write...\n");
+			
 			fs_write(&test_file, a, sizeof(a));
 		}
 		printk("done writing\n");
@@ -195,7 +195,7 @@ void create_test_file(int sectors){
 void create_test_files(int number_of_files){
 
 	for (int x = 0; x < number_of_files; x++){
-		create_test_file(512);
+		create_test_file(256);
 	}
 
 

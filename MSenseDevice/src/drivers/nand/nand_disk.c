@@ -19,7 +19,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 4);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -304,9 +304,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	if (!read_only){
 	LOG_DBG("performing disk write at sector %i", sector);
 
-	if (count > 1){
-	LOG_INF("count: %i", count);
-	}
+	
+	LOG_DBG("count: %i", count);
+	
 	const struct device *dev = disk->dev;
 	struct sdmmc_data *data = dev->data;
 	int ret = 0;

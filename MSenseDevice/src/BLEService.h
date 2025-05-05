@@ -14,6 +14,7 @@ extern bool collecting_data;
 extern bool host_wants_collection;
 extern bool battery_low;
 extern bool file_system_full;
+extern bool file_system_malfunction;
 extern bool battery_charging;
 
 

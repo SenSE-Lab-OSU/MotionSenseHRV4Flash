@@ -116,7 +116,7 @@
 / {
 	chosen {
 	
-		nordic,pm-ext-flash = &mt29;
+		//nordic,pm-ext-flash = &mt29;
 		zephyr,console = &cdc_acm_uart0;
         zephyr,shell-uart = &cdc_acm_uart0;
 		
@@ -124,7 +124,7 @@
 	};
 	
 
-/delete-node/ &storage_partition;
+///delete-node/ &storage_partition;
 
 
 //uart cannot also be in operation with spi0, however, this means we have to use segger RTT, because uart is used for console output

@@ -45,10 +45,11 @@ bool collecting_data = false;
 bool host_wants_collection = false;
 bool battery_low = false;
 bool file_system_full = false;
+bool file_system_malfunction = false;
 bool battery_charging = false;
 
-bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full, &battery_charging};
-int num_of_status_registers = 6;
+bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full,  &file_system_malfunction, &battery_charging };
+int num_of_status_registers = 7;
 bool ble_status_register_send[8] = { 0 };
 
 uint32_t uptime;

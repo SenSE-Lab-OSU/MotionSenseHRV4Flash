@@ -201,9 +201,6 @@ void create_test_files(int number_of_files){
 
 }
 
-void create_sensor_file(MotionSenseFile* MSenseFile){
-
-}
 
 void reset_sensor_file(MotionSenseFile* MSenseFile){
 	fs_close(&MSenseFile->self_file);
@@ -271,11 +268,13 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
 			LOG_WRN("Unable to create file");
+			file_system_malfunction = true;
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
 		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
 		if (res != 0){
-		LOG_WRN("failed to expand file");
+			LOG_WRN("failed to expand file");
+			file_system_malfunction = true;
 		}
 	}
 	else if (data_counter >= data_limit){
@@ -288,11 +287,21 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	//fs_write(&file, data, size);
 	if (total_written == size){
 		LOG_INF("sucessfully wrote to file for %d, bytes written = %i ! \n", sensor, total_written);
+		file_system_malfunction = false;
 		data_counter += total_written;
 	}
+	else if (total_written < 0){
+		LOG_WRN("file system failed to write!");
+		file_system_malfunction = true;
+	}
+
 	if (MSenseFile->current_writes >= max_writes){
-		fs_close(&MSenseFile->self_file);
+		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
+		if (close_ret < 0){
+			file_system_malfunction = true;
+			LOG_WRN("Error on closing file");
+		}
 		MSenseFile->current_writes = 0;
 		get_storage_percent_full();
 	}
@@ -649,6 +658,9 @@ int get_storage_percent_full(){
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
 	storage_percent_full = (int)storage_percent;
+	if (storage_percent_full >= 99){
+		file_system_full = true;
+	}
 	storage_ble_notification(&storage_percent_full, sizeof(storage_percent_full));
 	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;

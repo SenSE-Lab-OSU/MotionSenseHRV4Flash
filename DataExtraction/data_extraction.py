@@ -9,6 +9,7 @@ try:
     import numpy
     import pandas as pd
     import graph_generation
+
 except ImportError:
     print(
         "unable to import packages, please install numpy or pandas if you would like to use the graph functionality!")
@@ -219,21 +220,24 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
         if data_set is not None:
             data_set.to_csv(file_name)
             counter_validity_check(data_set)
-            graph_generation.pd_graph_generation(search_key, data_set)
+            if generate_graphs:
+                graph_generation.pd_graph_generation(search_key, data_set)
 
     except Exception as e:
         traceback.print_exc()
         print(e)
 
-
+generate_graphs = False
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    path = "F:/"
+    path = "E:/"
 
     if len(sys.argv) >= 2:
         file_prefix = sys.argv[1]
         if len(sys.argv) >= 3:
             path = sys.argv[2]
+        if len(sys.argv) >= 4:
+            generate_graphs = bool(sys.argv[3])
     else:
         file_prefix = ""
     # files = os.listdir()"C:/Users/mallory.115/Downloads/MSense4Left1/MSense4Left1/"

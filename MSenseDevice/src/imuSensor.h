@@ -195,7 +195,8 @@ extern struct magneto_config magnetoConfig;
 extern struct orientation_config orientationConfig;
 
 extern uint8_t enmo_threshold_packet[9];
-extern int enmo_sample_counter;
+extern uint32_t enmo_sample_counter;
+extern uint32_t last_activated_trigger_counter;
 
 void motion_config(void);
 void getIMUID();

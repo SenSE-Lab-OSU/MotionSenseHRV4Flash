@@ -499,9 +499,9 @@ magneto_sample_config_t magneto_smpl_config){
 // our global variables needed for enmo calculation
 #define enmo_samples_size 420
 float second_enmo_arr[enmo_samples_size] = {0.0};
-int enmo_sample_counter = 0;
+uint32_t enmo_sample_counter = 0;
 // samples since the last activated trigger
-int last_activated_trigger_counter = 0;
+uint32_t last_activated_trigger_counter = 0;
 
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9] = {0};
@@ -527,13 +527,13 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
     if(enmo < 0 ) enmo=0;
-    // when we send the enmo, we send as an average of 25
+    // when we send the enmo, we send as an average of 30
     enmo_store[counterAcc] = enmo;
     counterAcc++;
     if (counterAcc >= 32){
       
       counterAcc = 0;
-      //calculate the enmo as an average of 25 samples
+      //calculate the enmo as an average of 30 samples
       enmo = 0;
       for (int x = 0; x <= 31; x++){
           enmo += enmo_store[x];
@@ -582,7 +582,6 @@ void enmo_threshold_evaluation(float enmo_number)
 
   second_enmo_arr[enmo_sample_counter] = currentAccData.ENMO;
   enmo_sample_counter++;
-  last_activated_trigger_counter++;
   if (enmo_sample_counter >= enmo_samples_size)
   {
     // Perform the threshold evaluation
@@ -625,6 +624,9 @@ void enmo_threshold_evaluation(float enmo_number)
       // zero out the last activated trigger since that is now.
       last_activated_trigger_counter = 0;
     }
+  }
+  else{
+    last_activated_trigger_counter++;
   }
 }
 

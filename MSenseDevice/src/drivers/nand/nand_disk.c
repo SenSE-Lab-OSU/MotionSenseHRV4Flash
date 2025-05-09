@@ -41,7 +41,7 @@ struct sdmmc_data {
 
 // File System Controls
 bool CheckDuplicateAccess = false;
-bool VerifyWrites = true;
+bool VerifyWrites = false;
 
 // The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
 int total_bad_sectors = 0;
@@ -100,24 +100,6 @@ static int get_sector_offset(int sector_num){
 
 
 /* We will need to make this all be enabled by a KConfig. */
-
-static int duplicate_sector_access(struct disk_info* disk, int sector_num){
-	if (unique_sectors_written >= 80000){
-		return 0;
-	}
-	for (int i = 0; i < unique_sectors_written; i++){
-		if (sector_write_list[i] == sector_num){
-			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-			// TODO: Determine this offline first.
-			
-			return -1;
-		}
-	}
-	sector_write_list[unique_sectors_written] = sector_num;
-	unique_sectors_written++;
-	return 0;
-}
-
 
 uint8_t check_buffer[4096];
 static int duplicate_sector_access2(const struct disk_info* disk, int sector_num){
@@ -297,6 +279,7 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	return ret; //sdmmc_read_blocks(&data->card, buf, sector, count);
 }
 
+uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
@@ -340,9 +323,15 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		addr = convert_page_to_address(dev, sector_num);
 		ret = spi_nand_page_write(dev, addr, &buf[x*4096], 4096);
 		// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
-		if (ret > 3){
-			//TODO: Implement read back logic here.
+		
+		if (VerifyWrites){
+			ret = spi_nand_page_read(dev, addr, read_back_buffer);
+			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
+			if (!equal){
+				register_bad_sector(sector_num);
+			}
 		}
+		
 		}
 
 		

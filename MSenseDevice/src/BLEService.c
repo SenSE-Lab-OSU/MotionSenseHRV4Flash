@@ -568,6 +568,7 @@ void start_stop_device_collection(uint8_t val){
       k_sleep(K_MSEC(500));
       close_all_files();
       enmo_sample_counter = 0;
+      last_activated_trigger_counter = 0;
 
       #if CONFIG_DISK_DRIVER_RAW_NAND
       set_read_only(true);

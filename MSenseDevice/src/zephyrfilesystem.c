@@ -78,7 +78,7 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
-const int max_writes = 256;
+const int max_writes = 512;
 
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;
@@ -711,6 +711,7 @@ DWORD get_fattime(void)
 			   (DWORD)stm->tm_min << 5 |
 			   (DWORD)stm->tm_sec >> 1;
 	}
+	LOG_WRN("date time was not set, returning nothing for windows fatfs date time");
 	return 0;
 }
 

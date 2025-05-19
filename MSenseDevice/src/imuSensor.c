@@ -587,19 +587,19 @@ void enmo_threshold_evaluation(float enmo_number)
     // Perform the threshold evaluation
     enmo_sample_counter = 0;
   }
-
+  // if we have collected more than enmo_samples_size (420 seconds) worth of data
   if (last_activated_trigger_counter >= enmo_samples_size)
   {
+    // count how many enmo values have exceeded MPA (g > .1006)
     int total_enmo = 0;
     for (int sample = 0; sample < enmo_samples_size; sample++)
     {
-      if ((second_enmo_arr[sample] * 1000) > 100.6f)
+      if ((second_enmo_arr[sample]) > .1006f)
       {
         total_enmo++;
       }
     }
 
-    // total_enmo = total_enmo / 60;
     LOG_INF("total enmo: %i", total_enmo);
 
     if (total_enmo > 294)
@@ -607,7 +607,7 @@ void enmo_threshold_evaluation(float enmo_number)
 
       enmo_threshold_packet[0] = 1;
       /*if (total_enmo > 294){
-        enmo_threshold_packet[0] = 1;
+        enmo_threshold_packet[0] = 2;
       }
       else {
         enmo_threshold_packet[0] = 1;
@@ -619,7 +619,6 @@ void enmo_threshold_evaluation(float enmo_number)
       enmoThreshold.dataPacket = &currentAccData.ENMO;
       enmoThreshold.packetLength = sizeof(currentAccData.ENMO);
       enmo_threshold_send(enmo_threshold_packet, sizeof(enmo_threshold_packet));
-      // k_work_submit(&my_motionData.work);
 
       // zero out the last activated trigger since that is now.
       last_activated_trigger_counter = 0;

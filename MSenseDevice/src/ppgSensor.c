@@ -663,7 +663,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
     ppg_samples[1] = led1B[i];
     ppg_samples[2] = led2A[i];
     ppg_samples[3] = led2B[i];
-    ppg_samples[4] = k_uptime_get();
+    ppg_samples[4] = get_current_unix_time();
     ppg_samples[5] = global_counter;
     
     store_data(ppg_samples, sizeof(ppg_samples), 0);

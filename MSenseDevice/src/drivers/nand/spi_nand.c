@@ -472,8 +472,12 @@ int spi_flash_wait_until_ready(const struct device *dev)
 	do {
 		waitcycles++;
 		reg = get_status(dev);
-	} while (!ret && (reg & SPI_NOR_WIP_BIT));
+	} while (!ret && (reg & SPI_NOR_WIP_BIT) && waitcycles <= 2000000000);
 	LOG_DBG("wait completed with %i cycles", waitcycles);
+	if (waitcycles > 1900000000){
+		LOG_ERR("wait cycles timed out");
+		ret = -1;
+	}
 	return ret;
 }
 
@@ -616,6 +620,8 @@ int detect_bad_blocks(const struct device* dev){
 		LOG_WRN("buffer transfer error: %x", res);
 		continue;
 	}
+	spi_flash_wait_until_ready(dev);
+
 	uint8_t status = spi_rdsr(dev);
 	if (status != 0){
 	LOG_WRN("finished read! with status %i", status);
@@ -683,10 +689,10 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
-	spi_flash_wait_until_ready(dev);
+	int wait_res = spi_flash_wait_until_ready(dev);
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
-	if (res != 0) {
+	if (res != 0 || wait_res != 0) {
 		LOG_WRN("buffer transfer error: %x", res);
 		goto out;
 	}

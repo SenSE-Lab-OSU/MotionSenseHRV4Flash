@@ -227,7 +227,7 @@ def generate_csv_for_pattern(file_prefix, type_prefix: str, search_key: str, lab
         traceback.print_exc()
         print(e)
 
-generate_graphs = False
+generate_graphs = True
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     path = "E:/"

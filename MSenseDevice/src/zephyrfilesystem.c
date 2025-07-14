@@ -293,13 +293,15 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	else if (total_written < 0){
 		LOG_WRN("file system failed to write!");
 		file_system_malfunction = true;
+		status_reg_ble_notification();
 	}
 
 	if (MSenseFile->current_writes >= max_writes){
 		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		if (close_ret < 0){
-			file_system_malfunction = true;
+			file_system_malfunction = 5;
+			status_reg_ble_notification();
 			LOG_WRN("Error on closing file");
 		}
 		MSenseFile->current_writes = 0;

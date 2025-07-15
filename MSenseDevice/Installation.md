@@ -19,8 +19,8 @@ Welcome to the MSense4 Development guide! For those that not yet developed with 
 ![image](https://github.com/user-attachments/assets/1b7cfb80-060e-463c-9ed1-fcc5e2e8ecaf)
 ![image](https://github.com/user-attachments/assets/7aef17d0-4818-4cef-a7ca-811a998a0163)
 8. (optional) if you would like the MSense to record datetime stamps on the file system, go to ff.c (findable through) zephyrfilesystem.c DWORD get_fattime(void)
-find all references -> ff.h
-and set #define FF_FS_NORTC 1 (0 previously)
+find all references -> zephyr_fatfs_config.h
+and set #define FF_FS_NORTC 0 (1 previously)
 9. now, go back to the nrf connect tab, and in the 'actions' tab, click the build button. The application should now build correctly, and if you have a device connected to a JLink, you will be able to use the flash command to upload it.
 
 

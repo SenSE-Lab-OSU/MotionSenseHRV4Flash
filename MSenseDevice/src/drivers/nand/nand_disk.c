@@ -1,11 +1,12 @@
 /*
- * Copyright 2022 NXP
+ * Copyright 2025 Devan Mallory
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*
- * SDMMC disk driver using zephyr SD subsystem
+ * NAND flash disk driver with unique lightweight Flash Translation Layer (FTL) that uses an external NOR for simplified ECC.
+ * avalible via zephyr SD subsystem
  */
 
 #include <zephyr/device.h>
@@ -32,7 +33,6 @@ struct sdmmc_config {
 };
 
 struct sdmmc_data {
-	//struct sd_card card;
 	enum sd_status status;
 	char *name;
 	bool read_for_filename;
@@ -47,11 +47,12 @@ bool VerifyWrites = false;
 int total_bad_sectors = 0;
 
 /*perhaps we could make this bad blocks.
-TODO: Make this system calculate this in offline mode.
+TODO: Test this system to save and load in offline mode.
 Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
 since bad sectors aren't used and the next sector over is used.
 */
-uint32_t bad_sectors[5000];
+#define bad_sector_detect_limit 2000
+uint32_t bad_sectors[bad_sector_detect_limit];
 
 // Config sector monitoring
 int sector_write_list[5000] = { 0 };
@@ -80,13 +81,61 @@ bool read_only = false;
 
 
 
+static int save_bad_sectors_arr(){
+	
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
+	if (ret == 0){
+		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	}
+	return ret;
+};
+
+static int load_bad_sectors_arr()
+{
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	
+	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	// if the memory is all 1s, that means we haven't written to the array yet
+	if (bad_sectors[0] == 0xFFFFFFFF){
+		for (int x = 0; x < total_bad_sect_arr_size, x++;){
+			bad_sectors[x] = 0;
+		}
+	}
+	LOG_INF("found and loaded bad sector arr");
+	for (int x = 0; x < total_bad_sect_arr_size, x++;){
+		if (bad_sectors[x] != 0){
+			total_bad_sectors++;
+		}
+	}
+	LOG_WRN("Loaded Bad Sector count: %d", total_bad_sectors);
+	return ret;
+};
+
 // eventually we should just change this to blocks.
 static int register_bad_sector(uint32_t sector_num){
-	
-	bad_sectors[total_bad_sectors] = sector_num;
-	total_bad_sectors++;
+
+	if (total_bad_sectors < bad_sector_detect_limit)
+	{
+		bad_sectors[total_bad_sectors] = sector_num;
+		total_bad_sectors++;
+		LOG_WRN("total bad sectors: %d", sector_num);
+		save_bad_sectors_arr();
+	}
+	else{
+		LOG_ERR("Bad sectors hit max allowable bad limit");
+	}
 	return total_bad_sectors;
 }
+
+
+
 
 static int get_sector_offset(int sector_num){
 	
@@ -107,7 +156,7 @@ static int duplicate_sector_access2(const struct disk_info* disk, int sector_num
 	disk_access_read(disk->name, check_buffer, sector_num, 1);
 	for (int x = 0; x < 4096; x++){
 		if (check_buffer[x] != 0xff){
-			LOG_WRN("error: attempted duplicate write for sector %i, total bad %d", sector_num, total_bad_sectors);
+			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
 			register_bad_sector(sector_num);
 			return -1;
 			
@@ -151,8 +200,6 @@ int erase_file_table() {
 	//1048576
 	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
-
-
 
 
 
@@ -306,7 +353,6 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			continue;
 		}
 		else {
-		int error;
 		int sector_num = x+sector;
 		if (CheckDuplicateAccess){
 			for (int y = 0; y < 1000; y++){
@@ -328,6 +374,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			ret = spi_nand_page_read(dev, addr, read_back_buffer);
 			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
 			if (!equal){
+				LOG_ERR("Sector %d yielded incorrect readback", sector_num);
 				register_bad_sector(sector_num);
 			}
 		}

@@ -159,7 +159,7 @@ BT_GATT_SERVICE_DEFINE(data_service,
   /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
     BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
     BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
-    configSet, on_receive, configRead),
+    configSet, on_settings_change, configRead),
   BT_GATT_CUD(CONFIG_NAME, BT_GATT_PERM_READ),//3
   BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_TX, //4,5
     BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
@@ -789,7 +789,30 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
         ppgConfig.green_intensity = val;
         ppgConfig.infraRed_intensity = val - 10;
       }
-      return NRFX_SUCCESS;  
+      else if (val >= 122){
+        if (val == 130 || val == 150 && !collecting_data){
+          //bt_disable();
+          file_lock = true;
+          #ifndef CONFIG_USB_ALWAYS_ON
+          usb_disable();
+          #endif
+          if (val == 150){
+            create_test_files(500);
+          }
+          else{
+            create_test_files(50);
+          }
+          file_lock = false;
+          //bt_enable(bt_ready);
+          #ifndef CONFIG_USB_ALWAYS_ON
+          usb_enable(usb_status_cb);
+          #endif
+          
+
+        }
+      }  
+      return NRFX_SUCCESS;
+      
     }
     
     return -1;
@@ -835,7 +858,7 @@ static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_att
 }
 
 /* This function is called whenever the RX Characteristic has been written to by a Client */
-ssize_t on_receive(struct bt_conn *conn,
+ssize_t on_settings_change(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,
 			  const void *buf,
 			  uint16_t len,

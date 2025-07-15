@@ -1,7 +1,7 @@
 /*
 * Copyright (c) 2018 Savoir-Faire Linux.
 * Copyright (c) 2020 Peter Bigot Consulting, LLC
-* Copyright (c) 2024 SENSE Lab Ohio State
+* Copyright (c) 2025 SENSE Lab Ohio State
 * 
 * This driver is heavily inspired from the spi_flash_w25qxxdv.c SPI NOR driver.
 *

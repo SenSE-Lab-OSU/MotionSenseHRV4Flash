@@ -540,8 +540,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 32;
       currentAccData.ENMO = enmo;
-      LOG_WRN("%f, %f, %f", accelX, accelY, accelZ);
-      LOG_WRN("Enmo: %f", enmo*1000);
+      LOG_INF("%f, %f, %f", accelX, accelY, accelZ);
+      LOG_INF("Enmo: %f", enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
       
@@ -569,7 +569,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = 6;
-      LOG_WRN("ENMO ble update: %f", currentAccData.ENMO);
+      LOG_INF("ENMO ble update: %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
     }

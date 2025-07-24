@@ -791,6 +791,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         if (val == 130 || val == 150 && !collecting_data){
+          storage_clear_led();
           //bt_disable();
           file_lock = true;
           #ifndef CONFIG_USB_ALWAYS_ON
@@ -807,7 +808,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           #ifndef CONFIG_USB_ALWAYS_ON
           usb_enable(usb_status_cb);
           #endif
-          
+          blink_led(31);
 
         }
       }  

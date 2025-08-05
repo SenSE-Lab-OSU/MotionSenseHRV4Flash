@@ -791,24 +791,30 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         if (val == 130 || val == 150 && !collecting_data){
+          bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
           storage_clear_led();
-          //bt_disable();
+          bt_disable();
           file_lock = true;
           #ifndef CONFIG_USB_ALWAYS_ON
           usb_disable();
           #endif
+          LOG_INF("Manual file creation");
+          k_sleep(K_SECONDS(1));
+          LOG_INF("begin");
           if (val == 150){
             create_test_files(500);
           }
           else{
             create_test_files(50);
           }
+          
           file_lock = false;
           //bt_enable(bt_ready);
           #ifndef CONFIG_USB_ALWAYS_ON
           usb_enable(usb_status_cb);
           #endif
           blink_led(31);
+          //NVIC_SystemReset();
 
         }
       }  

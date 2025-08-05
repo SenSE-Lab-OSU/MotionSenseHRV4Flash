@@ -157,7 +157,8 @@ void enable_read_only(bool enable){
 	}
 }
 
-
+char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
+		every day for miles. he wandered and wandered for miles.";
 void create_test_file(int sectors){
 	printk("trying to write file...\n");
 	
@@ -180,8 +181,7 @@ void create_test_file(int sectors){
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
 	if (file_create == 0)
 	{
-		char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
-		every day for miles. he wandered and wandered for miles.";
+		
 		for (int i = 0; i < sectors; i++)
 		{
 			
@@ -193,7 +193,7 @@ void create_test_file(int sectors){
 }
 
 void create_test_files(int number_of_files){
-
+	LOG_INF("creating test files...");
 	for (int x = 0; x < number_of_files; x++){
 		create_test_file(256);
 	}

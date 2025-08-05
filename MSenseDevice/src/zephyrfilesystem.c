@@ -36,7 +36,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 #endif
 
-
+bool security_lock;
 
 #define MAX_BUFFER_SIZE 9000
 
@@ -157,7 +157,7 @@ void enable_read_only(bool enable){
 	}
 }
 
-char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
+char a[4096*2] = "hello world, this is a story about a man who liked to run. \
 		every day for miles. he wandered and wandered for miles.";
 void create_test_file(int sectors){
 	printk("trying to write file...\n");
@@ -179,6 +179,7 @@ void create_test_file(int sectors){
 	strcat(destination, IDString);
 	strcat(destination, "testing.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
+	FRESULT res = f_expand(&test_file, 4096*max_writes*2, 1);
 	if (file_create == 0)
 	{
 		
@@ -242,8 +243,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			
 		}
 		else {
-			/* Lance TODO: replace this get_current_unix_time() with a variable that represents 
-			 the actual start time of collection. Something like MSenseFile->start_time */ 
+
 			uint64_t current_time = MSenseFile->start_time; 
 			
 			ID = current_time;

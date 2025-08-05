@@ -576,7 +576,9 @@ void start_stop_device_collection(uint8_t val){
       #endif
 
       #ifndef CONFIG_USB_ALWAYS_ON
-      usb_enable(NULL);	
+      if (!security_lock){
+        usb_enable(NULL);	
+      }
       #endif
 
       collecting_data = false;
@@ -760,6 +762,14 @@ uint16_t offset, uint8_t flags){
   return -1;
 }
 
+void create_test_files_through_file_workqueue(struct k_work* work){
+  storage_clear_led();
+  create_test_files(125);
+  blink_led(31);
+
+}
+
+
 static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
   uint16_t offset, uint8_t flags){
     LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
@@ -791,9 +801,8 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         if (val == 130 || val == 150 && !collecting_data){
+
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-          storage_clear_led();
-          bt_disable();
           file_lock = true;
           #ifndef CONFIG_USB_ALWAYS_ON
           usb_disable();
@@ -801,19 +810,33 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           LOG_INF("Manual file creation");
           k_sleep(K_SECONDS(1));
           LOG_INF("begin");
+          #if CONFIG_DISK_DRIVER_RAW_NAND
+            set_read_only(false);
+          #endif
           if (val == 150){
+            storage_clear_led();
             create_test_files(500);
+            blink_led(31);
           }
           else{
-            create_test_files(50);
+            struct k_work work;
+            k_work_init(&work, create_test_files_through_file_workqueue);
+            k_work_submit_to_queue(&my_work_q, &work);
+            //k_work_submit(&work);
+            //create_test_files(1);
           }
           
           file_lock = false;
+          #if CONFIG_DISK_DRIVER_RAW_NAND
+          set_read_only(true);
+          #endif
           //bt_enable(bt_ready);
           #ifndef CONFIG_USB_ALWAYS_ON
+          if (!security_lock){
           usb_enable(usb_status_cb);
+          }
           #endif
-          blink_led(31);
+          
           //NVIC_SystemReset();
 
         }

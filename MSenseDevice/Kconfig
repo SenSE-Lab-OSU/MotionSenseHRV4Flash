@@ -88,6 +88,11 @@ config USB_ALWAYS_ON
 	bool "whether the usb mass storage driver is on during bluetooth collection"
 	default n
 
+
+config MSENSE_USB_SECURITY
+	bool "Configures USB security mode, which requires a password in order to enable to usb behavior"
+	default n
+
 config LOG_LEVEL_DATA_COLLECTION
 	int "whether data from sensors is printed in logs"
 	default 3

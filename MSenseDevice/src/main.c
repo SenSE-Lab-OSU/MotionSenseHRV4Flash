@@ -303,7 +303,9 @@ static void bt_ready(int err)
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    usb_enable(usb_status_cb);
+    if (!security_lock){
+      usb_enable(usb_status_cb);
+    }
   #endif
 }
 
@@ -514,13 +516,18 @@ void main(void)
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  //create_test_files(800);
+  //create_test_files(400);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    //usb_enable(usb_status_cb);
   #endif
+
+  #ifdef CONFIG_MSENSE_USB_SECURITY
+    security_lock = true;
+  #endif
+
+
   k_sleep(K_SECONDS(2));
 
   

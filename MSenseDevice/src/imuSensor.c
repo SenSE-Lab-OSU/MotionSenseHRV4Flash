@@ -497,7 +497,7 @@ magneto_sample_config_t magneto_smpl_config){
 }
 
 // our global variables needed for enmo calculation
-#define enmo_samples_size 420
+#define enmo_samples_size 600
 float second_enmo_arr[enmo_samples_size] = {0.0};
 uint32_t enmo_sample_counter = 0;
 // samples since the last activated trigger
@@ -602,7 +602,7 @@ void enmo_threshold_evaluation(float enmo_number)
 
     LOG_INF("total enmo: %i", total_enmo);
 
-    if (total_enmo > 294)
+    if (total_enmo > 240)
     {
 
       enmo_threshold_packet[0] = 1;

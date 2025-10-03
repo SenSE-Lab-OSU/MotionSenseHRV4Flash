@@ -48,7 +48,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 5000
+#define SLEEP_TIME_MS 6000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -293,7 +293,7 @@ static void bt_ready(int err)
     printk("Advertising failed to start (err %d)\n", err);
   else
   {
-    printk("Advertising successfully started\n");
+    printk("Advertising started\n");
   }
 
   k_sem_give(&ble_init_ok);
@@ -358,13 +358,13 @@ static void spi_init(void)
   }
   if (spi_dev_imu == NULL || !device_is_ready(spi_dev_imu))
   {
-    printk("Could not get %s device\n", spiName_imu);
+    printk("Could not get %s \n", spiName_imu);
     return;
   }
 
   if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
   {
-    printk("Could not get %s device\n", spiName_ppg);
+    printk("Could not get %s \n", spiName_ppg);
     return;
   }
   
@@ -381,7 +381,7 @@ static void spi_init(void)
 
   // fileOpen();
   dataFlash = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
-  printk("data combo = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
+  printk("intensity = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
   // fileWrite(dataFlash);
   // fileClose();
 
@@ -421,7 +421,7 @@ void spi_verify_sensor_ids()
   }
   else
   {
-    LOG_WRN("IMU not ready, setup was avoided");
+    LOG_WRN("IMU not ready, setup avoided");
   }
   
   uint8_t tx_buffer[4], rx_buffer[4];

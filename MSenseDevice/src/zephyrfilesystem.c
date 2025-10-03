@@ -133,16 +133,18 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg, uint32 timer and uint32 counter"
+	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 timer, and uint32 counter"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
 	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 timer, uint32 counter"
+	.sensor_format = "3 int16 accel, 3 float32 gyro, second avg float32 enmo, uint32 timer, uint32 counter"
 };
 
 
+// TODO: Still work in progress . We do have a hacky way to make the device read only (see nand_disk.c) 
+// but no way to make it show up as read only on windows yet.
 void enable_read_only(bool enable){
 	struct fs_mount_t* mp = &fs_mnt;
 	if (mp->type == FS_FATFS){
@@ -157,6 +159,7 @@ void enable_read_only(bool enable){
 	}
 }
 
+// Test files
 char a[4096*2] = "hello world, this is a story about a man who liked to run. \
 		every day for miles. he wandered and wandered for miles.";
 void create_test_file(int sectors){
@@ -228,7 +231,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 
 
 	if (MSenseFile->current_writes == 0){
-		// Create a new file, with given sensor type, patient name, and date
+		// Create a new file, with given sensor type, patient name, and date as file name
 		fs_file_t_init(&MSenseFile->self_file);
 		
 		
@@ -263,7 +266,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
 		strcat(MSenseFile->file_name, IDString);
 		strcat(MSenseFile->file_name, ".bin");
-		//printk("file: %s \n", file_name); 
+		
+		// Now that we created the file name, open it and write the data
 		LOG_INF("Creating new file...");
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
@@ -278,7 +282,6 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 	}
 	else if (data_counter >= data_limit){
-		//memset(file_name, 0, sizeof(file_name));
 		data_counter = 0;
 	}
 	
@@ -713,7 +716,7 @@ DWORD get_fattime(void)
 			   (DWORD)stm->tm_min << 5 |
 			   (DWORD)stm->tm_sec >> 1;
 	}
-	LOG_WRN("date time was not set, returning nothing for windows fatfs date time");
+	LOG_WRN("date time not set, returning nothing for fatfs date");
 	return 0;
 }
 

@@ -499,17 +499,17 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 void reset_device(){
 
-  // disconnect bluetooth
+  // disconnect bluetooth and usb
   LOG_INF("disabling bluetooth.. \n");
   
   bt_disable();
   usb_disable();
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
-
+  // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
-    LOG_INF("got qspi_device, eraseing... \n");
+    LOG_INF("got flash device, eraseing... \n");
     file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
     spi_nand_multi_chip_erase(flash_device);
@@ -522,7 +522,7 @@ void reset_device(){
     flash_erase(flash_device, 0, size);
     #endif
     
-    //custom_qspi_send_cmd(qspi_device, &chip_erase, true);
+    
     LOG_INF("Chip Erase Complete! Resetting");
     k_sleep(K_SECONDS(2));
   }
@@ -650,6 +650,7 @@ uint16_t offset, uint8_t flags){
 
 	
 	LOG_INF("Write length: %i", len);
+  // date has to be 4 byte int to work.
   if (len != 4){
     LOG_WRN("invalid packet length for date: %i", len);
     return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -688,6 +689,7 @@ uint16_t offset, uint8_t flags){
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
   }
 
+  // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
   if ((val == 68 || val == 121) && !collecting_data){
@@ -696,6 +698,7 @@ uint16_t offset, uint8_t flags){
     connectedFlag=false;
     storage_clear_led();
     k_sleep(K_SECONDS(2));
+    // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68){
     reset_device();
     }
@@ -708,7 +711,7 @@ uint16_t offset, uint8_t flags){
   return -1;
 }
 
-
+// Note: Currently does not work, more work is needed to allow dynamic runtime name changing.
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   int status;
@@ -757,7 +760,6 @@ uint16_t offset, uint8_t flags){
   k_sleep(K_SECONDS(2));
   NVIC_SystemReset();
   return 0;
-  //NVIC_SystemReset();
   
   return -1;
 }
@@ -800,6 +802,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
         ppgConfig.infraRed_intensity = val - 10;
       }
       else if (val >= 122){
+        // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
         if (val == 130 || val == 150 && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
@@ -813,6 +816,8 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           #if CONFIG_DISK_DRIVER_RAW_NAND
             set_read_only(false);
           #endif
+
+          
           if (val == 150){
             storage_clear_led();
             create_test_files(500);

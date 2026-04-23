@@ -261,7 +261,7 @@ uint8_t spi_rdsr(const struct device *dev);
 int spi_nor_wrsr(const struct device *dev,
 			uint8_t sr);
 
-int detect_bad_blocks(const struct device* dev);
+int detect_manufacturer_bad_blocks(const struct device* dev);
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest);
 

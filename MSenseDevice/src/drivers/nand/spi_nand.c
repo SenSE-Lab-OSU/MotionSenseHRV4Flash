@@ -564,7 +564,8 @@ int spi_unlock_memory(const struct device* dev){
 	set_features(dev, REGISTER_BLOCKLOCK, 0);
 }
 
-int detect_bad_blocks(const struct device* dev){
+// static bad block detection which attempts to figure out whether there were bad blocks set by the manufacturer via a bad block marking.
+int detect_manufacturer_bad_blocks(const struct device* dev){
 	int page_addr = 0;
 	int bad_blocks = 0;
 	uint8_t dest;
@@ -632,9 +633,11 @@ int detect_bad_blocks(const struct device* dev){
 		bad_blocks++;
 	}
 	}
-	LOG_DBG("total bad blocks: %d", bad_blocks);
-	
-
+	LOG_INF("total bad blocks: %d", bad_blocks);
+	if (bad_blocks > 0){
+		LOG_WRN("bad block count > 0");
+	}
+	return bad_blocks;
 }
 
 

@@ -1210,7 +1210,8 @@ int status_reg_ble_notification(){
 }
 
 int storage_ble_notification(uint8_t* data, uint8_t len){
-
+  // if there is no notification, then we technically have an error.
+  int ret = -1;
   const struct bt_gatt_attr *attr = &status_service.attrs[2];
   if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");
@@ -1218,13 +1219,16 @@ int storage_ble_notification(uint8_t* data, uint8_t len){
     if (ret != 0){
       printk("Error, unable to send notification\n");
     }
-  } 
+  }
+  return ret; 
 }
 
 
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
 
-  const struct bt_service_static* selected_service;
+  int ret = 0;
+  
+  const struct bt_gatt_service_static* selected_service;
   switch (service){
     case 0:
       selected_service = &tfMicro_service;
@@ -1233,11 +1237,12 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
   const struct bt_gatt_attr *attr; //= selected_service->attrs[4];
   if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){
       printk("Error, unable to send notification\n");
     }
-  } 
+  }
+  return ret; 
 }
 
 

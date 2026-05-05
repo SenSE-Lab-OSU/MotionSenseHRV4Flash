@@ -244,7 +244,11 @@ void dt_update_battery(const struct device *dev)
 		uint16_t flags_value;
 		const struct device* battery_device = DEVICE_DT_GET(DT_INST(0, ti_bq274xx));
 		bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
-		battery_charging = !(flags_value & 1);
+		bool current_battery_charging = !(flags_value & 1);
+		if (current_battery_charging != battery_charging){
+			status_reg_ble_notification();
+		}
+		battery_charging = current_battery_charging;
 		printk("register status: %hu \n", flags_value); 
 		printk("is charging: %d \n", battery_charging);
 }

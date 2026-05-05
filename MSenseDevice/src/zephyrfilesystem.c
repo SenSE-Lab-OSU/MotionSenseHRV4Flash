@@ -8,6 +8,8 @@
 
 
 #include <stdlib.h>
+
+#include "BLEService.h"
 #include "zephyrfilesystem.h"
 
 
@@ -34,7 +36,7 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 #endif
 
-
+bool security_lock;
 
 #define MAX_BUFFER_SIZE 9000
 
@@ -76,7 +78,7 @@ int last_packet_number_processed = 0;
 
 static int current_file_count;
 
-const int max_writes = 256;
+const int max_writes = 512;
 
 typedef struct k_sensor_upload {
 	enum sensor_type sensor;
@@ -111,6 +113,8 @@ typedef struct MotionSenseFile {
 	int write_size;
 	int current_writes;
 	int data_counter;
+	uint64_t start_time;
+	bool first_sample_init;
 	char sensor_string[5];
 	char file_name[50];
 	char sensor_format[80];
@@ -129,16 +133,18 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg, uint32 timer and uint32 counter"
+	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 timer, and uint32 counter"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
 	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 gyro, uint32 timer, uint32 counter"
+	.sensor_format = "3 int16 accel, 3 float32 gyro, second avg float32 enmo, uint32 timer, uint32 counter"
 };
 
 
+// TODO: Still work in progress . We do have a hacky way to make the device read only (see nand_disk.c) 
+// but no way to make it show up as read only on windows yet.
 void enable_read_only(bool enable){
 	struct fs_mount_t* mp = &fs_mnt;
 	if (mp->type == FS_FATFS){
@@ -153,20 +159,41 @@ void enable_read_only(bool enable){
 	}
 }
 
+int total_files = 0;
 
+// Test files
+char a[4096*2] = "hello world, this is a story about a man who liked to run. "
+    "every day for miles. he wandered and wandered for miles. "
+    "as the seasons changed, he kept moving, tracing the edges of towns "
+    "and forests, learning the quiet language of the wind. "
+    "people sometimes asked him why he ran so far, but he only smiled, "
+    "because the answer was something he felt rather than spoke. "
+    "the rhythm of his footsteps steadied his thoughts, and the long roads "
+    "gave him room to remember who he was and who he hoped to become. "
+    "on certain mornings, when the fog clung low to the fields, he felt "
+    "as though he were the only person awake in the world. "
+    "he liked those mornings best. "
+    "they reminded him that solitude was not the same as loneliness; "
+    "it was a kind of quiet companionship with the earth itself. "
+    "and so he kept running, mile after mile, year after year, "
+    "carrying stories in his breath and dreams in his stride.";
+
+	
 void create_test_file(int sectors){
 	printk("trying to write file...\n");
 	
 	char destination[50] = "";
 	int ID = 0;
 	struct fs_mount_t* mp = &fs_mnt;
-	char IDString[5];
+	char IDString[12];
 
 
 	struct fs_file_t test_file;
 	fs_file_t_init(&test_file);
+	total_files++;
+	//ID = sys_rand32_get() % 90000;
+	ID = total_files;
 	
-	ID = sys_rand32_get() % 90000;
 	itoa(ID, IDString,  10);
 
 	strcat(destination, mp->mnt_point);
@@ -174,13 +201,13 @@ void create_test_file(int sectors){
 	strcat(destination, IDString);
 	strcat(destination, "testing.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
+	FRESULT res = f_expand(&test_file, 4096*max_writes*2, 1);
 	if (file_create == 0)
 	{
-		char a[4096 * 2] = "hello world, this is a story about a man who liked to run. \
-		every day for miles. he wandered and wandered for miles.";
+		
 		for (int i = 0; i < sectors; i++)
 		{
-			printk("trying to write...\n");
+			
 			fs_write(&test_file, a, sizeof(a));
 		}
 		printk("done writing\n");
@@ -189,17 +216,14 @@ void create_test_file(int sectors){
 }
 
 void create_test_files(int number_of_files){
-
+	LOG_INF("creating test files...");
 	for (int x = 0; x < number_of_files; x++){
-		create_test_file(256);
+		create_test_file(512);
 	}
 
 
 }
 
-void create_sensor_file(MotionSenseFile* MSenseFile){
-
-}
 
 void reset_sensor_file(MotionSenseFile* MSenseFile){
 	fs_close(&MSenseFile->self_file);
@@ -207,6 +231,7 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 	MSenseFile->buffer2.current_size = 0;
 	MSenseFile->switch_buffer = false;
 	MSenseFile->current_writes = 0;
+	MSenseFile->first_sample_init = false;
 }
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
@@ -225,11 +250,11 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 
 
 	if (MSenseFile->current_writes == 0){
-		// Create a new file, with given sensor type, patient name, and date
+		// Create a new file, with given sensor type, patient name, and date as file name
 		fs_file_t_init(&MSenseFile->self_file);
 		
 		
-		int ID = 0;
+		uint64_t ID = 0;
 		// max itoa can do is 33 with binary, but theoretically it will be < 9
 		char IDString[33];
 		char patient_id[33];
@@ -240,11 +265,14 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			
 		}
 		else {
-			uint64_t current_time = get_current_unix_time();
+
+			uint64_t current_time = MSenseFile->start_time; 
+			
 			ID = current_time;
 
 		}
-		itoa(ID, IDString,  10);
+		sprintf(IDString, "%llu", ID);
+		//itoa(ID, IDString,  10);
 		
 
 		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
@@ -257,19 +285,22 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
 		strcat(MSenseFile->file_name, IDString);
 		strcat(MSenseFile->file_name, ".bin");
-		//printk("file: %s \n", file_name); 
+		
+		// Now that we created the file name, open it and write the data
+		LOG_INF("Creating new file...");
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
 			LOG_WRN("Unable to create file");
+			file_system_malfunction = true;
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
 		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
 		if (res != 0){
-		LOG_WRN("failed to expand file");
+			LOG_WRN("failed to expand file");
+			file_system_malfunction = true;
 		}
 	}
 	else if (data_counter >= data_limit){
-		//memset(file_name, 0, sizeof(file_name));
 		data_counter = 0;
 	}
 	
@@ -277,12 +308,24 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file, bytes written = %i ! \n", total_written);
+		LOG_INF("sucessfully wrote to file for %d, bytes written = %i ! \n", sensor, total_written);
+		file_system_malfunction = false;
 		data_counter += total_written;
 	}
+	else if (total_written < 0){
+		LOG_WRN("file system failed to write!");
+		file_system_malfunction = true;
+		status_reg_ble_notification();
+	}
+
 	if (MSenseFile->current_writes >= max_writes){
-		fs_close(&MSenseFile->self_file);
+		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
+		if (close_ret < 0){
+			file_system_malfunction = 5;
+			status_reg_ble_notification();
+			LOG_WRN("Error on closing file");
+		}
 		MSenseFile->current_writes = 0;
 		get_storage_percent_full();
 	}
@@ -342,7 +385,10 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
+	
 	start_timer();
+	LOG_INF("writing true for container %d", container->sensor);
+	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer();
 	LOG_INF("write timer: %lli", time_value);
@@ -352,6 +398,8 @@ void work_write(struct k_work* item){
 	}
 	LOG_INF("Processing packet %i", container->packet_num);
 	last_packet_number_processed = container->packet_num;
+	LOG_INF("writing false for container %d", container->sensor);
+	container->in_use = false;
 
 }
 
@@ -363,8 +411,11 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		work_item = &ppg_work_item;
 	}
 	else if (type == accelorometer){
-		work_item == &accel_work_item;
+		work_item = &accel_work_item;
 	}
+	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
+	
+	if (!work_item->in_use){
 
 	work_item->address = data;
 	work_item->size = size;
@@ -374,11 +425,14 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	int ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
 	if (ret != 1){
 		upload_timeout_errors += 1;
-		LOG_ERR("bad ret value: %i, total_errors: %d", ret, upload_timeout_errors);
+		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
 		
 	}
-	LOG_INF("ret value: %i", ret);
-
+	LOG_INF("ret value for %i: %i", type, ret);
+	}
+	else{
+		LOG_ERR("work item attempted schedule while still running for type: %i", type);
+	}
 }
 
 
@@ -401,6 +455,11 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		current_buffer = &MSenseFile->buffer1;
 	}
 
+	if (!MSenseFile->first_sample_init){
+		MSenseFile->start_time = get_current_unix_time();
+		MSenseFile->first_sample_init = true;
+	}
+
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
 	//memcpy(arr, address_to_write, size);
@@ -408,6 +467,9 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
 			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
+		}
+		if ((MSenseFile->current_writes + 1) >= max_writes){
+			MSenseFile->first_sample_init = false;
 		}
 		LOG_INF("Submitting File!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
@@ -461,11 +523,11 @@ int write_ble_uuid(const char* uuid){
 
 int close_all_files(){
 
-	int code = fs_close(&file);
+	
 	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
 	
-	return code;
+	return 0;
 
 }
 
@@ -593,6 +655,10 @@ void setup_disk(void)
 		       (ent.type == FS_DIR_ENTRY_FILE) ? 'F' : 'D',
 		       ent.size,
 		       ent.name);
+		if (ent.name != NULL){
+			strstr(ent.name, "test") != NULL ? total_files++ : 0;
+		}
+
 	}
 
 	(void)fs_closedir(&dir);
@@ -620,6 +686,10 @@ int get_storage_percent_full(){
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
 	storage_percent_full = (int)storage_percent;
+	if (storage_percent_full >= 99){
+		file_system_full = true;
+	}
+	storage_ble_notification(&storage_percent_full, sizeof(storage_percent_full));
 	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 
@@ -650,7 +720,7 @@ uint64_t get_current_unix_time(){
 }
 
 // for now we will use Mountain Time (UTC -7)
-#define TIMEZONE_SHIFT -7
+#define TIMEZONE_SHIFT -8
 // To make this work with the file system, you will need to set FF_FS_NORTC to 0 in  zephyr\modules\fatfs (line 82).
 DWORD get_fattime(void)
 {
@@ -669,6 +739,7 @@ DWORD get_fattime(void)
 			   (DWORD)stm->tm_min << 5 |
 			   (DWORD)stm->tm_sec >> 1;
 	}
+	LOG_WRN("date time not set, returning nothing for fatfs date");
 	return 0;
 }
 

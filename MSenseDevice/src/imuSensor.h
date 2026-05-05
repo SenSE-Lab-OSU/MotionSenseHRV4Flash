@@ -45,6 +45,7 @@
 #define SPI_FILL 0xFF
 #define MAGNETO_SINGLE_MEASUREMENT 0x01
 #define IMU_SLEEP 0x40
+#define IMU_RESET 0x80
 #define IMU_CLK_SEL_BEST_SEL 0x01
 #define MAGNETOMETER_POWERDOWN 0x00
 #define IMU_TEMP_DISABLE 0x08
@@ -116,9 +117,9 @@ extern struct motionInfo my_motionSensor;
 extern struct magnetoInfo my_magnetoSensor; 
 extern struct orientationInfo my_orientaionSensor;
 struct accData {
-  int16_t accx;
-  int16_t accy;
-  int16_t accz;
+  int16_t raw_accx;
+  int16_t raw_accy;
+  int16_t raw_accz;
   float accx_val;
   float accy_val;
   float accz_val;
@@ -194,7 +195,8 @@ extern struct magneto_config magnetoConfig;
 extern struct orientation_config orientationConfig;
 
 extern uint8_t enmo_threshold_packet[9];
-extern int enmo_sample_counter;
+extern uint32_t enmo_sample_counter;
+extern uint32_t last_activated_trigger_counter;
 
 void motion_config(void);
 void getIMUID();

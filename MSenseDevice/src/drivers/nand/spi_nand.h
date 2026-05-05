@@ -154,9 +154,8 @@ struct spi_flash_config {
 	const struct gpio_dt_spec reset;
 #endif
 
-	/* Runtime SFDP stores no static configuration. */
 
-#ifndef CONFIG_SPI_NOR_SFDP_RUNTIME
+
 	/* Size of device in bytes, from size property */
 	uint32_t flash_size;
 
@@ -173,16 +172,6 @@ struct spi_flash_config {
 	uint8_t enter_4byte_addr;
 #endif /* CONFIG_SPI_NOR_SFDP_MINIMAL */
 
-#if defined(CONFIG_SPI_NOR_SFDP_DEVICETREE)
-	/* Length of BFP structure, in 32-bit words. */
-	uint8_t bfp_len;
-
-	/* Pointer to the BFP table as read from the device
-	 * (little-endian stored words), from sfdp-bfp property
-	 */
-	const struct jesd216_bfp *bfp;
-#endif /* CONFIG_SPI_NOR_SFDP_DEVICETREE */
-#endif /* CONFIG_SPI_NOR_SFDP_RUNTIME */
 
 	/* Optional bits in SR to be cleared on startup.
 	 *
@@ -232,20 +221,17 @@ struct spi_nor_data {
 	 * devicetree store page size and erase_types; runtime also
 	 * stores flash size and layout.
 	 */
-#ifndef CONFIG_SPI_NOR_SFDP_MINIMAL
+
 
 	/* Number of bytes per page */
 	uint16_t page_size;
 
-#ifdef CONFIG_SPI_NOR_SFDP_RUNTIME
-	/* Size of flash, in bytes */
-	uint32_t flash_size;
+
 
 #ifdef CONFIG_FLASH_PAGE_LAYOUT
 	struct flash_pages_layout layout;
 #endif /* CONFIG_FLASH_PAGE_LAYOUT */
-#endif /* CONFIG_SPI_NOR_SFDP_RUNTIME */
-#endif /* CONFIG_SPI_NOR_SFDP_MINIMAL */
+
 };
 
 uint16_t dev_page_size(const struct device *dev);
@@ -275,7 +261,7 @@ uint8_t spi_rdsr(const struct device *dev);
 int spi_nor_wrsr(const struct device *dev,
 			uint8_t sr);
 
-int detect_bad_blocks(const struct device* dev);
+int detect_manufacturer_bad_blocks(const struct device* dev);
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest);
 

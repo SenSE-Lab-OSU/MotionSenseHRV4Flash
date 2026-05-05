@@ -9,6 +9,7 @@ typedef struct memory_container {
 	size_t size;
 	enum sensor_type sensor;
 	int packet_num;
+	bool in_use;
 	struct k_work work;
 
 } memory_container;
@@ -50,6 +51,8 @@ void start_timer();
 int64_t stop_timer();
 
 void enable_read_only(bool enable);
+
+extern bool security_lock;
 
 extern int64_t start_time;
 

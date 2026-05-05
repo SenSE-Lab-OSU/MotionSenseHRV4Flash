@@ -14,6 +14,7 @@ extern bool collecting_data;
 extern bool host_wants_collection;
 extern bool battery_low;
 extern bool file_system_full;
+extern bool file_system_malfunction;
 extern bool battery_charging;
 
 
@@ -185,9 +186,13 @@ void tfMicro_notify(struct k_work *);
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void enmo_threshold_send(uint8_t* data, uint8_t len);
+int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic);
+int status_reg_ble_notification();
+
 void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void motion_notify(struct k_work *item);
+int storage_ble_notification(uint8_t* data, uint8_t len);
 void magneto_notify(struct k_work *item);
 void orientation_notify(struct k_work *item);
 void ppgData_notify(struct k_work *item);

@@ -48,7 +48,7 @@ LOG_MODULE_REGISTER(main);
 #define READMASTER 0x80
 
 /* 1000 msec = 1 sec */
-#define SLEEP_TIME_MS 5000
+#define SLEEP_TIME_MS 6000
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED0_NODE DT_ALIAS(led0)
@@ -293,7 +293,7 @@ static void bt_ready(int err)
     printk("Advertising failed to start (err %d)\n", err);
   else
   {
-    printk("Advertising successfully started\n");
+    printk("Advertising started\n");
   }
 
   k_sem_give(&ble_init_ok);
@@ -303,7 +303,9 @@ static void bt_ready(int err)
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    usb_enable(usb_status_cb);
+    if (!security_lock){
+      usb_enable(usb_status_cb);
+    }
   #endif
 }
 
@@ -356,13 +358,13 @@ static void spi_init(void)
   }
   if (spi_dev_imu == NULL || !device_is_ready(spi_dev_imu))
   {
-    printk("Could not get %s device\n", spiName_imu);
+    printk("Could not get %s \n", spiName_imu);
     return;
   }
 
   if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
   {
-    printk("Could not get %s device\n", spiName_ppg);
+    printk("Could not get %s \n", spiName_ppg);
     return;
   }
   
@@ -374,13 +376,12 @@ static void spi_init(void)
   spi_cfg_imu.cs = imu_cs;
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
-  getIMUID();
   
   // high_pass_filter_init_25();
 
   // fileOpen();
   dataFlash = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
-  printk("data combo = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
+  printk("intensity = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
   // fileWrite(dataFlash);
   // fileClose();
 
@@ -391,7 +392,7 @@ static void spi_init(void)
 
   gyroConfig.isEnabled = true;
   gyroConfig.txPacketEnable = true;
-  gyroConfig.tot_samples = 8;
+  gyroConfig.tot_samples = 10;
   gyroConfig.sensitivity = GYRO_FS_SEL_500;
   orientationConfig.isEnabled = true;
   orientationConfig.txPacketEnable = true;
@@ -413,19 +414,18 @@ static void spi_init(void)
 
 void spi_verify_sensor_ids()
 {
-  uint8_t tx_buffer[4], rx_buffer[4];
-  tx_buffer[0] = READMASTER | 0x00;
-  tx_buffer[1] = 0xFF;
-  uint8_t txLen = 2, rxLen = 2;
+  
   if (device_is_ready(spi_dev_imu))
   {
     getIMUID();
   }
   else
   {
-    LOG_WRN("IMU not ready, setup was avoided");
+    LOG_WRN("IMU not ready, setup avoided");
   }
-
+  
+  uint8_t tx_buffer[4], rx_buffer[4];
+  uint8_t txLen = 3, rxLen = 3;
   tx_buffer[0] = PPG_CHIP_ID_1;
   tx_buffer[1] = READMASTER;
   tx_buffer[2] = 0x00;
@@ -476,7 +476,7 @@ void battery_maintenance()
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (collecting_data || host_wants_collection){
-        if (battery_level < 10 && collecting_data){
+        if (battery_level < 5 && collecting_data){
             battery_low = true;
             start_stop_device_collection(false);
         }
@@ -515,13 +515,19 @@ void main(void)
 
   // Setup our Flash Filesystem
   setup_disk();
-  //create_test_files(950);
+  k_sleep(K_SECONDS(1));
+  //create_test_files(400);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
   #endif
-    usb_enable(usb_status_cb);
   #endif
+
+  #ifdef CONFIG_MSENSE_USB_SECURITY
+    security_lock = true;
+  #endif
+
+
   k_sleep(K_SECONDS(2));
 
   
@@ -535,12 +541,6 @@ void main(void)
 #endif
 #endif
 
-  // the "1" is the timer priority
-  IRQ_CONNECT(TIMER1_IRQn, 1,
-              nrfx_timer_1_irq_handler, NULL, 0);
-
-
-  
   
   
   
@@ -552,6 +552,8 @@ void main(void)
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+  // initialize imu ground pin
+  ret = gpio_pin_configure(gpio0_device, 27, GPIO_OUTPUT_INACTIVE);
   if (ret < 0)
   {
     printk("Error: Can't initialize LED");
@@ -593,9 +595,10 @@ void main(void)
 
   
   k_work_init(&ppg_work_item.work, work_write);
+  ppg_work_item.sensor = ppg;
 
   k_work_init(&accel_work_item.work, work_write);
-
+  accel_work_item.sensor = accelorometer;
   ble_init();
   
   get_storage_percent_full();
@@ -616,9 +619,10 @@ void main(void)
       global_update = 0;
     }
 
-    if (global_update % 10 == 0){
+    if (global_update % 5 == 0){
       battery_maintenance();
       get_current_unix_time();
+      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
       if (!file_lock){
       }
     }

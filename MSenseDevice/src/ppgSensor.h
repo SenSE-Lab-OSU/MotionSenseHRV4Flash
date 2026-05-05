@@ -148,6 +148,7 @@ struct tfMicro_configData {
 extern struct ppg_configData ppgConfig;
 extern struct ppgData ppgData1;
 extern struct tfMicro_configData tfMicroCoonfig;
+extern bool use_fixed_ppg_brightness;
 void spiReadWritePPG(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
 void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen);
 void ppgsensor_config(void);

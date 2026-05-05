@@ -74,9 +74,7 @@ config MSENSE3_BLUETOOTH_DATA_UPDATES
 	bool "Use MotionSenseHRV3Updates"
 	default n
 
-config USE_FIXED_PPG_BRIGHTNESS
-	bool "Whether to use a fixed ppg brightness for a participant"
-	default n
+
 
 menuconfig COLLECTION_REQUIRES_DATE_ID
 	bool "Allows sensor collection only if the date time and id characteristics have been filled out by the central."
@@ -88,6 +86,11 @@ config BLUETOOTH_SETTINGS_OVERRIDE
 
 config USB_ALWAYS_ON
 	bool "whether the usb mass storage driver is on during bluetooth collection"
+	default n
+
+
+config MSENSE_USB_SECURITY
+	bool "Configures USB security mode, which requires a password in order to enable to usb behavior"
 	default n
 
 config LOG_LEVEL_DATA_COLLECTION

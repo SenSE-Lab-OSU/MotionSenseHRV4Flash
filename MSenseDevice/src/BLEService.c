@@ -45,10 +45,11 @@ bool collecting_data = false;
 bool host_wants_collection = false;
 bool battery_low = false;
 bool file_system_full = false;
+bool file_system_malfunction = false;
 bool battery_charging = false;
 
-bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full, &battery_charging};
-int num_of_status_registers = 6;
+bool* status_registers[8] = {&connectedFlag, &collecting_data, &host_wants_collection, &battery_low, &file_system_full,  &file_system_malfunction, &battery_charging };
+int num_of_status_registers = 7;
 bool ble_status_register_send[8] = { 0 };
 
 uint32_t uptime;
@@ -77,6 +78,8 @@ static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, c
 uint16_t offset, uint8_t flags);
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
+static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+  uint16_t offset, uint8_t flags);
 
 
 
@@ -156,7 +159,7 @@ BT_GATT_SERVICE_DEFINE(data_service,
   /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
     BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
     BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
-    configSet, on_receive, configRead),
+    configSet, on_settings_change, configRead),
   BT_GATT_CUD(CONFIG_NAME, BT_GATT_PERM_READ),//3
   BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_TX, //4,5
     BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
@@ -218,21 +221,23 @@ BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_name, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
 BT_GATT_SERVICE_DEFINE(status_service, 
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
+    BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
-    BT_GATT_CHRC_READ, BT_GATT_PERM_READ,
+    BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_uptime, NULL, &uptime),
+    BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 /* update service: read ENMO updates */
@@ -324,7 +329,7 @@ void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *b
 }
 
 
-static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_ble_status_register(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
@@ -337,11 +342,20 @@ static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_g
 
 static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
 #define TIMER_MS 5
-#define TIMER_PRIORITY 1
+#define TIMER_US 3125 
+#define TIMER_PRIORITY 7
 
 
 void timer_handler(nrf_timer_event_t event_type, void* p_context){
+  #ifdef CONFIG_LOG
   LOG_DBG("Timer Executing");
+  static uint64_t prev_time = 0;
+  if (k_uptime_get()-prev_time > 8){
+    LOG_ERR("Timer: %d", k_uptime_get()-prev_time);
+  }
+  prev_time = k_uptime_get();
+  #endif 
+
   if(collecting_data == true){
     switch (event_type){
       case NRF_TIMER_EVENT_COMPARE0:
@@ -364,9 +378,9 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
             LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
           }
         }  
-        // gyroConfig.tot_samples and ppg.numCounts is set in main.c at 8
+        // gyroConfig.tot_samples is 10 and ppg.numCounts is set in main.c at 5
         ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-        magneto_first_read = (magneto_first_read +1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+        magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
         
         gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
         
@@ -397,9 +411,12 @@ printk("timer init\n");
           .frequency = 1000000,
           .mode      = NRF_TIMER_MODE_TIMER,
           .bit_width = NRF_TIMER_BIT_WIDTH_24,
+          // timer priority is according to cortex m, not zephyr . Lower is still better, but 7 is the closest without
+          // interfering with ble.
           .interrupt_priority = TIMER_PRIORITY,
           .p_context = NULL,
   };  
+  
   
   uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
   nrfx_timer_config_t config = timer_cfg; 
@@ -410,10 +427,11 @@ printk("timer init\n");
   }
   else
           printk("nrfx_timer_init success with: %d\n", err);
-  time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
-  printk("time ticks = %d\n", time_ticks);
-
-
+  IRQ_CONNECT(TIMER1_IRQn, 0, nrfx_timer_1_irq_handler, NULL, 0);
+  irq_enable(TIMER1_IRQn);
+  
+  //time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
+  time_ticks = nrfx_timer_us_to_ticks(&timer_global, TIMER_US);
   nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks, 
   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
 
@@ -481,20 +499,17 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 void reset_device(){
 
-  // disconnect bluetooth
+  // disconnect bluetooth and usb
   LOG_INF("disabling bluetooth.. \n");
   
   bt_disable();
   usb_disable();
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
-  const struct qspi_cmd chip_erase = {
-    .op_code = 0xC7 // qspi chip erase command
-  };
-
+  // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
-    LOG_INF("got qspi_device, eraseing... \n");
+    LOG_INF("got flash device, eraseing... \n");
     file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
     spi_nand_multi_chip_erase(flash_device);
@@ -507,7 +522,7 @@ void reset_device(){
     flash_erase(flash_device, 0, size);
     #endif
     
-    //custom_qspi_send_cmd(qspi_device, &chip_erase, true);
+    
     LOG_INF("Chip Erase Complete! Resetting");
     k_sleep(K_SECONDS(2));
   }
@@ -522,8 +537,8 @@ void reset_device(){
 
 void start_stop_device_collection(uint8_t val){
 
+
   if (val != collecting_data){
-    
     if (val){
       ppg_config();
       motion_config();
@@ -537,7 +552,9 @@ void start_stop_device_collection(uint8_t val){
       #endif
       // we sleep for a tiny bit to let the ppg and accel config power up, 
       //as we get junk values in the initial seconds of turning them on.
-      k_sleep(K_MSEC(500));
+      // TODO: Flush the PPG buffer before starting collection, if we sleep and don't do this samples will accumulate!
+      //k_sleep(K_MSEC(500));
+      
       timer_init();
       global_counter = 0;
       gyro_first_read = 0;
@@ -549,15 +566,19 @@ void start_stop_device_collection(uint8_t val){
     } 
     else{
       timer_deinit();
+      k_sleep(K_MSEC(500));
       close_all_files();
       enmo_sample_counter = 0;
+      last_activated_trigger_counter = 0;
 
       #if CONFIG_DISK_DRIVER_RAW_NAND
       set_read_only(true);
       #endif
 
       #ifndef CONFIG_USB_ALWAYS_ON
-      usb_enable(NULL);	
+      if (!security_lock){
+        usb_enable(NULL);	
+      }
       #endif
 
       collecting_data = false;
@@ -616,7 +637,7 @@ uint16_t offset, uint8_t flags){
   }
 
   uint64_t val = *((uint64_t *)buff);
-  LOG_INF("write: %llu", val);
+  LOG_INF("writing: %llu", val);
   set_date_time_bt(val);
   return len;
 }
@@ -629,6 +650,7 @@ uint16_t offset, uint8_t flags){
 
 	
 	LOG_INF("Write length: %i", len);
+  // date has to be 4 byte int to work.
   if (len != 4){
     LOG_WRN("invalid packet length for date: %i", len);
     return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -667,6 +689,7 @@ uint16_t offset, uint8_t flags){
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
   }
 
+  // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
   if ((val == 68 || val == 121) && !collecting_data){
@@ -675,6 +698,7 @@ uint16_t offset, uint8_t flags){
     connectedFlag=false;
     storage_clear_led();
     k_sleep(K_SECONDS(2));
+    // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68){
     reset_device();
     }
@@ -687,7 +711,7 @@ uint16_t offset, uint8_t flags){
   return -1;
 }
 
-
+// Note: Currently does not work, more work is needed to allow dynamic runtime name changing.
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   int status;
@@ -736,11 +760,98 @@ uint16_t offset, uint8_t flags){
   k_sleep(K_SECONDS(2));
   NVIC_SystemReset();
   return 0;
-  //NVIC_SystemReset();
   
   return -1;
 }
 
+void create_test_files_through_file_workqueue(struct k_work* work){
+  storage_clear_led();
+  create_test_files(125);
+  blink_led(31);
+
+}
+
+
+static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+  uint16_t offset, uint8_t flags){
+    LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+      (void *)conn, len);
+  
+    
+    LOG_INF("Write length: %i", len);
+    if (len != 1){
+      LOG_WRN("invalid packet length: %i", len);
+    }
+    
+    if (offset != 0) {
+      LOG_INF("Write: Incorrect data offset");
+      return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+  
+    uint8_t val = *((uint8_t *)buff);
+    LOG_INF("entered value: %i", val);
+    if (!collecting_data){
+      if (val == 0){
+        LOG_INF("Turning on auto brightness");
+        use_fixed_ppg_brightness = false;
+      }
+      else if (val > 0 && val < 121){
+        LOG_INF("Turning on manual brightness");
+        use_fixed_ppg_brightness = true;
+        ppgConfig.green_intensity = val;
+        ppgConfig.infraRed_intensity = val - 10;
+      }
+      else if (val >= 122){
+        // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
+        if (val == 130 || val == 150 && !collecting_data){
+
+          bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+          file_lock = true;
+          #ifndef CONFIG_USB_ALWAYS_ON
+          usb_disable();
+          #endif
+          LOG_INF("Manual file creation");
+          k_sleep(K_SECONDS(1));
+          LOG_INF("begin");
+          #if CONFIG_DISK_DRIVER_RAW_NAND
+            set_read_only(false);
+          #endif
+
+          
+          if (val == 150){
+            storage_clear_led();
+            create_test_files(500);
+            blink_led(31);
+          }
+          else{
+            struct k_work work;
+            k_work_init(&work, create_test_files_through_file_workqueue);
+            k_work_submit_to_queue(&my_work_q, &work);
+            //k_work_submit(&work);
+            //create_test_files(1);
+          }
+          
+          file_lock = false;
+          #if CONFIG_DISK_DRIVER_RAW_NAND
+          set_read_only(true);
+          #endif
+          //bt_enable(bt_ready);
+          #ifndef CONFIG_USB_ALWAYS_ON
+          if (!security_lock){
+          usb_enable(usb_status_cb);
+          }
+          #endif
+          
+          //NVIC_SystemReset();
+
+        }
+      }  
+      return NRFX_SUCCESS;
+      
+    }
+    
+    return -1;
+  }
 
 
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
@@ -782,7 +893,7 @@ static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_att
 }
 
 /* This function is called whenever the RX Characteristic has been written to by a Client */
-ssize_t on_receive(struct bt_conn *conn,
+ssize_t on_settings_change(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,
 			  const void *buf,
 			  uint16_t len,
@@ -1080,6 +1191,58 @@ void enmo_threshold_send(uint8_t* data, uint8_t len){
     }
   } 
 
+}
+
+
+int status_reg_ble_notification(){
+
+  for (int x = 0; x < num_of_status_registers; x++){
+    ble_status_register_send[x] = *status_registers[x];
+  }
+  const struct bt_gatt_attr *attr = &status_service.attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending status reg...");
+    int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+}
+
+int storage_ble_notification(uint8_t* data, uint8_t len){
+  // if there is no notification, then we technically have an error.
+  int ret = -1;
+  const struct bt_gatt_attr *attr = &status_service.attrs[2];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  }
+  return ret; 
+}
+
+
+int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
+
+  int ret = 0;
+  
+  const struct bt_gatt_service_static* selected_service;
+  switch (service){
+    case 0:
+      selected_service = &tfMicro_service;
+
+  }
+  const struct bt_gatt_attr *attr; //= selected_service->attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  }
+  return ret; 
 }
 
 

@@ -1,11 +1,12 @@
 /*
- * Copyright 2022 NXP
+ * Copyright 2025 Devan Mallory
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*
- * SDMMC disk driver using zephyr SD subsystem
+ * NAND flash disk driver with unique lightweight Flash Translation Layer (FTL) that uses an external NOR for simplified ECC.
+ * avalible via zephyr SD subsystem
  */
 
 #include <zephyr/device.h>
@@ -19,7 +20,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 4);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -32,7 +33,6 @@ struct sdmmc_config {
 };
 
 struct sdmmc_data {
-	//struct sd_card card;
 	enum sd_status status;
 	char *name;
 	bool read_for_filename;
@@ -40,25 +40,12 @@ struct sdmmc_data {
 
 
 // File System Controls
+// on write, checks whether the a certain page is already written to. 
 bool CheckDuplicateAccess = false;
-bool VerifyWrites = true;
-
-// The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
-int total_bad_sectors = 0;
-
-/*perhaps we could make this bad blocks.
-TODO: Make this system calculate this in offline mode.
-Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
-since bad sectors aren't used and the next sector over is used.
-*/
-uint32_t bad_sectors[5000];
-
-// Config sector monitoring
-int sector_write_list[5000] = { 0 };
-int unique_sectors_written = 0;
+bool VerifyWrites = false;
 
 
-int file_table_sector_num = 60;
+int file_table_sector_num = 180;
 
 bool read_only = false;
 
@@ -75,54 +62,109 @@ bool read_only = false;
 #define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
 #endif 
 
- 
+#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
+#define FILETABLE_PARTITION_OFFSET 0
+
+#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+
+// The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
+int total_bad_sectors = 0;
+
+/*perhaps we could make this bad blocks.
+TODO: Test this system to save and load in offline mode.
+Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
+since bad sectors aren't used and the next sector over is used.
+*/
+
+#define bad_sector_detect_limit 2000
+uint32_t bad_sectors[bad_sector_detect_limit];
+
+
+
+static int save_bad_sectors_arr(){
+	
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	// start address for bad sectors
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
+	if (ret == 0){
+		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	}
+	return ret;
+};
+
+static int load_bad_sectors_arr()
+{
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	
+	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	// if the memory is all 1s, that means we haven't written to the array yet
+	if (bad_sectors[0] == 0xFFFFFFFF){
+		LOG_INF("first time loading bad sectors array, saving...");
+		for (int x = 0; x < total_bad_sect_arr_size, x++;){
+			bad_sectors[x] = 0;
+		}
+		save_bad_sectors_arr();
+	}
+	LOG_INF("found and loaded bad sector arr");
+	for (int x = 0; x < total_bad_sect_arr_size, x++;){
+		if (bad_sectors[x] != 0){
+			total_bad_sectors++;
+		}
+	}
+	LOG_WRN("Loaded Bad Sector count: %d", total_bad_sectors);
+	return ret;
+};
+
 // eventually we should just change this to blocks.
 static int register_bad_sector(uint32_t sector_num){
-	
-	bad_sectors[total_bad_sectors] = sector_num;
-	total_bad_sectors++;
+
+	if (total_bad_sectors < bad_sector_detect_limit)
+	{
+		bad_sectors[total_bad_sectors] = sector_num;
+		total_bad_sectors++;
+		LOG_WRN("New bad sector hit! total bad sectors: %d", sector_num);
+		save_bad_sectors_arr();
+	}
+	else{
+		LOG_ERR("Bad sectors hit max allowable bad limit");
+	}
 	return total_bad_sectors;
 }
 
+#endif
+
 static int get_sector_offset(int sector_num){
-	
+	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 	for (int x = 0; x < total_bad_sectors; x++){
 		if (bad_sectors[x] <= sector_num){
 			sector_num++;
 		}
 	}
+	#endif
 	return sector_num;
+	
 }
+
 
 
 /* We will need to make this all be enabled by a KConfig. */
 
-static int duplicate_sector_access(struct disk_info* disk, int sector_num){
-	if (unique_sectors_written >= 80000){
-		return 0;
-	}
-	for (int i = 0; i < unique_sectors_written; i++){
-		if (sector_write_list[i] == sector_num){
-			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-			// TODO: Determine this offline first.
-			
-			return -1;
-		}
-	}
-	sector_write_list[unique_sectors_written] = sector_num;
-	unique_sectors_written++;
-	return 0;
-}
-
-
 uint8_t check_buffer[4096];
-static int duplicate_sector_access2(const struct disk_info* disk, int sector_num){
+static int check_duplicate_sector_write(const struct disk_info* disk, int sector_num){
 
 	disk_access_read(disk->name, check_buffer, sector_num, 1);
 	for (int x = 0; x < 4096; x++){
 		if (check_buffer[x] != 0xff){
-			LOG_WRN("error: attempted duplicate write for sector %i, total bad %d", sector_num, total_bad_sectors);
+			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
+			#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 			register_bad_sector(sector_num);
+			#endif
 			return -1;
 			
 		}
@@ -162,10 +204,8 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, 4096*file_table_sector_num);
+	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
-
-
 
 
 
@@ -230,6 +270,9 @@ static int disk_nand_access_init(struct disk_info *disk)
 
 static int disk_acess_init2(struct disk_info *disk){
 
+	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+	load_bad_sectors_arr();
+	#endif
 	return 0;
 } 
 
@@ -261,13 +304,10 @@ static int disk_nand_access_status(struct disk_info *disk)
 static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
-
-	
-	LOG_DBG("performing disk read at sector %i", sector);
+	// count is the number of sectors that are being written
+	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
 	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;
-	
-	
+	struct sdmmc_data *data = dev->data;	
 
 	off_t addr;
 	int ret = 0;
@@ -277,9 +317,8 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	}
 
 	for (int x = 0; x < count; x++) {
-
+		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
 		if (sector+x < file_table_sector_num){
-		//memcpy(buf, sector_buffer[sector], 4096);
 		ret = file_table_access(buf, sector+x, false);
 		continue;
 		}
@@ -289,40 +328,38 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	}
 	
 	//lol
-	return ret; //sdmmc_read_blocks(&data->card, buf, sector, count);
+	return ret; 
 }
 
+uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	// count is the number of sectors that are being written
 	if (!read_only){
 	LOG_DBG("performing disk write at sector %i", sector);
-	if (count > 1){
-	LOG_INF("count: %i", count);
-	}
+
+	
+	LOG_DBG("count: %i", count);
+	
 	const struct device *dev = disk->dev;
 	struct sdmmc_data *data = dev->data;
 	int ret = 0;
 	off_t addr;
 	
-
-
-	
 	for (int x = 0; x < count; x++){
-		// Do we know what count means?
 		if (sector+x < file_table_sector_num){
-			//memcpy(sector_buffer[sector], buf, 4096);
+			
 			file_table_access(buf, sector+x, true);
 			continue;
 		}
 		else {
-		int error;
 		int sector_num = x+sector;
 		if (CheckDuplicateAccess){
 			for (int y = 0; y < 1000; y++){
 				sector_num = get_sector_offset(x+sector);
 				
-				int error = duplicate_sector_access2(disk, sector_num);
+				int error = check_duplicate_sector_write(disk, sector_num);
 				if (error == -1){
 					continue;
 				}
@@ -333,17 +370,24 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		addr = convert_page_to_address(dev, sector_num);
 		ret = spi_nand_page_write(dev, addr, &buf[x*4096], 4096);
 		// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
-		if (ret > 3){
-			//TODO: Implement read back logic here.
-		}
-		}
-
 		
+		if (VerifyWrites){
+			ret = spi_nand_page_read(dev, addr, read_back_buffer);
+			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
+			if (!equal){
+				LOG_ERR("Sector %d yielded incorrect readback", sector_num);
+				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+				register_bad_sector(sector_num);
+				#endif
+			}
+		}
+		
+		}
 		
 	}
 	
 	
-	return ret; //sdmmc_write_blocks(&data->card, buf, sector, count);
+		return ret; 
 	}
 	return -1;
 }

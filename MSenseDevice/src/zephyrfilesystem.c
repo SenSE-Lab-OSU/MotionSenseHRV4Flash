@@ -159,9 +159,26 @@ void enable_read_only(bool enable){
 	}
 }
 
+int total_files = 0;
+
 // Test files
-char a[4096*2] = "hello world, this is a story about a man who liked to run. \
-		every day for miles. he wandered and wandered for miles.";
+char a[4096*2] = "hello world, this is a story about a man who liked to run. "
+    "every day for miles. he wandered and wandered for miles. "
+    "as the seasons changed, he kept moving, tracing the edges of towns "
+    "and forests, learning the quiet language of the wind. "
+    "people sometimes asked him why he ran so far, but he only smiled, "
+    "because the answer was something he felt rather than spoke. "
+    "the rhythm of his footsteps steadied his thoughts, and the long roads "
+    "gave him room to remember who he was and who he hoped to become. "
+    "on certain mornings, when the fog clung low to the fields, he felt "
+    "as though he were the only person awake in the world. "
+    "he liked those mornings best. "
+    "they reminded him that solitude was not the same as loneliness; "
+    "it was a kind of quiet companionship with the earth itself. "
+    "and so he kept running, mile after mile, year after year, "
+    "carrying stories in his breath and dreams in his stride.";
+
+	
 void create_test_file(int sectors){
 	printk("trying to write file...\n");
 	
@@ -173,8 +190,10 @@ void create_test_file(int sectors){
 
 	struct fs_file_t test_file;
 	fs_file_t_init(&test_file);
+	total_files++;
+	//ID = sys_rand32_get() % 90000;
+	ID = total_files;
 	
-	ID = sys_rand32_get() % 90000;
 	itoa(ID, IDString,  10);
 
 	strcat(destination, mp->mnt_point);
@@ -636,6 +655,10 @@ void setup_disk(void)
 		       (ent.type == FS_DIR_ENTRY_FILE) ? 'F' : 'D',
 		       ent.size,
 		       ent.name);
+		if (ent.name != NULL){
+			strstr(ent.name, "test") != NULL ? total_files++ : 0;
+		}
+
 	}
 
 	(void)fs_closedir(&dir);

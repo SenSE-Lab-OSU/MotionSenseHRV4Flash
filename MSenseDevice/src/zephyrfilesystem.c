@@ -117,7 +117,7 @@ typedef struct MotionSenseFile {
 	bool first_sample_init;
 	char sensor_string[5];
 	char file_name[50];
-	char sensor_format[80];
+	char sensor_format[90];
 	struct fs_file_t self_file;
 	bool switch_buffer;
 	data_upload_buffer buffer1;
@@ -218,6 +218,7 @@ void create_test_file(int sectors){
 void create_test_files(int number_of_files){
 	LOG_INF("creating test files...");
 	for (int x = 0; x < number_of_files; x++){
+		LOG_INF("file %d of %d", x, number_of_files);
 		create_test_file(512);
 	}
 

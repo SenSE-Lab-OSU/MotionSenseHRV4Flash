@@ -278,6 +278,10 @@ void motion_data_orientation_timeout_handler(uint16_t pktCounter){
 //  gyro_orientation_y = angularVelY-gy_offset; 
 //  gyro_orientation_z = angularVelZ -gz_offset;
 
+  mag_orientation_x = current_magneto_data.Hx_val;
+  mag_orientation_y = current_magneto_data.Hy_val;
+  mag_orientation_z = current_magneto_data.Hz_val;
+
   MadgwickAHRSupdate(gyro_orientation_x, gyro_orientation_y, 
     gyro_orientation_z, acc_orientation_x, acc_orientation_y,
     acc_orientation_z, mag_orientation_x, mag_orientation_y, 
@@ -316,9 +320,6 @@ void motion_data_orientation_timeout_handler(uint16_t pktCounter){
     k_work_submit(&my_orientaionSensor.work);
   }
 
-  mag_orientation_x = current_magneto_data.Hx_val;
-  mag_orientation_y = current_magneto_data.Hy_val;
-  mag_orientation_z = current_magneto_data.Hz_val;
   if( norm_acc > 1.3f ){   
     mxBiax_arr[pointerMag]=mag_orientation_x;
     myBiax_arr[pointerMag]=mag_orientation_y;

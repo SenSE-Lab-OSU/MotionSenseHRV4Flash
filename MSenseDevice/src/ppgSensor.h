@@ -87,6 +87,10 @@
 #define PPG_LEDC2_LED2_LED3_SIMULT 0x60
 #define PPG_LEDC1_LED1 0x01
 
+#define PPG_FIXED_SAMPLE_AVG PPG_SMP_AVE_2
+#define PPG_FIXED_NUM_COUNTS 2
+#define PPG_FIXED_TIME_WINDOW 512
+
 // New PPG tag types
 #define PPG1_LEDC1_DATA    0x01
 #define PPG1_LEDC2_DATA    0x02
@@ -162,7 +166,6 @@ void ppg_changeIntensity(void);
 void ppg_changeSamplingRate(void);
 void read_ppg_fifo_buffer(struct k_work *item);
 void ppg_sleep(void);
-void ppg_bluetooth_fill(uint8_t* buffer_array);
 
 void ppg_turn_on();
 

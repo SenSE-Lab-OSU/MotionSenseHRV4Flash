@@ -24,6 +24,7 @@ extern bool battery_charging;
 #define ACC_GYRO_DATA_LEN 20
 #define MAGNETOMETER_DATA_LEN 8
 #define ORIENTATION_DATA_LEN 18
+#define ENMO_DATA_LEN 8
 #define CONFIG_RX_DATA_LEN 6
 #define PPGQUALITY_DATA_LEN 4
 #define ACCQUALITY_DATA_LEN 4
@@ -51,6 +52,7 @@ extern bool battery_charging;
 #define MOTION_BLE_ENABLE 0x02
 #define MAGNETOMETER_ENABLE 0x10
 #define MAGNETOMETER_BLE_ENABLE 0x10
+#define MAGNETOMETER_DATA_PATH_ENABLED 0
 #define PPG_ENABLE 0x01
 #define PPG_BLE_ENABLE 0x01
 #define ORIENTATION_ENABLE 0x04
@@ -73,6 +75,12 @@ extern bool battery_charging;
 #define PPG_100_FS 0x02
 #define PPG_50_FS 0x03
 #define PPG_25_FS 0x04
+
+// Legacy config/status encoding aliases for the fixed-cadence design.
+// The on-wire status values reuse former labels; motion integrates at 512 Hz
+// and emits 32 Hz records, and PPG is 512 sps with 2-sample averaging.
+#define MOTION_FIXED_32HZ_STATUS MOTION_25_FS
+#define PPG_FIXED_256HZ_STATUS (PPG_50_FS << 4)
 
 // Main Service UUID 
 #define CONTROL_SERVICE_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
@@ -208,5 +216,3 @@ static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, vo
 
 
  #endif
-
-

@@ -1,11 +1,133 @@
-
+#include <zephyr/logging/log.h>
 #include "spi_nand.h"
+#include "nand_disk.h"
 #include "bad_page.h"
+
+
+LOG_MODULE_REGISTER(spi_nand_bad_page, CONFIG_FLASH_LOG_LEVEL);
+
+
+#define FILE_TABLE_NAND_PARTITION	slot0_partition
+
+
+#ifdef CONFIG_PARTITION_MANAGER_ENABLED
+#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(PM_FATFILETABLE_PARTITION_NAME)
+#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(PM_FATFILETABLE_PARTITION_NAME)
+#else
+
+#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(FILE_TABLE_NAND_PARTITION)
+#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
+#endif 
+
+#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
+#define FILETABLE_PARTITION_OFFSET 0
+
+#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+
+
+
+// The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
+int total_bad_sectors = 0;
+
+/* This should work for bad blocks.
+TODO: Test this system to save and load in offline mode.
+Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
+since bad sectors aren't used and the next sector over is used.
+*/
+
+
+bool use_blocks = false;
+
+#define bad_sector_detect_limit 2000
+uint32_t bad_sectors[bad_sector_detect_limit];
+
+
+
+int save_bad_sectors_arr(){
+	
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	// start address for bad sectors
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
+	if (ret == 0){
+		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	}
+	return ret;
+};
+
+int load_bad_sectors_arr()
+{
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = 0;
+	
+	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	// if the memory is all 1s, that means we haven't written to the array yet
+	if (bad_sectors[0] == 0xFFFFFFFF){
+		LOG_INF("first time loading bad sectors array, saving...");
+		for (int x = 0; x < total_bad_sect_arr_size, x++;){
+			bad_sectors[x] = 0;
+		}
+		save_bad_sectors_arr();
+	}
+	LOG_INF("found and loaded bad sector arr");
+	for (int x = 0; x < total_bad_sect_arr_size, x++;){
+		if (bad_sectors[x] != 0){
+			total_bad_sectors++;
+		}
+	}
+	LOG_WRN("Loaded Bad Sector count: %d", total_bad_sectors);
+	return ret;
+};
+
+// eventually we should just change this to blocks.
+int register_bad_sector(uint32_t sector_num){
+
+	if (total_bad_sectors < bad_sector_detect_limit)
+	{
+		bad_sectors[total_bad_sectors] = sector_num;
+		total_bad_sectors++;
+		LOG_WRN("New bad sector hit! total bad sectors: %d", sector_num);
+		save_bad_sectors_arr();
+	}
+	else{
+		LOG_ERR("Bad sectors hit max allowable bad limit");
+	}
+	return total_bad_sectors;
+}
+#else
+int register_bad_sector(uint32_t sector_num){return 0;}
+int save_bad_sectors_arr(){return 0;}
+int load_bad_sectors_arr()
+{return 0;}
+
+#endif
+
+int get_sector_offset(int sector_num){
+	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+	for (int x = 0; x < total_bad_sectors; x++){
+		if (bad_sectors[x] <= sector_num){
+			sector_num++;
+		}
+	}
+	#endif
+	return sector_num;	
+}
+
 
 #define MAX_BAD_PAGES 100
 #define PAGE_SIZE 4096
 
 static off_t bad_pages[MAX_BAD_PAGES] = {}; // Global array of bad pages, initialize to 0 (invalid)
+
+
+
+
+
+
 
 /**
  * Wrapper for spi_nand_page_read that simulates bad pages.

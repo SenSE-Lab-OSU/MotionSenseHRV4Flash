@@ -31,7 +31,7 @@ const char *dhara_strerror(dhara_error_t err)
 		[DHARA_E_CORRUPT_MAP] = "Sector map is corrupted"
 	};
 	const char *msg = NULL;
-
+	
 	if ((err >= 0) && (err < DHARA_E_MAX))
 		msg = messages[err];
 

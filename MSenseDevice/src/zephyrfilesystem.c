@@ -115,9 +115,9 @@ typedef struct MotionSenseFile {
 	int data_counter;
 	uint64_t start_time;
 	bool first_sample_init;
-	char sensor_string[5];
+	const char sensor_string[5];
 	char file_name[50];
-	char sensor_format[90];
+	const char sensor_format[90];
 	struct fs_file_t self_file;
 	bool switch_buffer;
 	data_upload_buffer buffer1;
@@ -162,7 +162,7 @@ void enable_read_only(bool enable){
 int total_files = 0;
 
 // Test files
-char a[4096*2] = "hello world, this is a story about a man who liked to run. "
+char test_file_arr[4096*2] = "hello world, this is a story about a man who liked to run. "
     "every day for miles. he wandered and wandered for miles. "
     "as the seasons changed, he kept moving, tracing the edges of towns "
     "and forests, learning the quiet language of the wind. "
@@ -208,7 +208,7 @@ void create_test_file(int sectors){
 		for (int i = 0; i < sectors; i++)
 		{
 			
-			fs_write(&test_file, a, sizeof(a));
+			fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
 		}
 		printk("done writing\n");
 		fs_close(&test_file);
@@ -479,7 +479,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 }
 
-int write_ble_uuid(const char* uuid){
+int write_ble_uuid(char* uuid){
 
 	struct fs_mount_t* mp = &fs_mnt;
 	struct fs_file_t name_file;

@@ -26,6 +26,7 @@
 #include "flash_priv.h"
 
 int erase_file_table();
+int register_bad_sector();
 
 LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 
@@ -72,6 +73,8 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 int current_writes = 0;
 int current_reads = 0;
 int current_erases = 0;
+
+int ECC_corrections = 0;
 
 // die select for each flash
 int current_die[4] = {0};
@@ -199,7 +202,6 @@ off_t convert_to_address(uint32_t page, uint32_t block){
 
 // The pages representing a block are from block - 65.
 // 4 gigabit is 536870912 bytes / 4096 = 131072 pages (131071 is last address)
-// TODO: update for 4 nand
 off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 
 	// total number of sectors per die. 
@@ -221,6 +223,10 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 off_t convert_block_to_address(uint32_t block){
 	//werid fix because of noticed offsets, perhaps there is another issue we are unaware of.
 	return (block * 64);
+}
+
+uint32_t convert_page_to_block(off_t address){
+	return (address / 64);
 }
 
 
@@ -348,7 +354,7 @@ static int write_disable(const struct device* dev){
 	
 	int ret = spi_cmd(dev, SPI_NOR_CMD_WRDI, NULL, 0);
 	if (ret != 0){
-			LOG_WRN("write disable failed");
+			LOG_WRN("write disable fail");
 	}
 	return ret;
 }
@@ -372,10 +378,10 @@ int set_die(const struct device* dev, int die_select){
 	int ret = set_features(dev, REGISTER_DIESELECT, feature);
 	if (ret == 0){
 		current_die[current_flash] = die_select;
-		LOG_DBG("flash 1 die: %d. flash 2 die: %d. flash 3 die: %d, flash 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
+		LOG_DBG("flash 1 die: %d. 2 die: %d. 3 die: %d, 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
 	}
 	else{
-		LOG_WRN("error with die setting");
+		LOG_WRN("error die setting");
 	}
 	return ret;
 
@@ -408,7 +414,7 @@ uint8_t get_features(const struct device* dev, uint8_t register_select){
 		return data;
 	}
 	else {
-		LOG_WRN("get features error");
+		LOG_WRN("get features err");
 		return 253;
 	}
 }
@@ -475,7 +481,7 @@ int spi_flash_wait_until_ready(const struct device *dev)
 	} while (!ret && (reg & SPI_NOR_WIP_BIT) && waitcycles <= 2000000000);
 	LOG_DBG("wait completed with %i cycles", waitcycles);
 	if (waitcycles > 1900000000){
-		LOG_ERR("wait cycles timed out");
+		LOG_ERR("wait c time out");
 		ret = -1;
 	}
 	return ret;
@@ -561,7 +567,8 @@ int spi_nor_wrsr(const struct device *dev,
 
 int spi_unlock_memory(const struct device* dev){
 
-	set_features(dev, REGISTER_BLOCKLOCK, 0);
+	int ret = set_features(dev, REGISTER_BLOCKLOCK, 0);
+	return ret;
 }
 
 // static bad block detection which attempts to figure out whether there were bad blocks set by the manufacturer via a bad block marking.
@@ -611,21 +618,21 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 
 	res = spi_nand_access(dev, &pread_cinstr_cfg);
 	if (res != 0) {
-		LOG_WRN("read transfer error: %x", res);
+		LOG_WRN("read transfer err: %x", res);
 		continue;
 	}
 	spi_flash_wait_until_ready(dev);
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0) {
-		LOG_WRN("buffer transfer error: %x", res);
+		LOG_WRN("buff transfer err: %x", res);
 		continue;
 	}
 	spi_flash_wait_until_ready(dev);
 
 	uint8_t status = spi_rdsr(dev);
 	if (status != 0){
-	LOG_WRN("finished read! with status %i", status);
+	LOG_WRN("read with stat %i", status);
 	}
 	release_device(dev);
 	//LOG_DBG("bad block value: %i", dest);
@@ -633,7 +640,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 		bad_blocks++;
 	}
 	}
-	LOG_INF("total bad blocks: %d", bad_blocks);
+	LOG_INF("tot bad block: %d", bad_blocks);
 	if (bad_blocks > 0){
 		LOG_WRN("bad block count > 0");
 	}
@@ -654,15 +661,20 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 	return ret;
 }
 
+// since spi_nand_page_read only works on one flash, we have to do work to make it work 
+int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
+	int ret;	
+	int non_corrupt_sector = get_sector_offset(page_number);
+	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
+	ret = spi_nand_page_read(dev, addr, &buffer);
+	return ret;
+}
 
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	current_reads++;
 	acquire_device(dev);
-	LOG_DBG("reading bytes at address %d", page_addr);
+	LOG_DBG("reading bytes at address %ld", page_addr);
 	nrfx_err_t res = 0;
-
-
-	//__ASSERT(data != NULL, "null destination");
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -703,36 +715,27 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 out:
 	uint8_t status = spi_rdsr(dev);
 	LOG_DBG("finished read! with status %i", status);
+	// get the ECC status
+	uint8_t ECC_status = status >> 4;
+	if (ECC_status != 0){
+		ECC_corrections += 1;
+		LOG_WRN("ECC %d, tot use %d", ECC_status, ECC_corrections);
+		if (ECC_status == 2){
+			LOG_ERR("ECC err too great, bad block");
+			return FLASH_TOO_MANY_ECC_ERROR;
+		}
+	}
+
 	release_device(dev);
 	return status;
 }
 
-static int spi_nand_read(const struct device *dev, off_t addr, void *dest,
-			size_t size)
-{
-	
-	const size_t flash_size = dev_die_size(dev);
-	int ret;
-
-	/* should be between 0 and flash size */
-	if ((addr < 0) || ((addr + size) > flash_size)) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-
-	//CODE GOES HERE
-	
-
-	release_device(dev);
-	return ret;
-}
 
 
 int spi_nand_page_write(const struct device* dev, off_t page_address, const void* src, size_t size){
 	current_writes++;
 	acquire_device(dev);
-	LOG_DBG("writing %d bytes at address %d", size, page_address);
+	LOG_DBG("writing %ld bytes at address %d", size, page_address);
 	nrfx_err_t res = 0;
 
 	uint8_t pe_addr_buf[] = {
@@ -792,74 +795,17 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 
 
 
-static int spi_nand_write(const struct device *dev, off_t addr,
-			const void *src,
-			size_t size)
-{
-	
-	const size_t flash_size = dev_die_size(dev);
-	const uint16_t page_size = dev_page_size(dev);
-	int ret = 0;
-
-	/* should be between 0 and flash size */
-	if ((addr < 0) || ((size + addr) > flash_size)) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-	
-	ret = spi_nor_write_protection_set(dev, false);
-	if (ret == 0) {
-		while (size > 0) {
-			size_t to_write = size;
-
-			/* Don't write more than a page. */
-			if (to_write >= page_size) {
-				to_write = page_size;
-			}
-
-			/* Don't write across a page boundary */
-			if (((addr + to_write - 1U) / page_size)
-			!= (addr / page_size)) {
-				to_write = page_size - (addr % page_size);
-			}
-
-			write_enable(dev);
-			//ret = spi_nor_cmd_addr_write(dev, SPI_NOR_CMD_PP, addr,
-			//			src, to_write);
-			spi_nand_page_write(dev, addr, src, to_write);
-			if (ret != 0) {
-				break;
-			}
-
-			size -= to_write;
-			src = (const uint8_t *)src + to_write;
-			addr += to_write;
-
-			spi_flash_wait_until_ready(dev);
-		}
-	}
-
-	int ret2 = spi_nor_write_protection_set(dev, true);
-
-	if (!ret) {
-		ret = ret2;
-	}
-
-	release_device(dev);
-	return ret;
-}
-
-int spi_nand_block_erase(const struct device* dev, off_t block_addr){
+// addr is the first page of the block
+int spi_nand_block_erase(const struct device* dev, off_t addr){
 	acquire_device(dev);
 	current_erases++;
 
 	//LOG_DBG("erasing block at %d", block_addr);
 	write_enable(dev);
 	uint8_t pe_addr_buf[] = {
-	block_addr >> 16,
-	block_addr >> 8,
-	block_addr,	
+	addr >> 16,
+	addr >> 8,
+	addr,	
 	};
 	
 	spi_send_request erase = {
@@ -894,7 +840,7 @@ int spi_nand_chip_erase(const struct device* device) {
 	int block_count = (size / page_size);
 	block_count /= 64;
 	//block_count = 4096;
-	LOG_INF("chip erase start, for %i blocks", block_count);
+	LOG_INF("chip erase start %i bl", block_count);
 	for (int current_block = 0; current_block <= block_count; current_block++){
 		block_address = convert_block_to_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
@@ -903,7 +849,7 @@ int spi_nand_chip_erase(const struct device* device) {
 			continue;
 		}
 	}
-	LOG_INF("chip erase complete! with status, %i", status); 
+	LOG_INF("chip erase done, stat, %i", status); 
 	return status;
 }
 
@@ -924,7 +870,7 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 	for (int i = 0; i < num_of_flashes; i++) {
 		set_flash(dev, i);
 		spi_nand_whole_chip_erase(dev);
-		LOG_INF("chip %i has been erased.", i + 1);
+		LOG_INF("chip %i erased.", i + 1);
 		k_sleep(K_MSEC(500));
 	}
 	set_flash(dev, 0);
@@ -932,95 +878,9 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 	if (ret != 0){
 		LOG_ERR("failed to erase file table");
 	}
-	LOG_INF("all chip erases complete!");
+	LOG_INF("all erase complete!");
 	return 0;
 }
-
-
-static int spi_nand_erase(const struct device *dev, off_t addr, size_t size)
-{
-	current_erases++;
-	const size_t flash_size = dev_die_size(dev);
-	int ret = 0;
-
-	/* erase area must be subregion of device */
-	if ((addr < 0) || ((size + addr) > flash_size)) {
-		return -EINVAL;
-	}
-
-	/* address must be sector-aligned */
-	if (!SPI_NOR_IS_SECTOR_ALIGNED(addr)) {
-		return -EINVAL;
-	}
-
-	/* size must be a multiple of sectors */
-	if ((size % SPI_NOR_SECTOR_SIZE) != 0) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-	ret = spi_nor_write_protection_set(dev, false);
-
-	while ((size > 0) && (ret == 0)) {
-		write_enable(dev);
-
-		if (size == flash_size) {
-			/* chip erase */
-			//spi_nor_cmd_write(dev, SPI_NOR_CMD_CE);
-			size -= flash_size;
-		} else {
-			const struct jesd216_erase_type *erase_types =
-				dev_erase_types(dev);
-			const struct jesd216_erase_type *bet = NULL;
-
-			for (uint8_t ei = 0; ei < JESD216_NUM_ERASE_TYPES; ++ei) {
-				const struct jesd216_erase_type *etp =
-					&erase_types[ei];
-
-				if ((etp->exp != 0)
-					&& SPI_NOR_IS_ALIGNED(addr, etp->exp)
-					&& (size >= BIT(etp->exp))
-					&& ((bet == NULL)
-					|| (etp->exp > bet->exp))) {
-					bet = etp;
-				}
-			}
-			if (bet != NULL) {
-				//spi_nor_cmd_addr_write(dev, bet->cmd, addr, NULL, 0);
-				addr += BIT(bet->exp);
-				size -= BIT(bet->exp);
-			} else {
-				LOG_DBG("Can't erase %zu at 0x%lx",
-					size, (long)addr);
-				ret = -EINVAL;
-			}
-		}
-
-#ifdef __XCC__
-		/*
-		* FIXME: remove this hack once XCC is fixed.
-		*
-		* Without this volatile return value, XCC would segfault
-		* compiling this file complaining about failure in CGPREP
-		* phase.
-		*/
-		volatile int xcc_ret =
-#endif
-		spi_flash_wait_until_ready(dev);
-	}
-
-	int ret2 = spi_nor_write_protection_set(dev, true);
-
-	if (!ret) {
-		ret = ret2;
-	}
-
-	release_device(dev);
-
-	return ret;
-}
-
-
 
 
 static int spi_read_jedec_id(const struct device *dev,
@@ -1049,7 +909,7 @@ static int flash_reset_and_unlock(const struct device* dev){
 	acquire_device(dev);
 	reset(dev);
 	spi_flash_wait_until_ready(dev);
-	spi_unlock_memory(dev);
+	int ret = spi_unlock_memory(dev);
 	uint8_t status = spi_rdsr(dev);
 	uint8_t configuration = get_features(dev, REGISTER_CONFIGURATION);
 	uint8_t blocklock = get_features(dev, REGISTER_BLOCKLOCK);
@@ -1058,7 +918,7 @@ static int flash_reset_and_unlock(const struct device* dev){
 	LOG_INF("BlockLock: %i", blocklock);
 	release_device(dev);
 	
-
+	return ret;
 }
 
 
@@ -1125,31 +985,6 @@ static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
 	}
 
 	flash_reset_and_unlock(dev); 
-	
-	/*
-	if (cfg->has_lock != 0) {
-		acquire_device(dev);
-
-		uint8_t status = spi_rdsr(dev);
-		LOG_INF("Status Register: %d", status);
-		if (rc > 0) {
-			//rc = spi_nor_wrsr(dev, rc & ~cfg->has_lock);
-		}
-
-		if (rc != 0) {
-			LOG_ERR("BP clear failed: %d\n", rc);
-			return -ENODEV;
-		}
-	*/
-		
-#if defined(CONFIG_FLASH_PAGE_LAYOUT)
-	//rc = setup_pages_layout(dev);
-	if (rc != 0) {
-		LOG_ERR("layout setup failed: %d", rc);
-		return -ENODEV;
-	}
-#endif /* CONFIG_FLASH_PAGE_LAYOUT */
-
 
 	return 0;
 }
@@ -1250,4 +1085,166 @@ static const struct flash_parameters* flash_nor_get_parameters(const struct devi
 	return &flash_nor_parameters;
 }
 
+static int spi_nand_read_template(const struct device *dev, off_t addr, void *dest,
+			size_t size)
+{
+	
+	const size_t flash_size = dev_die_size(dev);
+	int ret;
+
+	/* should be between 0 and flash size */
+	if ((addr < 0) || ((addr + size) > flash_size)) {
+		return -EINVAL;
+	}
+
+	acquire_device(dev);
+
+	//CODE GOES HERE
+	
+
+	release_device(dev);
+	return ret;
+}
+
+
+static int spi_nand_write_template(const struct device *dev, off_t addr,
+			const void *src,
+			size_t size)
+{
+	
+	const size_t flash_size = dev_die_size(dev);
+	const uint16_t page_size = dev_page_size(dev);
+	int ret = 0;
+
+	/* should be between 0 and flash size */
+	if ((addr < 0) || ((size + addr) > flash_size)) {
+		return -EINVAL;
+	}
+
+	acquire_device(dev);
+	
+	ret = spi_nor_write_protection_set(dev, false);
+	if (ret == 0) {
+		while (size > 0) {
+			size_t to_write = size;
+
+			/* Don't write more than a page. */
+			if (to_write >= page_size) {
+				to_write = page_size;
+			}
+
+			/* Don't write across a page boundary */
+			if (((addr + to_write - 1U) / page_size)
+			!= (addr / page_size)) {
+				to_write = page_size - (addr % page_size);
+			}
+
+			write_enable(dev);
+			//ret = spi_nor_cmd_addr_write(dev, SPI_NOR_CMD_PP, addr,
+			//			src, to_write);
+			spi_nand_page_write(dev, addr, src, to_write);
+			if (ret != 0) {
+				break;
+			}
+
+			size -= to_write;
+			src = (const uint8_t *)src + to_write;
+			addr += to_write;
+
+			spi_flash_wait_until_ready(dev);
+		}
+	}
+
+	int ret2 = spi_nor_write_protection_set(dev, true);
+
+	if (!ret) {
+		ret = ret2;
+	}
+
+	release_device(dev);
+	return ret;
+}
+
+
+static int spi_nand_erase_template(const struct device *dev, off_t addr, size_t size)
+{
+	current_erases++;
+	const size_t flash_size = dev_die_size(dev);
+	int ret = 0;
+
+	/* erase area must be subregion of device */
+	if ((addr < 0) || ((size + addr) > flash_size)) {
+		return -EINVAL;
+	}
+
+	/* address must be sector-aligned */
+	if (!SPI_NOR_IS_SECTOR_ALIGNED(addr)) {
+		return -EINVAL;
+	}
+
+	/* size must be a multiple of sectors */
+	if ((size % SPI_NOR_SECTOR_SIZE) != 0) {
+		return -EINVAL;
+	}
+
+	acquire_device(dev);
+	ret = spi_nor_write_protection_set(dev, false);
+
+	while ((size > 0) && (ret == 0)) {
+		write_enable(dev);
+
+		if (size == flash_size) {
+			/* chip erase */
+			//spi_nor_cmd_write(dev, SPI_NOR_CMD_CE);
+			size -= flash_size;
+		} else {
+			const struct jesd216_erase_type *erase_types =
+				dev_erase_types(dev);
+			const struct jesd216_erase_type *bet = NULL;
+
+			for (uint8_t ei = 0; ei < JESD216_NUM_ERASE_TYPES; ++ei) {
+				const struct jesd216_erase_type *etp =
+					&erase_types[ei];
+
+				if ((etp->exp != 0)
+					&& SPI_NOR_IS_ALIGNED(addr, etp->exp)
+					&& (size >= BIT(etp->exp))
+					&& ((bet == NULL)
+					|| (etp->exp > bet->exp))) {
+					bet = etp;
+				}
+			}
+			if (bet != NULL) {
+				//spi_nor_cmd_addr_write(dev, bet->cmd, addr, NULL, 0);
+				addr += BIT(bet->exp);
+				size -= BIT(bet->exp);
+			} else {
+				LOG_DBG("Can't erase %zu at 0x%lx",
+					size, (long)addr);
+				ret = -EINVAL;
+			}
+		}
+#ifdef __XCC__
+		/*
+		* FIXME: remove this hack once XCC is fixed.
+		*
+		* Without this volatile return value, XCC would segfault
+		* compiling this file complaining about failure in CGPREP
+		* phase.
+		*/
+		volatile int xcc_ret =
+#endif
+		spi_flash_wait_until_ready(dev);
+	}
+
+	int ret2 = spi_nor_write_protection_set(dev, true);
+
+	if (!ret) {
+		ret = ret2;
+	}
+
+	release_device(dev);
+
+	return ret;
+}
 

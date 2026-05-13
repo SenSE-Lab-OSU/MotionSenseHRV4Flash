@@ -15,6 +15,7 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
+#include "bad_page.h"
 #include "spi_nand.h"
 #include "nand_disk.h"
 
@@ -45,7 +46,8 @@ bool CheckDuplicateAccess = false;
 bool VerifyWrites = false;
 
 
-int file_table_sector_num = 180;
+const int file_table_sector_num = 180;
+
 
 bool read_only = false;
 
@@ -65,91 +67,7 @@ bool read_only = false;
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
 #define FILETABLE_PARTITION_OFFSET 0
 
-#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 
-// The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
-int total_bad_sectors = 0;
-
-/*perhaps we could make this bad blocks.
-TODO: Test this system to save and load in offline mode.
-Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
-since bad sectors aren't used and the next sector over is used.
-*/
-
-#define bad_sector_detect_limit 2000
-uint32_t bad_sectors[bad_sector_detect_limit];
-
-
-
-static int save_bad_sectors_arr(){
-	
-	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
-	// start address for bad sectors
-	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = 0;
-	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
-	if (ret == 0){
-		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
-	}
-	return ret;
-};
-
-static int load_bad_sectors_arr()
-{
-	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
-	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = 0;
-	
-	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
-	// if the memory is all 1s, that means we haven't written to the array yet
-	if (bad_sectors[0] == 0xFFFFFFFF){
-		LOG_INF("first time loading bad sectors array, saving...");
-		for (int x = 0; x < total_bad_sect_arr_size, x++;){
-			bad_sectors[x] = 0;
-		}
-		save_bad_sectors_arr();
-	}
-	LOG_INF("found and loaded bad sector arr");
-	for (int x = 0; x < total_bad_sect_arr_size, x++;){
-		if (bad_sectors[x] != 0){
-			total_bad_sectors++;
-		}
-	}
-	LOG_WRN("Loaded Bad Sector count: %d", total_bad_sectors);
-	return ret;
-};
-
-// eventually we should just change this to blocks.
-static int register_bad_sector(uint32_t sector_num){
-
-	if (total_bad_sectors < bad_sector_detect_limit)
-	{
-		bad_sectors[total_bad_sectors] = sector_num;
-		total_bad_sectors++;
-		LOG_WRN("New bad sector hit! total bad sectors: %d", sector_num);
-		save_bad_sectors_arr();
-	}
-	else{
-		LOG_ERR("Bad sectors hit max allowable bad limit");
-	}
-	return total_bad_sectors;
-}
-
-#endif
-
-static int get_sector_offset(int sector_num){
-	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-	for (int x = 0; x < total_bad_sectors; x++){
-		if (bad_sectors[x] <= sector_num){
-			sector_num++;
-		}
-	}
-	#endif
-	return sector_num;
-	
-}
 
 
 
@@ -271,7 +189,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 static int disk_acess_init2(struct disk_info *disk){
 
 	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-	load_bad_sectors_arr();
+	//load_bad_sectors_arr();
 	#endif
 	return 0;
 } 
@@ -322,6 +240,7 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		ret = file_table_access(buf, sector+x, false);
 		continue;
 		}
+		
 		int non_corrupt_sector = get_sector_offset(sector+x);
 		addr = convert_page_to_address(dev, non_corrupt_sector);
 		ret = spi_nand_page_read(dev, addr, &buf[x*4096]);
@@ -375,7 +294,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			ret = spi_nand_page_read(dev, addr, read_back_buffer);
 			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
 			if (!equal){
-				LOG_ERR("Sector %d yielded incorrect readback", sector_num);
+				LOG_ERR("sect %d yield bad readback", sector_num);
 				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 				register_bad_sector(sector_num);
 				#endif
@@ -386,15 +305,15 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		
 	}
 	
-	
 		return ret; 
 	}
+	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
 	return -1;
 }
 
 static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf)
 {
-	LOG_INF("Acessing ioctl with cmd %d", cmd);
+	LOG_INF("Ac ioctl with cmd %d", cmd);
 	const struct device *dev = disk->dev;
 	struct sdmmc_data *data = dev->data;
 
@@ -402,7 +321,7 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 	case DISK_IOCTL_GET_SECTOR_COUNT:
 		uint32_t sectors = dev_flash_size(dev) / dev_page_size(dev);
 		
-		LOG_INF("sectors avalible: %i", sectors);
+		LOG_INF("sect aval: %i", sectors);
 		(*(uint32_t *)buf) = sectors;
 		break;
 	case DISK_IOCTL_GET_SECTOR_SIZE:
@@ -517,7 +436,7 @@ static int disk_sdmmc_init(const struct device *dev)
 	//data->status = SD_UNINIT;
 
 	//spi_nor_data* nand_data = dev->data;
-	LOG_INF("Initializing disk Registration"); 
+	LOG_INF("Init disk regist"); 
 
 	sdmmc_disk.dev = dev;
 	sdmmc_disk.name = "SD";//dev->name;

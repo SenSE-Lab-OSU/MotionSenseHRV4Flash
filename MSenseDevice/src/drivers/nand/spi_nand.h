@@ -36,6 +36,13 @@
 #define FLASH_DIE_ZERO 0x00
 #define FLASH_DIE_ONE 0x40
 
+#define FLASH_PROGRAM_FAILURE -1000
+#define FLASH_ERASE_FAILURE -1001
+#define FLASH_ERASE_INCOMPLETE_ERROR -1003
+#define FLASH_PROGRAM_INCOMPLETE_ERROR -1004
+#define FLASH_TOO_MANY_ECC_ERROR -1005
+
+
 //SHARED COMMANDS: BLOCK ERASE, WRITE ENABLE, WRITE DISABLE, PAGE_TRANSFER(qspi nor is PAGE READ), 
 
 
@@ -264,6 +271,8 @@ int spi_nor_wrsr(const struct device *dev,
 int detect_manufacturer_bad_blocks(const struct device* dev);
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest);
+
+int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer);
 
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest);
 

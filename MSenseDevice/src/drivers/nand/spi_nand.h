@@ -241,17 +241,21 @@ struct spi_nor_data {
 
 };
 
+void print_page_hex(uint8_t* data_buf, int size, bool shorten);
+
 uint16_t dev_page_size(const struct device *dev);
 
 uint32_t dev_flash_size(const struct device* dev);
 
 int spi_flash_wait_until_ready(const struct device *dev);
 
-off_t convert_to_address(uint32_t page, uint32_t block);
+uint32_t convert_block_to_page(uint32_t page, uint32_t block);
+
+uint32_t convert_page_to_block(uint32_t page_number);
 
 off_t convert_page_to_address(const struct device* dev, uint32_t page);
 
-off_t convert_block_to_address(uint32_t block);
+off_t convert_block_to_singledie_address(uint32_t block);
 
 uint8_t get_features(const struct device* dev, uint8_t register_select);
 

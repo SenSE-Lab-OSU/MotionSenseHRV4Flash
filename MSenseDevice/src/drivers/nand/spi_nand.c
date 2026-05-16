@@ -196,7 +196,10 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 #define NOR_ACCESS_WRITE BIT(7)
 
 
-off_t convert_to_address(uint32_t page, uint32_t block){
+
+
+
+uint32_t convert_block_to_page(uint32_t page, uint32_t block){
 	return page + (block * 64);
 }
 
@@ -220,13 +223,20 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 	return page - (die_size * selected_die_num);
 }
 
-off_t convert_block_to_address(uint32_t block){
+// this is not the actual address for 4 flash, 
+off_t convert_block_to_singledie_address(uint32_t block){
 	//werid fix because of noticed offsets, perhaps there is another issue we are unaware of.
 	return (block * 64);
 }
 
-uint32_t convert_page_to_block(off_t address){
-	return (address / 64);
+uint32_t convert_page_to_block(uint32_t page_number){
+	return (page_number / 64);
+}
+
+bool is_page_in_block(uint32_t page_number, uint32_t block_number){
+	uint32_t first_page = convert_block_to_page(0, block_number);
+	uint32_t difference = (page_number - first_page);
+	return difference >= 0 && difference < 64;
 }
 
 
@@ -579,7 +589,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	off_t error_address = 4096;
 	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 	for (int x = 0; x < total_device_size; x++){
-	page_addr = convert_block_to_address(x);
+	page_addr = convert_block_to_singledie_address(x);
 	acquire_device(dev);
 	current_reads++;
 	//LOG_DBG("reading bytes at address %d", page_addr);
@@ -842,7 +852,7 @@ int spi_nand_chip_erase(const struct device* device) {
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
 	for (int current_block = 0; current_block <= block_count; current_block++){
-		block_address = convert_block_to_address(current_block);
+		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
 			LOG_WRN("error in chip erase: %i", status);
@@ -900,7 +910,6 @@ static int spi_read_jedec_id(const struct device *dev,
 
 static int flash_reset_and_unlock(const struct device* dev){
 	
-
 	/* Check for block protect bits that need to be cleared.  This
 	* information cannot be determined from SFDP content, so the
 	* devicetree node property must be set correctly for any device
@@ -1084,6 +1093,23 @@ static const struct flash_parameters* flash_nor_get_parameters(const struct devi
 
 	return &flash_nor_parameters;
 }
+
+
+void print_page_hex(uint8_t* data_buf, int size, bool shorten){
+	// can easily modify this to support other types like char or int
+	if (shorten && size > 50){
+		size = 50;
+	}
+	printk("data: ");
+	for (int i = 0; i < size; i ++){
+		printk("%02x ", data_buf[i]);
+		if (i % 10 == 9) {
+			printk("\n");
+		}
+	}
+	printk("\n end \n");
+}
+
 
 static int spi_nand_read_template(const struct device *dev, off_t addr, void *dest,
 			size_t size)

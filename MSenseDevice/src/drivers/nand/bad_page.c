@@ -85,7 +85,10 @@ int load_bad_sectors_arr()
 
 // eventually we should just change this to blocks.
 int register_bad_sector(uint32_t sector_num){
-
+    if (use_blocks){
+        sector_num = convert_page_to_block(sector_num);
+        sector_num = convert_block_to_page(0, sector_num);
+    }
 	if (total_bad_sectors < bad_sector_detect_limit)
 	{
 		bad_sectors[total_bad_sectors] = sector_num;
@@ -110,7 +113,12 @@ int get_sector_offset(int sector_num){
 	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 	for (int x = 0; x < total_bad_sectors; x++){
 		if (bad_sectors[x] <= sector_num){
+            if (use_blocks){
+                sector_num += 64;
+            }
+            else{
 			sector_num++;
+            }
 		}
 	}
 	#endif

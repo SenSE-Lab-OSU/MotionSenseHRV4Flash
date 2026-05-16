@@ -529,19 +529,6 @@ void main(void)
 
 
   k_sleep(K_SECONDS(2));
-
-  
-// this initializes FOTA
-#ifdef INCLUDE_DFU
-#ifdef CONFIG_BOOTLOADER_MCUBOOT
-  os_mgmt_register_group();
-
-  img_mgmt_register_group();
-  smp_bt_register();
-#endif
-#endif
-
-  
   
   
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));

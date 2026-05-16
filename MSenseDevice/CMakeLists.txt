@@ -22,6 +22,7 @@ endif()
 FILE(GLOB_RECURSE app_sources src/*.cc)
 FILE(GLOB c_app_sources src/*.c)
 
+target_compile_options(app PRIVATE -Wno-unused-function)
 #eventually, remove the induvidual file in target_sources, and just refactor to move zephyr filesystem out.
 #OR Keep Global Recuse on.
 # also move the drivers over to a seperate folder.

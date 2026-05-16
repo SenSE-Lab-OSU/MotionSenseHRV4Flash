@@ -1,5 +1,6 @@
 
 #include <zephyr/kernel.h>
+#include <zephyr/device.h>
 #include <zephyr/fs/fs.h>
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
@@ -8,7 +9,6 @@
 
 
 #include <stdlib.h>
-
 #include "BLEService.h"
 #include "zephyrfilesystem.h"
 
@@ -180,7 +180,7 @@ char test_file_arr[4096*2] = "hello world, this is a story about a man who liked
 
 	
 void create_test_file(int sectors){
-	printk("trying to write file...\n");
+	printk("write file...\n");
 	
 	char destination[50] = "";
 	int ID = 0;
@@ -210,7 +210,7 @@ void create_test_file(int sectors){
 			
 			fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
 		}
-		printk("done writing\n");
+		printk("done write\n");
 		fs_close(&test_file);
 	}
 }
@@ -594,7 +594,7 @@ void setup_disk(void)
 	struct fs_dir_t dir;
 	struct fs_statvfs sbuf;
 	int rc;
-
+	
 	fs_dir_t_init(&dir);
 
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
@@ -696,6 +696,33 @@ int get_storage_percent_full(){
 
 }
 
+
+
+
+#include "drivers/nand/nand_disk.h"
+// The following shows how to use the nand disk driver outside of the driver file directly.
+
+
+#define DT_DRV_COMPAT senselab_nanddisk
+int test_desk_driver(){
+	uint8_t write_buf[4096] = {1};
+	uint8_t read_buf[4096];
+	const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
+	// OR
+	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	spi_nand_page_write(filesystem_device2, 63, write_buf, sizeof(read_buf));
+	spi_nand_page_write(filesystem_device2, 64, write_buf, sizeof(read_buf));
+	spi_nand_page_read(filesystem_device2, 63, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+	spi_nand_block_erase(filesystem_device2, 0);
+	spi_nand_page_read(filesystem_device2, 63, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+	spi_nand_page_read(filesystem_device2, 64, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+}
+
+
+
 int read_storage_percent_full(){
 	return storage_percent_full;
 }
@@ -706,8 +733,6 @@ void set_date_time_bt(uint64_t value){
 	set_date_time = value;
 	last_time_update_sent = k_uptime_get() / 1000;
 	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
-	
-
 }
 
 uint64_t get_current_unix_time(){

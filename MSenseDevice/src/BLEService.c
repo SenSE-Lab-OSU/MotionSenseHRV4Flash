@@ -497,7 +497,7 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 
 
-void reset_device(){
+void reset_device(bool reset_bad_blocks){
 
   // disconnect bluetooth and usb
   LOG_INF("disabling bluetooth.. \n");
@@ -509,10 +509,16 @@ void reset_device(){
   // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
-    LOG_INF("got flash device, eraseing... \n");
+    LOG_INF("flash dev eraseing... \n");
     file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
-    spi_nand_multi_chip_erase(flash_device);
+    if (reset_bad_blocks){
+      LOG_WRN("Erasing bad block table and flash...");
+      spi_nand_multi_chip_reset(flash_device);
+    }
+    else{
+      spi_nand_multi_chip_erase(flash_device);
+    }
     #else
     #if !DT_NODE_HAS_PROP(DT_ALIAS(spi_flash0), size)
     #error "flash needs size property in order to be erased"
@@ -692,15 +698,15 @@ uint16_t offset, uint8_t flags){
   // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
-  if ((val == 68 || val == 121) && !collecting_data){
+  if ((val == 68 || val == 121 || val == 132) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     connectedFlag=false;
     storage_clear_led();
     k_sleep(K_SECONDS(2));
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.
-    if (val == 68){
-    reset_device();
+    if (val == 68 || val == 132){
+    reset_device(val == 132);
     }
     else {
       NVIC_SystemReset();
@@ -766,7 +772,7 @@ uint16_t offset, uint8_t flags){
 
 void create_test_files_through_file_workqueue(struct k_work* work){
   storage_clear_led();
-  create_test_files(125);
+  create_test_files(100);
   blink_led(31);
 
 }
@@ -824,11 +830,11 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             blink_led(31);
           }
           else{
+            LOG_INF("100 opt");
             struct k_work work;
             k_work_init(&work, create_test_files_through_file_workqueue);
             k_work_submit_to_queue(&my_work_q, &work);
-            //k_work_submit(&work);
-            //create_test_files(1);
+            create_test_files(100);
           }
           
           file_lock = false;

@@ -241,6 +241,13 @@ struct spi_nor_data {
 
 };
 
+extern int current_writes;
+extern int current_reads;
+extern int current_erases;
+
+extern int ECC_corrections;
+
+
 void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 
 uint16_t dev_page_size(const struct device *dev);
@@ -284,12 +291,14 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 
 int spi_nand_block_erase(const struct device * dev, off_t block_addr);
 
- 
+
 int spi_nand_chip_erase(const struct device* device);
 
 int spi_nand_whole_chip_erase(const struct device* dev);
 
 int spi_nand_multi_chip_erase(const struct device* dev);
+
+int spi_nand_multi_chip_reset(const struct device* dev);
 
 int spi_init(const struct device *dev);
 

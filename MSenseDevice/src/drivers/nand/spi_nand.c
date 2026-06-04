@@ -24,9 +24,10 @@
 #include "spi_nand.h"
 #include "jesd216.h"
 #include "flash_priv.h"
+#include "bad_page.h"
 
 int erase_file_table();
-int register_bad_sector();
+
 
 LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 
@@ -673,10 +674,16 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 
 // since spi_nand_page_read only works on one flash, we have to do work to make it work 
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
-	int ret;	
+	int ret;
+	if (current_reads % 5000 == 1000){
+		print_bad_sect_info();
+	}
 	int non_corrupt_sector = get_sector_offset(page_number);
 	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
-	ret = spi_nand_page_read(dev, addr, &buffer);
+	ret = spi_nand_page_read(dev, addr, buffer);
+	if (ret == FLASH_TOO_MANY_ECC_ERROR){
+		register_bad_sector(non_corrupt_sector);
+	}
 	return ret;
 }
 
@@ -729,9 +736,9 @@ out:
 	uint8_t ECC_status = status >> 4;
 	if (ECC_status != 0){
 		ECC_corrections += 1;
-		LOG_WRN("ECC %d, tot use %d", ECC_status, ECC_corrections);
+		LOG_WRN("ECC stat %d, tot corrections %d", ECC_status, ECC_corrections);
 		if (ECC_status == 2){
-			LOG_ERR("ECC err too great, bad block");
+			LOG_ERR("ECC err too high, bad block");
 			return FLASH_TOO_MANY_ECC_ERROR;
 		}
 	}
@@ -855,7 +862,7 @@ int spi_nand_chip_erase(const struct device* device) {
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
-			LOG_WRN("error in chip erase: %i", status);
+			LOG_WRN("err chip erase: %i", status);
 			continue;
 		}
 	}
@@ -875,6 +882,17 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 	
 	return ret;
 }
+
+// not only erases, but also resets the bad block storage.
+int spi_nand_multi_chip_reset(const struct device* dev){
+	int ret = spi_nand_multi_chip_erase(dev);
+	ret = erase_bad_sectors_arr();
+	if (ret != 0){
+		LOG_ERR("fail to erase bad sect");
+	}
+	return ret;
+}
+
 
 int spi_nand_multi_chip_erase(const struct device* dev){
 	for (int i = 0; i < num_of_flashes; i++) {

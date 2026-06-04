@@ -36,6 +36,8 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 #endif
 
+bool file_system_ready;
+
 bool security_lock;
 
 #define MAX_BUFFER_SIZE 9000
@@ -53,8 +55,10 @@ memory_container ppg_work_item;
 
 memory_container accel_work_item;
 
+memory_container log_work_item;
+
 //data limit per file in bytes
-static int data_limit = MAX_BUFFER_SIZE;
+const int data_limit = MAX_BUFFER_SIZE;
 
 
 
@@ -76,7 +80,6 @@ int packet_number = 0;
 
 int last_packet_number_processed = 0;
 
-static int current_file_count;
 
 const int max_writes = 512;
 
@@ -142,6 +145,11 @@ MotionSenseFile accel_file = {
 	.sensor_format = "3 int16 accel, 3 float32 gyro, second avg float32 enmo, uint32 timer, uint32 counter"
 };
 
+MotionSenseFile log_file = {
+	.write_size = 8192,
+	.sensor_string = "log",
+	.sensor_format = "logging"
+};
 
 // TODO: Still work in progress . We do have a hacky way to make the device read only (see nand_disk.c) 
 // but no way to make it show up as read only on windows yet.
@@ -179,7 +187,7 @@ char test_file_arr[4096*2] = "hello world, this is a story about a man who liked
     "carrying stories in his breath and dreams in his stride.";
 
 	
-void create_test_file(int sectors){
+void create_test_file(int writes){
 	printk("write file...\n");
 	
 	char destination[50] = "";
@@ -205,9 +213,9 @@ void create_test_file(int sectors){
 	if (file_create == 0)
 	{
 		
-		for (int i = 0; i < sectors; i++)
+		for (int i = 0; i < writes; i++)
 		{
-			
+			//k_sleep(K_SECONDS(.5)); for debug purposes in case it's ever necessary to see how files write slowly
 			fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
 		}
 		printk("done write\n");
@@ -247,6 +255,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == customlog){
+		MSenseFile = &log_file;
 	}
 
 
@@ -309,7 +320,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes written = %i ! \n", sensor, total_written);
+		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -320,6 +331,11 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 
 	if (MSenseFile->current_writes >= max_writes){
+		// if we don't want the leftover empty sectors caused by the buffer writes being smaller than 8192 size we can
+		// uncomment these lines or use f_truncate() with dhara
+		FIL* fp = &MSenseFile->self_file.filep;
+		fp->obj.objsize = fp->fptr;
+		fp->flag |= 0x40; // = FA_MODIFIED
 		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		if (close_ret < 0){
@@ -414,6 +430,10 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == accelorometer){
 		work_item = &accel_work_item;
 	}
+	else if (type == customlog){
+		work_item = &log_work_item;
+	}
+
 	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
 	
 	if (!work_item->in_use){
@@ -447,6 +467,9 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == customlog){
+		MSenseFile = &log_file;
 	}
 
 	if (MSenseFile->switch_buffer){
@@ -661,7 +684,7 @@ void setup_disk(void)
 		}
 
 	}
-
+	file_system_ready = true;
 	(void)fs_closedir(&dir);
 
 	return;
@@ -674,7 +697,7 @@ int get_storage_percent_full(){
 	int rc = fs_statvfs(mp->mnt_point, &info);
 	if (rc < 0) {
 		printk("FAIL: statvfs: %d\n", rc);
-		return;
+		return -1;
 	}
 
 	printk("%s: bsize = %lu ; frsize = %lu ;"

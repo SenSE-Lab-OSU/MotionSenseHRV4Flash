@@ -93,6 +93,14 @@ config MSENSE_USB_SECURITY
 	bool "Configures USB security mode, which requires a password in order to enable to usb behavior"
 	default n
 
+config LOG_BACKEND_FS_BUFFER
+    bool "file buffered log backend"
+    depends on LOG
+    select LOG_OUTPUT
+    help
+      When enabled, the double buffered filesystem backend (normally for ppg and accel) will be used for logging.
+
+
 config LOG_LEVEL_DATA_COLLECTION
 	int "whether data from sensors is printed in logs"
 	default 3

@@ -180,8 +180,12 @@ void set_read_only(bool enable){
 static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
-	
+	struct sdmmc_data* data = dev->data;
 	int sucess = spi_init(dev);
+	if (sucess != 0){
+		LOG_WRN("disk_nand_init failed %d", sucess);
+	}
+	data->status = SD_OK;
 	return 0;
 }
 
@@ -199,9 +203,9 @@ static int disk_nand_access_status(struct disk_info *disk)
 	//LOG_DBG("Accessing Status");
 	const struct device* dev = disk->dev;
 	
-	/*const struct sdmmc_config* cfg = dev->config;
+	const struct sdmmc_config* cfg = dev->config;
 	struct sdmmc_data *data = dev->data;
-
+	/*
 	if (!sd_is_card_present(cfg->host_controller)) {
 		return DISK_STATUS_NOMEDIA;
 	}
@@ -212,8 +216,11 @@ static int disk_nand_access_status(struct disk_info *disk)
 	}
 	*/
 	//uint8_t status = spi_rdsr(dev);
+	
 	if (read_only){
+		//return DISK_STATUS_WR_PROTECT;
 		return DISK_STATUS_OK;
+		
 	}
 	return DISK_STATUS_OK;
 
@@ -236,11 +243,12 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 
 	for (int x = 0; x < count; x++) {
 		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
-		if (sector+x < file_table_sector_num){
-		ret = file_table_access(buf, sector+x, false);
-		continue;
+		if (sector+x < file_table_sector_num)
+		{
+			ret = file_table_access(&buf[x*4096], sector+x, false);
+			continue;
 		}
-		
+		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
 		int non_corrupt_sector = get_sector_offset(sector+x);
 		addr = convert_page_to_address(dev, non_corrupt_sector);
 		ret = spi_nand_page_read(dev, addr, &buf[x*4096]);
@@ -254,6 +262,8 @@ uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	const char* name = k_thread_name_get(k_current_get());
+	LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
 	if (!read_only){
 	LOG_DBG("performing disk write at sector %i", sector);
@@ -269,7 +279,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	for (int x = 0; x < count; x++){
 		if (sector+x < file_table_sector_num){
 			
-			file_table_access(buf, sector+x, true);
+			file_table_access(&buf[x*4096], sector+x, true);
 			continue;
 		}
 		else {
@@ -294,7 +304,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			ret = spi_nand_page_read(dev, addr, read_back_buffer);
 			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
 			if (!equal){
-				LOG_ERR("sect %d yield bad readback", sector_num);
+				LOG_DBG("sect %d yield bad readback", sector_num);
 				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 				register_bad_sector(sector_num);
 				#endif
@@ -440,7 +450,7 @@ static int disk_sdmmc_init(const struct device *dev)
 
 	sdmmc_disk.dev = dev;
 	sdmmc_disk.name = "SD";//dev->name;
-	disk_nand_access_init(&sdmmc_disk);
+	int status = disk_nand_access_init(&sdmmc_disk);
 	return disk_access_register(&sdmmc_disk);
 }
 

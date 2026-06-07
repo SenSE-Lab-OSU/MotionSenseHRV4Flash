@@ -76,6 +76,7 @@ int current_reads = 0;
 int current_erases = 0;
 
 int ECC_corrections = 0;
+int ECC_err = 0;
 
 // die select for each flash
 int current_die[4] = {0};
@@ -730,20 +731,29 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	}
 
 out:
-	uint8_t status = spi_rdsr(dev);
+	uint8_t reg_status = spi_rdsr(dev);
+	int status = reg_status;
 	LOG_DBG("finished read! with status %i", status);
 	// get the ECC status
-	uint8_t ECC_status = status >> 4;
+	uint8_t ECC_status = reg_status >> 4;
 	if (ECC_status != 0){
-		ECC_corrections += 1;
-		LOG_WRN("ECC stat %d, tot corrections %d", ECC_status, ECC_corrections);
 		if (ECC_status == 2){
+			ECC_err++;
 			LOG_ERR("ECC err too high, bad block");
-			return FLASH_TOO_MANY_ECC_ERROR;
+			status = FLASH_TOO_MANY_ECC_ERROR;
 		}
+		else {
+			// if it's just an ECC error then we should be able to correct it and move on
+			status = 0;
+			ECC_corrections++;
+			LOG_WRN("correctable err");
+			
+		}
+		LOG_WRN("ECC stat %d, tot corrections %d an err %d", ECC_status, ECC_corrections, ECC_err);
 	}
 
 	release_device(dev);
+	
 	return status;
 }
 
@@ -804,7 +814,9 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	release_device(dev);
 	
 	LOG_DBG("write completed! with status %i", status);
-	
+	if (status != 0){
+		LOG_WRN("page write returned status %d", status);
+	}
 	
 	return status;
 

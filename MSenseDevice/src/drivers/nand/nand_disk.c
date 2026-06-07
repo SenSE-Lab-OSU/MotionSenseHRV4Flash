@@ -21,7 +21,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 3);
+LOG_MODULE_REGISTER(nand_disk, 4);
 
 enum sd_status {
 	SD_UNINIT,
@@ -29,10 +29,10 @@ enum sd_status {
 	SD_OK,
 };
 
+// These two structs are not used yet.
 struct sdmmc_config {
 	//const struct device *host_controller;
 };
-
 struct sdmmc_data {
 	enum sd_status status;
 	char *name;
@@ -180,12 +180,12 @@ void set_read_only(bool enable){
 static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
-	struct sdmmc_data* data = dev->data;
+	
 	int sucess = spi_init(dev);
 	if (sucess != 0){
 		LOG_WRN("disk_nand_init failed %d", sucess);
 	}
-	data->status = SD_OK;
+	
 	return 0;
 }
 
@@ -203,8 +203,9 @@ static int disk_nand_access_status(struct disk_info *disk)
 	//LOG_DBG("Accessing Status");
 	const struct device* dev = disk->dev;
 	
-	const struct sdmmc_config* cfg = dev->config;
-	struct sdmmc_data *data = dev->data;
+	// need to test to see if this actually works, have not verified yet
+	const struct spi_flash_config* cfg = dev->config;
+	struct spi_nor_data* data = dev->data;
 	/*
 	if (!sd_is_card_present(cfg->host_controller)) {
 		return DISK_STATUS_NOMEDIA;
@@ -231,15 +232,10 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 {
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
-	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;	
+	const struct device *dev = disk->dev;	
 
 	off_t addr;
 	int ret = 0;
-
-	if (count > 1){
-	LOG_WRN("count: %i", count);
-	}
 
 	for (int x = 0; x < count; x++) {
 		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
@@ -255,6 +251,9 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	}
 	
 	//lol
+	if (ret != 0){
+		LOG_ERR("ret: %d", ret);
+	}
 	return ret; 
 }
 
@@ -265,18 +264,20 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	const char* name = k_thread_name_get(k_current_get());
 	LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
-	if (!read_only){
-	LOG_DBG("performing disk write at sector %i", sector);
-
+	bool disabled_usb_write = (strcmp(name, "usb_mass") == 0) && !IS_ENABLED(CONFIG_USB_WRITABLE);
+	if (!read_only && !disabled_usb_write){
 	
-	LOG_DBG("count: %i", count);
+
+	if (count > 1){
+		LOG_DBG("count: %i", count);
+	}
 	
 	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;
 	int ret = 0;
 	off_t addr;
 	
 	for (int x = 0; x < count; x++){
+		LOG_DBG("performing disk write at sector %i", sector+x);
 		if (sector+x < file_table_sector_num){
 			
 			file_table_access(&buf[x*4096], sector+x, true);
@@ -304,7 +305,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			ret = spi_nand_page_read(dev, addr, read_back_buffer);
 			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
 			if (!equal){
-				LOG_DBG("sect %d yield bad readback", sector_num);
+				LOG_WRN("sect %d yield bad readback", sector_num);
 				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 				register_bad_sector(sector_num);
 				#endif
@@ -314,7 +315,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		}
 		
 	}
-	
+		if (ret != 0){
+			LOG_ERR("ret %d", ret);
+		}
 		return ret; 
 	}
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
@@ -325,7 +328,6 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 {
 	LOG_INF("Ac ioctl with cmd %d", cmd);
 	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;
 
     switch (cmd) {
 	case DISK_IOCTL_GET_SECTOR_COUNT:

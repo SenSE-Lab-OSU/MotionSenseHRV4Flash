@@ -702,11 +702,12 @@ uint16_t offset, uint8_t flags){
     LOG_INF("Correct Code Entered, Resetting Device");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     connectedFlag=false;
+    
     storage_clear_led();
     k_sleep(K_SECONDS(2));
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68 || val == 132){
-    reset_device(val == 132);
+      reset_device(val == 132);
     }
     else {
       NVIC_SystemReset();
@@ -831,9 +832,9 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           }
           else{
             LOG_INF("100 opt");
-            struct k_work work;
-            k_work_init(&work, create_test_files_through_file_workqueue);
-            k_work_submit_to_queue(&my_work_q, &work);
+            //struct k_work work;
+            //k_work_init(&work, create_test_files_through_file_workqueue);
+            //k_work_submit_to_queue(&my_work_q, &work);
             create_test_files(100);
           }
           
@@ -852,7 +853,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
 
         }
       }  
-      return NRFX_SUCCESS;
+      return 0;
       
     }
     

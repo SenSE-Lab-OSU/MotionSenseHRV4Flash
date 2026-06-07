@@ -597,7 +597,7 @@ void main(void)
   
   k_work_init(&log_work_item.work, work_write);
   log_work_item.sensor = customlog;
-
+  k_thread_name_set(&my_work_q.thread, "file_sys");
   const char *name = k_thread_name_get(&my_work_q.thread);
   LOG_INF("file workqueue thead: %s", name);
   ble_init();

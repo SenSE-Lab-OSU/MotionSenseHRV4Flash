@@ -296,20 +296,29 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
 		strcat(MSenseFile->file_name, IDString);
-		strcat(MSenseFile->file_name, ".bin");
+		if (sensor != customlog){
+			strcat(MSenseFile->file_name, ".bin");
+		}
+		else {
+			strcat(MSenseFile->file_name, ".txt");
+		}
 		
 		// Now that we created the file name, open it and write the data
 		LOG_INF("Creating new file...");
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
-			LOG_WRN("Unable to create file");
+			LOG_WRN("Unable to create file for %d", sensor);
 			file_system_malfunction = true;
+			//fs_close(&MSenseFile->self_file);
+			//return;
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
 		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
 		if (res != 0){
 			LOG_WRN("failed to expand file");
 			file_system_malfunction = true;
+			//fs_close(&MSenseFile->self_file);
+			//return;
 		}
 	}
 	else if (data_counter >= data_limit){
@@ -325,7 +334,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		data_counter += total_written;
 	}
 	else if (total_written < 0){
-		LOG_WRN("file system failed to write!");
+		LOG_WRN("system failed %d write for %d! tot writes before: ", size, sensor, MSenseFile->current_writes);
 		file_system_malfunction = true;
 		status_reg_ble_notification();
 	}
@@ -333,9 +342,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	if (MSenseFile->current_writes >= max_writes){
 		// if we don't want the leftover empty sectors caused by the buffer writes being smaller than 8192 size we can
 		// uncomment these lines or use f_truncate() with dhara
-		FIL* fp = &MSenseFile->self_file.filep;
-		fp->obj.objsize = fp->fptr;
-		fp->flag |= 0x40; // = FA_MODIFIED
+		//FIL* fp = &MSenseFile->self_file.filep;
+		//fp->obj.objsize = fp->fptr;
+		//fp->flag |= 0x40; // = FA_MODIFIED
 		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		if (close_ret < 0){
@@ -402,9 +411,9 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	
+	LOG_INF("Processing packet %i", container->packet_num);
 	start_timer();
-	LOG_INF("writing true for container %d", container->sensor);
+	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer();
@@ -413,9 +422,9 @@ void work_write(struct k_work* item){
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
 	}
-	LOG_INF("Processing packet %i", container->packet_num);
+	
 	last_packet_number_processed = container->packet_num;
-	LOG_INF("writing false for container %d", container->sensor);
+	LOG_DBG("writing false for container %d", container->sensor);
 	container->in_use = false;
 
 }
@@ -462,6 +471,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	data_upload_buffer* current_buffer;
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
+	bool first_init = false;
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
@@ -482,6 +492,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	if (!MSenseFile->first_sample_init){
 		MSenseFile->start_time = get_current_unix_time();
 		MSenseFile->first_sample_init = true;
+		first_init = true;
 	}
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
@@ -490,7 +501,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	current_buffer->current_size += size;
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
-			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
+			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
 		}
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
@@ -550,7 +561,7 @@ int close_all_files(){
 	
 	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
-	
+	reset_sensor_file(&log_file);
 	return 0;
 
 }

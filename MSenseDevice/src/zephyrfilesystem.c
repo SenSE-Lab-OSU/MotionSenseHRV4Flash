@@ -167,7 +167,20 @@ void enable_read_only(bool enable){
 	}
 }
 
+const char* sensor_enum_to_string(enum sensor_type sensor) {
+    switch (sensor) {
+        case ppg:    return "ppg";
+        case accelorometer:  return "acc";
+        case customlog: return "log";
+        default:           return "undefined";
+    }
+}
+
+
 int total_files = 0;
+
+
+
 
 // Test files
 char test_file_arr[4096*2] = "hello world, this is a story about a man who liked to run. "
@@ -304,7 +317,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 		
 		// Now that we created the file name, open it and write the data
-		LOG_INF("Creating new file...");
+		LOG_INF("Creating new file for %d", sensor);
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
 			LOG_WRN("Unable to create file for %d", sensor);
@@ -506,7 +519,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
 		}
-		LOG_INF("Submitting File!");
+		LOG_INF("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;

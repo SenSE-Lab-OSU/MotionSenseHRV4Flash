@@ -895,10 +895,10 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 	return ret;
 }
 
-// not only erases, but also resets the bad block storage.
-int spi_nand_multi_chip_reset(const struct device* dev){
-	int ret = spi_nand_multi_chip_erase(dev);
-	ret = erase_bad_sectors_arr();
+// resets the bad block storage.
+int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
+	//int ret = spi_nand_multi_chip_erase(dev);
+	int ret = erase_bad_sectors_arr();
 	if (ret != 0){
 		LOG_ERR("fail to erase bad sect");
 	}

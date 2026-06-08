@@ -18,6 +18,8 @@ typedef struct memory_container {
 
 extern struct k_work_q my_work_q;
 
+
+
 void setup_disk(void);
 
 void create_test_file(int sectors);
@@ -53,6 +55,8 @@ void start_timer();
 int64_t stop_timer();
 
 void enable_read_only(bool enable);
+
+const char* sensor_enum_to_string(enum sensor_type sensor);
 
 extern bool security_lock;
 

@@ -245,9 +245,6 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 			continue;
 		}
 		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
-		int non_corrupt_sector = get_sector_offset(sector+x);
-		addr = convert_page_to_address(dev, non_corrupt_sector);
-		ret = spi_nand_page_read(dev, addr, &buf[x*4096]);
 	}
 	
 	//lol

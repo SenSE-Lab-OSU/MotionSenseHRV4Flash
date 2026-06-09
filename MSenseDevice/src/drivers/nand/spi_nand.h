@@ -166,6 +166,9 @@ struct spi_flash_config {
 	/* Size of device in bytes, from size property */
 	uint32_t flash_size;
 
+
+	uint8_t num_flashes;
+
 #ifdef CONFIG_FLASH_PAGE_LAYOUT
 	/* Flash page layout can be determined from devicetree. */
 	struct flash_pages_layout layout;

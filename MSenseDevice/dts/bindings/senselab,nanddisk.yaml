@@ -18,4 +18,14 @@ properties:
   size:
     type: int
     description: |
-      The size of the flash in bytes.  
+      The size of the flash in bytes.
+  
+  individual-size:
+    type: int
+    description: |
+      The number of total flashes for the multi-flash driver. Used to calculate the full size of the flash. 
+
+  num-flashchips:
+    type: int
+    description: |
+      How many total flashes chips are in the system. 

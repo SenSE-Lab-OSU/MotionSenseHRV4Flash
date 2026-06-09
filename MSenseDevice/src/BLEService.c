@@ -513,7 +513,7 @@ void reset_device(bool reset_bad_blocks){
     file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
     if (reset_bad_blocks){
-      LOG_WRN("Erasing bad block table and flash...");
+      LOG_WRN("Erasing bad block table...");
       spi_nand_multi_chip_reset_bad_block(flash_device);
     }
     else{

@@ -69,6 +69,8 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 #define T_DPDD_MS 0
 #endif /* DPD_WAKEUP_SEQUENCE */
 
+#define SPI_BUS_NODE 
+//#define SPI_BUS_NODE DT_NODELABEL(spi4)
 
 
 int current_writes = 0;
@@ -86,7 +88,6 @@ int current_die[4] = {0};
 int current_flash = 0;
 
 // TODO: put these in device tree
-const int num_of_flashes = 4;
 const int die_per_flash = 2;
 
 const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
@@ -106,6 +107,7 @@ static inline const struct jesd216_erase_type* dev_erase_types(const struct devi
 	return &erasetype;
 }
 
+
 /* Get the size of the flash device.  Data for runtime, constant for
 * minimal and devicetree.
 */
@@ -119,7 +121,8 @@ inline uint32_t dev_flash_size(const struct device *dev)
 }
 
 inline int dev_die_size(const struct device* dev){
-	return dev_flash_size(dev) / (num_of_flashes*die_per_flash);
+	const struct spi_flash_config* cfg = dev->config;
+	return dev_flash_size(dev) / (cfg->num_flashes*die_per_flash);
 }
 
 /* Get the flash device page size.  Constant for minimal, data for
@@ -177,28 +180,6 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 #endif /* DT_INST_NODE_HAS_PROP(0, has_dpd) */
 }
 
-/* Indicates that an access command includes bytes for the address.
-* If not provided the opcode is not followed by address bytes.
-*/
-#define NOR_ACCESS_ADDRESSED BIT(0)
-
-/* Indicates that addressed access uses a 24-bit address regardless of
-* spi_nor_data::flag_32bit_addr.
-*/
-#define NOR_ACCESS_24BIT_ADDR BIT(1)
-
-/* Indicates that addressed access uses a 32-bit address regardless of
-* spi_nor_data::flag_32bit_addr.
-*/
-#define NOR_ACCESS_32BIT_ADDR BIT(2)
-
-/* Indicates that an access command is performing a write.  If not
-* provided access is a read.
-*/
-#define NOR_ACCESS_WRITE BIT(7)
-
-
-
 
 
 uint32_t convert_block_to_page(uint32_t page, uint32_t block){
@@ -210,7 +191,7 @@ uint32_t convert_block_to_page(uint32_t page, uint32_t block){
 off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 
 	// total number of sectors per die. 
-	int die_size = 131072;
+	const int die_size = 131072;
 	int selected_die_num = page / die_size;
 	LOG_DBG("die/flash  number: %d", selected_die_num);
 
@@ -278,7 +259,6 @@ static int spi_nand_access(const struct device *const dev, spi_send_request* req
 {
 	acquire_device_inner(dev);
 	const struct spi_flash_config* const driver_cfg = dev->config;
-	struct spi_nor_data *const driver_data = dev->data;
 
 	// get parameters needed for spi_transceive and spi_write
 	struct spi_dt_spec spi_spec = driver_cfg->spi;
@@ -433,13 +413,7 @@ uint8_t get_features(const struct device* dev, uint8_t register_select){
 
 // Should only be used to set all features. to only set an induvidual feature, use set_feature 
 int set_features(const struct device* dev, uint8_t register_select, uint8_t data){
-	
-	//LOG_INF("setting features for value: %d", data);
-	uint8_t data_arr[] = {
-		register_select,
-		data
 
-	};
 	spi_send_request write_features_request = {
 		.opcode = 0x1F,
 		.is_write = true,
@@ -762,7 +736,7 @@ out:
 int spi_nand_page_write(const struct device* dev, off_t page_address, const void* src, size_t size){
 	current_writes++;
 	acquire_device(dev);
-	LOG_DBG("writing %ld bytes at address %d", size, page_address);
+	LOG_DBG("writing %d bytes at address %ld", size, page_address);
 	nrfx_err_t res = 0;
 
 	uint8_t pe_addr_buf[] = {
@@ -897,7 +871,6 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 
 // resets the bad block storage.
 int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
-	//int ret = spi_nand_multi_chip_erase(dev);
 	int ret = erase_bad_sectors_arr();
 	if (ret != 0){
 		LOG_ERR("fail to erase bad sect");
@@ -907,7 +880,8 @@ int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
 
 
 int spi_nand_multi_chip_erase(const struct device* dev){
-	for (int i = 0; i < num_of_flashes; i++) {
+	const struct spi_flash_config* cfg = dev->config;
+	for (int i = 0; i < cfg->num_flashes; i++) {
 		set_flash(dev, i);
 		spi_nand_whole_chip_erase(dev);
 		LOG_INF("chip %i erased.", i + 1);
@@ -968,7 +942,7 @@ static int flash_reset_and_unlock(const struct device* dev){
  * @param info The flash info structure
  * @return 0 on success, negative errno code otherwise
  */
-static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
+static int spi_configure(const struct device *dev, const struct spi_flash_config* cfg)
 {
 	
 	uint8_t jedec_id[SPI_MAX_ID_LEN];
@@ -1082,14 +1056,12 @@ int spi_init(const struct device *dev)
 		k_sem_init(&driver_data->sem_inner, 1, K_SEM_MAX_LIMIT);
 	}
 	const struct spi_flash_config* cfg = dev->config;
-	struct spi_flash_config cfg_copy = *cfg;
-	// TODO: go through device tree and get multiple config options
+	
 	ret = spi_configure(dev, cfg);
 	if (ret != 0)
 		return ret;
-
-	for (int i = 1; i < 4; i++) {
-		cfg_copy.spi.config.cs.gpio.pin = cs_pins[i];
+	// we set the correct cs pin already via set_flash which works through spi_nand_access, so no need for a custom config struct.
+	for (int i = 1; i < cfg->num_flashes; i++) {
 		set_flash(dev, i);
 		ret = spi_configure(dev, cfg);
 		

@@ -29,16 +29,6 @@ enum sd_status {
 	SD_OK,
 };
 
-// These two structs are not used yet.
-struct sdmmc_config {
-	//const struct device *host_controller;
-};
-struct sdmmc_data {
-	enum sd_status status;
-	char *name;
-	bool read_for_filename;
-};
-
 
 // File System Controls
 // on write, checks whether the a certain page is already written to. 
@@ -413,8 +403,11 @@ static const struct spi_flash_config spi_flash_config_0 =
 	},
 #undef LAYOUT_PAGES_COUNT
 #endif 
-
-	.flash_size = DT_INST_PROP(0, size),
+	/* Note: even though variables use dashes (-) in .yaml and devicetree, DT_INST_PROP requires them in underscores! (_)
+	 So, num-flashchips is num_flashchips.
+	*/
+	.flash_size = DT_INST_PROP(0, individual_size)*DT_INST_PROP(0, num_flashchips),
+	.num_flashes = DT_INST_PROP(0, num_flashchips),
 	.jedec_id = DT_INST_PROP(0, jedec_id),
 
 #if DT_INST_NODE_HAS_PROP(0, has_lock)

@@ -22,6 +22,8 @@ LOG_MODULE_REGISTER(spi_nand_bad_page, CONFIG_FLASH_LOG_LEVEL);
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
 #define FILETABLE_PARTITION_OFFSET 0
 
+#define bad_sector_detect_limit 2000
+
 #ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 
 
@@ -38,8 +40,8 @@ since bad sectors aren't used and the next sector over is used.
 
 bool use_blocks = false;
 
-#define bad_sector_detect_limit 2000
-uint32_t bad_sectors[bad_sector_detect_limit];
+
+uint32_t bad_sectors[bad_sector_detect_limit] = {0};
 
 
 
@@ -61,31 +63,50 @@ int load_bad_sectors_arr()
 {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
+	size_t total_bad_sect_count = total_bad_sect_arr_size / sizeof(bad_sectors[0]);
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
 	int ret = 0;
 	
 	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
 	// if the memory is all 1s, that means we haven't written to the array yet
 	if (bad_sectors[0] == 0xFFFFFFFF){
-		LOG_INF("first time loading bad sectors array, saving...");
-		for (int x = 0; x < total_bad_sect_arr_size, x++;){
+		LOG_INF("first load bad sect arr, saving");
+		for (int x = 0; x < total_bad_sect_count; x++){
 			bad_sectors[x] = 0;
 		}
 		save_bad_sectors_arr();
 	}
 	LOG_INF("found and loaded bad sector arr");
-	for (int x = 0; x < total_bad_sect_arr_size, x++;){
+	for (int x = 0; x < total_bad_sect_count; x++){
 		if (bad_sectors[x] != 0){
 			total_bad_sectors++;
 		}
 	}
-	LOG_WRN("Loaded Bad Sector count: %d", total_bad_sectors);
+	LOG_WRN("Load Bad Sect count: %d", total_bad_sectors);
 	return ret;
 };
 
+
+
+
+void print_bad_sect_info()
+{
+	LOG_INF("Load Bad Sect count: %d", total_bad_sectors);
+	int bad_sects_tot_length = sizeof(bad_sectors) / sizeof(bad_sectors[0]);
+	for (int x = 0; x < bad_sects_tot_length; x++)
+	{
+		if (bad_sectors[x] != 0){
+			LOG_WRN("sect %lu", bad_sectors[x]);
+		}
+	}
+}
+
 // eventually we should just change this to blocks.
 int register_bad_sector(uint32_t sector_num){
-
+    if (use_blocks){
+        sector_num = convert_page_to_block(sector_num);
+        sector_num = convert_block_to_page(0, sector_num);
+    }
 	if (total_bad_sectors < bad_sector_detect_limit)
 	{
 		bad_sectors[total_bad_sectors] = sector_num;
@@ -101,16 +122,30 @@ int register_bad_sector(uint32_t sector_num){
 #else
 int register_bad_sector(uint32_t sector_num){return 0;}
 int save_bad_sectors_arr(){return 0;}
-int load_bad_sectors_arr()
-{return 0;}
+int load_bad_sectors_arr(){return 0;}
+void print_bad_sect_info(){}
 
 #endif
+
+int erase_bad_sectors_arr()
+{
+	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
+	int ret = flash_erase(soc_flash, address, sizeof(uint32_t)*bad_sector_detect_limit);
+	return ret;
+
+}
 
 int get_sector_offset(int sector_num){
 	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 	for (int x = 0; x < total_bad_sectors; x++){
 		if (bad_sectors[x] <= sector_num){
+            if (use_blocks){
+                sector_num += 64;
+            }
+            else{
 			sector_num++;
+            }
 		}
 	}
 	#endif

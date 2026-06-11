@@ -673,7 +673,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
   static int last_ppg_count = 0;
   
   if (number_of_samples != 1){
-      LOG_ERR("Samples in ppg got unexpected value: %d", number_of_samples);
+      LOG_WRN("Samples in ppg got unexpected value: %d", number_of_samples);
     }
     if (global_counter - last_ppg_count != ppgConfig.numCounts) {
       LOG_ERR("Detected ppg global counter offset: %d", global_counter - last_ppg_count);

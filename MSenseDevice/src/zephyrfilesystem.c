@@ -1,5 +1,6 @@
 
 #include <zephyr/kernel.h>
+#include <zephyr/device.h>
 #include <zephyr/fs/fs.h>
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
@@ -8,7 +9,6 @@
 
 
 #include <stdlib.h>
-
 #include "BLEService.h"
 #include "zephyrfilesystem.h"
 
@@ -36,6 +36,8 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 #define STORAGE_PARTITION_ID		FIXED_PARTITION_ID(STORAGE_PARTITION)
 #endif
 
+bool file_system_ready;
+
 bool security_lock;
 
 #define MAX_BUFFER_SIZE 9000
@@ -53,8 +55,10 @@ memory_container ppg_work_item;
 
 memory_container accel_work_item;
 
+memory_container log_work_item;
+
 //data limit per file in bytes
-static int data_limit = MAX_BUFFER_SIZE;
+const int data_limit = MAX_BUFFER_SIZE;
 
 
 
@@ -76,7 +80,6 @@ int packet_number = 0;
 
 int last_packet_number_processed = 0;
 
-static int current_file_count;
 
 const int max_writes = 512;
 
@@ -142,6 +145,11 @@ MotionSenseFile accel_file = {
 	.sensor_format = "3 int16 accel, 3 float32 quaternion, second avg float32 enmo, uint32 global_tick_512hz"
 };
 
+MotionSenseFile log_file = {
+	.write_size = 8192,
+	.sensor_string = "log",
+	.sensor_format = "logging"
+};
 
 // TODO: Still work in progress . We do have a hacky way to make the device read only (see nand_disk.c) 
 // but no way to make it show up as read only on windows yet.
@@ -159,7 +167,20 @@ void enable_read_only(bool enable){
 	}
 }
 
+const char* sensor_enum_to_string(enum sensor_type sensor) {
+    switch (sensor) {
+        case ppg:    return "ppg";
+        case accelorometer:  return "acc";
+        case customlog: return "log";
+        default:           return "undefined";
+    }
+}
+
+
 int total_files = 0;
+
+
+
 
 // Test files
 char test_file_arr[4096*2] = "hello world, this is a story about a man who liked to run. "
@@ -179,8 +200,8 @@ char test_file_arr[4096*2] = "hello world, this is a story about a man who liked
     "carrying stories in his breath and dreams in his stride.";
 
 	
-void create_test_file(int sectors){
-	printk("trying to write file...\n");
+void create_test_file(int writes){
+	printk("write file...\n");
 	
 	char destination[50] = "";
 	int ID = 0;
@@ -205,12 +226,12 @@ void create_test_file(int sectors){
 	if (file_create == 0)
 	{
 		
-		for (int i = 0; i < sectors; i++)
+		for (int i = 0; i < writes; i++)
 		{
-			
+			//k_sleep(K_SECONDS(.5)); for debug purposes in case it's ever necessary to see how files write slowly
 			fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
 		}
-		printk("done writing\n");
+		printk("done write\n");
 		fs_close(&test_file);
 	}
 }
@@ -247,6 +268,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == customlog){
+		MSenseFile = &log_file;
 	}
 
 
@@ -285,20 +309,29 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
 		strcat(MSenseFile->file_name, IDString);
-		strcat(MSenseFile->file_name, ".bin");
+		if (sensor != customlog){
+			strcat(MSenseFile->file_name, ".bin");
+		}
+		else {
+			strcat(MSenseFile->file_name, ".txt");
+		}
 		
 		// Now that we created the file name, open it and write the data
-		LOG_INF("Creating new file...");
+		LOG_INF("Creating new file for %d", sensor);
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
-			LOG_WRN("Unable to create file");
+			LOG_WRN("Unable to create file for %d", sensor);
 			file_system_malfunction = true;
+			//fs_close(&MSenseFile->self_file);
+			//return;
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
 		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
 		if (res != 0){
 			LOG_WRN("failed to expand file");
 			file_system_malfunction = true;
+			//fs_close(&MSenseFile->self_file);
+			//return;
 		}
 	}
 	else if (data_counter >= data_limit){
@@ -309,17 +342,22 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes written = %i ! \n", sensor, total_written);
+		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
 	else if (total_written < 0){
-		LOG_WRN("file system failed to write!");
+		LOG_WRN("system failed %d write for %d! tot writes before: ", size, sensor, MSenseFile->current_writes);
 		file_system_malfunction = true;
 		status_reg_ble_notification();
 	}
 
 	if (MSenseFile->current_writes >= max_writes){
+		// if we don't want the leftover empty sectors caused by the buffer writes being smaller than 8192 size we can
+		// uncomment these lines or use f_truncate() with dhara
+		//FIL* fp = &MSenseFile->self_file.filep;
+		//fp->obj.objsize = fp->fptr;
+		//fp->flag |= 0x40; // = FA_MODIFIED
 		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		if (close_ret < 0){
@@ -386,9 +424,9 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	
+	LOG_INF("Processing packet %i", container->packet_num);
 	start_timer();
-	LOG_INF("writing true for container %d", container->sensor);
+	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer();
@@ -397,9 +435,9 @@ void work_write(struct k_work* item){
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
 	}
-	LOG_INF("Processing packet %i", container->packet_num);
+	
 	last_packet_number_processed = container->packet_num;
-	LOG_INF("writing false for container %d", container->sensor);
+	LOG_DBG("writing false for container %d", container->sensor);
 	container->in_use = false;
 
 }
@@ -414,6 +452,10 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == accelorometer){
 		work_item = &accel_work_item;
 	}
+	else if (type == customlog){
+		work_item = &log_work_item;
+	}
+
 	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
 	
 	if (!work_item->in_use){
@@ -442,11 +484,15 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	data_upload_buffer* current_buffer;
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
+	bool first_init = false;
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == customlog){
+		MSenseFile = &log_file;
 	}
 
 	if (MSenseFile->switch_buffer){
@@ -459,6 +505,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	if (!MSenseFile->first_sample_init){
 		MSenseFile->start_time = get_current_unix_time();
 		MSenseFile->first_sample_init = true;
+		first_init = true;
 	}
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
@@ -467,12 +514,12 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	current_buffer->current_size += size;
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
-			LOG_WRN("Warning: size of total buffer is overflowing from last, truncating...");
+			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
 		}
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
 		}
-		LOG_INF("Submitting File!");
+		LOG_INF("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
@@ -527,7 +574,7 @@ int close_all_files(){
 	
 	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
-	
+	reset_sensor_file(&log_file);
 	return 0;
 
 }
@@ -594,7 +641,7 @@ void setup_disk(void)
 	struct fs_dir_t dir;
 	struct fs_statvfs sbuf;
 	int rc;
-
+	
 	fs_dir_t_init(&dir);
 
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
@@ -661,7 +708,7 @@ void setup_disk(void)
 		}
 
 	}
-
+	file_system_ready = true;
 	(void)fs_closedir(&dir);
 
 	return;
@@ -674,7 +721,7 @@ int get_storage_percent_full(){
 	int rc = fs_statvfs(mp->mnt_point, &info);
 	if (rc < 0) {
 		printk("FAIL: statvfs: %d\n", rc);
-		return;
+		return -1;
 	}
 
 	printk("%s: bsize = %lu ; frsize = %lu ;"
@@ -696,6 +743,33 @@ int get_storage_percent_full(){
 
 }
 
+
+
+
+#include "drivers/nand/nand_disk.h"
+// The following shows how to use the nand disk driver outside of the driver file directly.
+
+
+#define DT_DRV_COMPAT senselab_nanddisk
+int test_desk_driver(){
+	uint8_t write_buf[4096] = {1};
+	uint8_t read_buf[4096];
+	const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
+	// OR
+	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	spi_nand_page_write(filesystem_device2, 63, write_buf, sizeof(read_buf));
+	spi_nand_page_write(filesystem_device2, 64, write_buf, sizeof(read_buf));
+	spi_nand_page_read(filesystem_device2, 63, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+	spi_nand_block_erase(filesystem_device2, 0);
+	spi_nand_page_read(filesystem_device2, 63, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+	spi_nand_page_read(filesystem_device2, 64, read_buf);
+	print_page_hex(read_buf, sizeof(read_buf), true);
+}
+
+
+
 int read_storage_percent_full(){
 	return storage_percent_full;
 }
@@ -706,8 +780,6 @@ void set_date_time_bt(uint64_t value){
 	set_date_time = value;
 	last_time_update_sent = k_uptime_get() / 1000;
 	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
-	
-
 }
 
 uint64_t get_current_unix_time(){

@@ -7,9 +7,10 @@
 
 int save_bad_sectors_arr();
 int load_bad_sectors_arr();
+int erase_bad_sectors_arr();
 int register_bad_sector(uint32_t sector_num);
 int get_sector_offset(int sector_num);
-
+void print_bad_sect_info();
 
 int spi_nand_bad_page_init(const struct device* dev);
 int spi_nand_page_read_badsim_wrapper(const struct device* dev, off_t page_addr, void* dest);

@@ -1,8 +1,10 @@
 
 extern bool file_lock;
 
+extern bool file_system_ready;
+
 enum sensor_type {ppg, 
-accelorometer, passthrough};
+accelorometer, passthrough, customlog};
 
 typedef struct memory_container {
 	const void* address;
@@ -15,6 +17,8 @@ typedef struct memory_container {
 } memory_container;
 
 extern struct k_work_q my_work_q;
+
+
 
 void setup_disk(void);
 
@@ -52,6 +56,8 @@ int64_t stop_timer();
 
 void enable_read_only(bool enable);
 
+const char* sensor_enum_to_string(enum sensor_type sensor);
+
 extern bool security_lock;
 
 extern int64_t start_time;
@@ -62,4 +68,5 @@ extern uint64_t set_date_time;
 
 extern memory_container ppg_work_item;
 extern memory_container accel_work_item;
+extern memory_container log_work_item;
 

@@ -221,12 +221,15 @@ compatible = "nordic,nrf-spim";
 	pinctrl-0 = < &spi_flash_default>;
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
+	// You will also need to set these pins in the spi_nand.c too
 	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>, <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		// size parameter needs to be in bytes
 		// 4294901760 bytes is aproximately 4 GB. Updated from 2147450880 bytes (1.99 GB)
 		size = <4294901760>;
+		individual-size = <1073725440>;
+		num-flashchips = <4>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];

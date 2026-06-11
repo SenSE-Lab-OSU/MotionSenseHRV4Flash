@@ -174,6 +174,8 @@ static const struct bt_data sd[] = {
 SHELL_CMD_REGISTER(reset, NULL, "Resets Device", NVIC_SystemReset);
 SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
 
+
+
 struct bt_conn *my_connection;
 
 // Setting up the device information service
@@ -300,12 +302,14 @@ static void bt_ready(int err)
 
   write_uuid_file();
   #ifndef CONFIG_DEBUG
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
+  
     if (!security_lock){
       usb_enable(usb_status_cb);
     }
+    //k_sleep(K_SECONDS(10));
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
   #endif
 }
 
@@ -514,7 +518,7 @@ void main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
   
-  // Setup LEDs and Power Pins
+  
   
 
   // Setup our Flash Filesystem
@@ -533,21 +537,8 @@ void main(void)
 
 
   k_sleep(K_SECONDS(2));
+  
 
-  
-// this initializes FOTA
-#ifdef INCLUDE_DFU
-#ifdef CONFIG_BOOTLOADER_MCUBOOT
-  os_mgmt_register_group();
-
-  img_mgmt_register_group();
-  smp_bt_register();
-#endif
-#endif
-
-  
-  
-  
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
   gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
   
@@ -577,6 +568,10 @@ void main(void)
   ppg_sleep();
   motion_sleep();
 
+  /*struct k_work_queue_config cfg = {
+    .name = "my_custom_workq",
+    .no_yield = false
+  };*/
 
   // Start Threads for all our sensor tasks
   // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
@@ -603,6 +598,12 @@ void main(void)
 
   k_work_init(&accel_work_item.work, work_write);
   accel_work_item.sensor = accelorometer;
+  
+  k_work_init(&log_work_item.work, work_write);
+  log_work_item.sensor = customlog;
+  k_thread_name_set(&my_work_q.thread, "file_sys");
+  const char *name = k_thread_name_get(&my_work_q.thread);
+  LOG_INF("file workqueue thead: %s", name);
   ble_init();
   
   get_storage_percent_full();
@@ -612,7 +613,7 @@ void main(void)
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
-
+  
   while (1)
   {
     

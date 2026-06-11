@@ -24,9 +24,10 @@
 #include "spi_nand.h"
 #include "jesd216.h"
 #include "flash_priv.h"
+#include "bad_page.h"
 
 int erase_file_table();
-int register_bad_sector();
+
 
 LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 
@@ -68,6 +69,8 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 #define T_DPDD_MS 0
 #endif /* DPD_WAKEUP_SEQUENCE */
 
+#define SPI_BUS_NODE 
+//#define SPI_BUS_NODE DT_NODELABEL(spi4)
 
 
 int current_writes = 0;
@@ -75,6 +78,7 @@ int current_reads = 0;
 int current_erases = 0;
 
 int ECC_corrections = 0;
+int ECC_err = 0;
 
 // die select for each flash
 int current_die[4] = {0};
@@ -84,7 +88,6 @@ int current_die[4] = {0};
 int current_flash = 0;
 
 // TODO: put these in device tree
-const int num_of_flashes = 4;
 const int die_per_flash = 2;
 
 const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
@@ -117,7 +120,8 @@ inline uint32_t dev_flash_size(const struct device *dev)
 }
 
 inline int dev_die_size(const struct device* dev){
-	return dev_flash_size(dev) / (num_of_flashes*die_per_flash);
+	const struct spi_flash_config* cfg = dev->config;
+	return dev_flash_size(dev) / (cfg->num_flashes*die_per_flash);
 }
 
 /* Get the flash device page size.  Constant for minimal, data for
@@ -175,28 +179,9 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 #endif /* DT_INST_NODE_HAS_PROP(0, has_dpd) */
 }
 
-/* Indicates that an access command includes bytes for the address.
-* If not provided the opcode is not followed by address bytes.
-*/
-#define NOR_ACCESS_ADDRESSED BIT(0)
-
-/* Indicates that addressed access uses a 24-bit address regardless of
-* spi_nor_data::flag_32bit_addr.
-*/
-#define NOR_ACCESS_24BIT_ADDR BIT(1)
-
-/* Indicates that addressed access uses a 32-bit address regardless of
-* spi_nor_data::flag_32bit_addr.
-*/
-#define NOR_ACCESS_32BIT_ADDR BIT(2)
-
-/* Indicates that an access command is performing a write.  If not
-* provided access is a read.
-*/
-#define NOR_ACCESS_WRITE BIT(7)
 
 
-off_t convert_to_address(uint32_t page, uint32_t block){
+uint32_t convert_block_to_page(uint32_t page, uint32_t block){
 	return page + (block * 64);
 }
 
@@ -205,7 +190,7 @@ off_t convert_to_address(uint32_t page, uint32_t block){
 off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 
 	// total number of sectors per die. 
-	int die_size = 131072;
+	const int die_size = 131072;
 	int selected_die_num = page / die_size;
 	LOG_DBG("die/flash  number: %d", selected_die_num);
 
@@ -220,13 +205,20 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 	return page - (die_size * selected_die_num);
 }
 
-off_t convert_block_to_address(uint32_t block){
+// this is not the actual address for 4 flash, 
+off_t convert_block_to_singledie_address(uint32_t block){
 	//werid fix because of noticed offsets, perhaps there is another issue we are unaware of.
 	return (block * 64);
 }
 
-uint32_t convert_page_to_block(off_t address){
-	return (address / 64);
+uint32_t convert_page_to_block(uint32_t page_number){
+	return (page_number / 64);
+}
+
+bool is_page_in_block(uint32_t page_number, uint32_t block_number){
+	uint32_t first_page = convert_block_to_page(0, block_number);
+	uint32_t difference = (page_number - first_page);
+	return difference >= 0 && difference < 64;
 }
 
 
@@ -266,7 +258,6 @@ static int spi_nand_access(const struct device *const dev, spi_send_request* req
 {
 	acquire_device_inner(dev);
 	const struct spi_flash_config* const driver_cfg = dev->config;
-	struct spi_nor_data *const driver_data = dev->data;
 
 	// get parameters needed for spi_transceive and spi_write
 	struct spi_dt_spec spi_spec = driver_cfg->spi;
@@ -421,13 +412,7 @@ uint8_t get_features(const struct device* dev, uint8_t register_select){
 
 // Should only be used to set all features. to only set an induvidual feature, use set_feature 
 int set_features(const struct device* dev, uint8_t register_select, uint8_t data){
-	
-	//LOG_INF("setting features for value: %d", data);
-	uint8_t data_arr[] = {
-		register_select,
-		data
 
-	};
 	spi_send_request write_features_request = {
 		.opcode = 0x1F,
 		.is_write = true,
@@ -579,7 +564,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	off_t error_address = 4096;
 	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 	for (int x = 0; x < total_device_size; x++){
-	page_addr = convert_block_to_address(x);
+	page_addr = convert_block_to_singledie_address(x);
 	acquire_device(dev);
 	current_reads++;
 	//LOG_DBG("reading bytes at address %d", page_addr);
@@ -663,10 +648,16 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 
 // since spi_nand_page_read only works on one flash, we have to do work to make it work 
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
-	int ret;	
+	int ret;
+	if (current_reads % 5000 == 1000){
+		print_bad_sect_info();
+	}
 	int non_corrupt_sector = get_sector_offset(page_number);
 	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
-	ret = spi_nand_page_read(dev, addr, &buffer);
+	ret = spi_nand_page_read(dev, addr, buffer);
+	if (ret == FLASH_TOO_MANY_ECC_ERROR){
+		register_bad_sector(non_corrupt_sector);
+	}
 	return ret;
 }
 
@@ -713,20 +704,29 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	}
 
 out:
-	uint8_t status = spi_rdsr(dev);
+	uint8_t reg_status = spi_rdsr(dev);
+	int status = reg_status;
 	LOG_DBG("finished read! with status %i", status);
 	// get the ECC status
-	uint8_t ECC_status = status >> 4;
+	uint8_t ECC_status = reg_status >> 4;
 	if (ECC_status != 0){
-		ECC_corrections += 1;
-		LOG_WRN("ECC %d, tot use %d", ECC_status, ECC_corrections);
 		if (ECC_status == 2){
-			LOG_ERR("ECC err too great, bad block");
-			return FLASH_TOO_MANY_ECC_ERROR;
+			ECC_err++;
+			LOG_ERR("ECC err too high, bad block");
+			status = FLASH_TOO_MANY_ECC_ERROR;
 		}
+		else {
+			// if it's just an ECC error then we should be able to correct it and move on
+			status = 0;
+			ECC_corrections++;
+			LOG_WRN("correctable err");
+			
+		}
+		LOG_WRN("ECC stat %d, tot corrections %d an err %d", ECC_status, ECC_corrections, ECC_err);
 	}
 
 	release_device(dev);
+	
 	return status;
 }
 
@@ -735,7 +735,7 @@ out:
 int spi_nand_page_write(const struct device* dev, off_t page_address, const void* src, size_t size){
 	current_writes++;
 	acquire_device(dev);
-	LOG_DBG("writing %ld bytes at address %d", size, page_address);
+	LOG_DBG("writing %d bytes at address %ld", size, page_address);
 	nrfx_err_t res = 0;
 
 	uint8_t pe_addr_buf[] = {
@@ -787,7 +787,9 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	release_device(dev);
 	
 	LOG_DBG("write completed! with status %i", status);
-	
+	if (status != 0){
+		LOG_WRN("page write returned status %d", status);
+	}
 	
 	return status;
 
@@ -842,10 +844,10 @@ int spi_nand_chip_erase(const struct device* device) {
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
 	for (int current_block = 0; current_block <= block_count; current_block++){
-		block_address = convert_block_to_address(current_block);
+		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
-			LOG_WRN("error in chip erase: %i", status);
+			LOG_WRN("err chip erase: %i", status);
 			continue;
 		}
 	}
@@ -866,8 +868,19 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 	return ret;
 }
 
+// resets the bad block storage.
+int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
+	int ret = erase_bad_sectors_arr();
+	if (ret != 0){
+		LOG_ERR("fail to erase bad sect");
+	}
+	return ret;
+}
+
+
 int spi_nand_multi_chip_erase(const struct device* dev){
-	for (int i = 0; i < num_of_flashes; i++) {
+	const struct spi_flash_config* cfg = dev->config;
+	for (int i = 0; i < cfg->num_flashes; i++) {
 		set_flash(dev, i);
 		spi_nand_whole_chip_erase(dev);
 		LOG_INF("chip %i erased.", i + 1);
@@ -900,7 +913,6 @@ static int spi_read_jedec_id(const struct device *dev,
 
 static int flash_reset_and_unlock(const struct device* dev){
 	
-
 	/* Check for block protect bits that need to be cleared.  This
 	* information cannot be determined from SFDP content, so the
 	* devicetree node property must be set correctly for any device
@@ -929,7 +941,7 @@ static int flash_reset_and_unlock(const struct device* dev){
  * @param info The flash info structure
  * @return 0 on success, negative errno code otherwise
  */
-static int spi_configure(const struct device *dev, struct spi_flash_config* cfg)
+static int spi_configure(const struct device *dev, const struct spi_flash_config* cfg)
 {
 	
 	uint8_t jedec_id[SPI_MAX_ID_LEN];
@@ -1043,14 +1055,12 @@ int spi_init(const struct device *dev)
 		k_sem_init(&driver_data->sem_inner, 1, K_SEM_MAX_LIMIT);
 	}
 	const struct spi_flash_config* cfg = dev->config;
-	struct spi_flash_config cfg_copy = *cfg;
-	// TODO: go through device tree and get multiple config options
+	
 	ret = spi_configure(dev, cfg);
 	if (ret != 0)
 		return ret;
-
-	for (int i = 1; i < 4; i++) {
-		cfg_copy.spi.config.cs.gpio.pin = cs_pins[i];
+	// we set the correct cs pin already via set_flash which works through spi_nand_access, so no need for a custom config struct.
+	for (int i = 1; i < cfg->num_flashes; i++) {
 		set_flash(dev, i);
 		ret = spi_configure(dev, cfg);
 		
@@ -1084,6 +1094,23 @@ static const struct flash_parameters* flash_nor_get_parameters(const struct devi
 
 	return &flash_nor_parameters;
 }
+
+
+void print_page_hex(uint8_t* data_buf, int size, bool shorten){
+	// can easily modify this to support other types like char or int
+	if (shorten && size > 50){
+		size = 50;
+	}
+	printk("data: ");
+	for (int i = 0; i < size; i ++){
+		printk("%02x ", data_buf[i]);
+		if (i % 10 == 9) {
+			printk("\n");
+		}
+	}
+	printk("\n end \n");
+}
+
 
 static int spi_nand_read_template(const struct device *dev, off_t addr, void *dest,
 			size_t size)

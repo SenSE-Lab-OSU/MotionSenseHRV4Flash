@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 
-LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_DATA_COLLECTION);
+LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_IMU_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
@@ -829,7 +829,7 @@ void motion_data_timeout_handler(struct k_work *item)
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
-    if (accelConfig.txPacketEnable == true || CONFIG_BLUETOOTH_SETTINGS_OVERRIDE)
+    if (accelConfig.txPacketEnable == true)
     {
       if (counterAcc == -1)
       {

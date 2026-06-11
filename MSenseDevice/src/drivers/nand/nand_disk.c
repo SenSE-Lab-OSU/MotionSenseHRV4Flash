@@ -21,22 +21,12 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 3);
+LOG_MODULE_REGISTER(nand_disk, 4);
 
 enum sd_status {
 	SD_UNINIT,
 	SD_ERROR,
 	SD_OK,
-};
-
-struct sdmmc_config {
-	//const struct device *host_controller;
-};
-
-struct sdmmc_data {
-	enum sd_status status;
-	char *name;
-	bool read_for_filename;
 };
 
 
@@ -182,6 +172,10 @@ static int disk_nand_access_init(struct disk_info *disk)
 	const struct device* dev = disk->dev;
 	
 	int sucess = spi_init(dev);
+	if (sucess != 0){
+		LOG_WRN("disk_nand_init failed %d", sucess);
+	}
+	
 	return 0;
 }
 
@@ -199,9 +193,10 @@ static int disk_nand_access_status(struct disk_info *disk)
 	//LOG_DBG("Accessing Status");
 	const struct device* dev = disk->dev;
 	
-	/*const struct sdmmc_config* cfg = dev->config;
-	struct sdmmc_data *data = dev->data;
-
+	// need to test to see if this actually works, have not verified yet
+	const struct spi_flash_config* cfg = dev->config;
+	struct spi_nor_data* data = dev->data;
+	/*
 	if (!sd_is_card_present(cfg->host_controller)) {
 		return DISK_STATUS_NOMEDIA;
 	}
@@ -212,8 +207,11 @@ static int disk_nand_access_status(struct disk_info *disk)
 	}
 	*/
 	//uint8_t status = spi_rdsr(dev);
+	
 	if (read_only){
+		//return DISK_STATUS_WR_PROTECT;
 		return DISK_STATUS_OK;
+		
 	}
 	return DISK_STATUS_OK;
 
@@ -224,29 +222,25 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 {
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
-	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;	
+	const struct device *dev = disk->dev;	
 
 	off_t addr;
 	int ret = 0;
 
-	if (count > 1){
-	LOG_WRN("count: %i", count);
-	}
-
 	for (int x = 0; x < count; x++) {
 		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
-		if (sector+x < file_table_sector_num){
-		ret = file_table_access(buf, sector+x, false);
-		continue;
+		if (sector+x < file_table_sector_num)
+		{
+			ret = file_table_access(&buf[x*4096], sector+x, false);
+			continue;
 		}
-		
-		int non_corrupt_sector = get_sector_offset(sector+x);
-		addr = convert_page_to_address(dev, non_corrupt_sector);
-		ret = spi_nand_page_read(dev, addr, &buf[x*4096]);
+		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
 	}
 	
 	//lol
+	if (ret != 0){
+		LOG_ERR("ret: %d", ret);
+	}
 	return ret; 
 }
 
@@ -254,22 +248,26 @@ uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	const char* name = k_thread_name_get(k_current_get());
+	LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
-	if (!read_only){
-	LOG_DBG("performing disk write at sector %i", sector);
-
+	bool disabled_usb_write = (strcmp(name, "usb_mass") == 0) && !IS_ENABLED(CONFIG_USB_WRITABLE);
+	if (!read_only && !disabled_usb_write){
 	
-	LOG_DBG("count: %i", count);
+
+	if (count > 1){
+		LOG_DBG("count: %i", count);
+	}
 	
 	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;
 	int ret = 0;
 	off_t addr;
 	
 	for (int x = 0; x < count; x++){
+		LOG_DBG("performing disk write at sector %i", sector+x);
 		if (sector+x < file_table_sector_num){
 			
-			file_table_access(buf, sector+x, true);
+			file_table_access(&buf[x*4096], sector+x, true);
 			continue;
 		}
 		else {
@@ -294,7 +292,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			ret = spi_nand_page_read(dev, addr, read_back_buffer);
 			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
 			if (!equal){
-				LOG_ERR("sect %d yield bad readback", sector_num);
+				LOG_WRN("sect %d yield bad readback", sector_num);
 				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 				register_bad_sector(sector_num);
 				#endif
@@ -304,7 +302,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		}
 		
 	}
-	
+		if (ret != 0){
+			LOG_ERR("ret %d", ret);
+		}
 		return ret; 
 	}
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
@@ -315,7 +315,6 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 {
 	LOG_INF("Ac ioctl with cmd %d", cmd);
 	const struct device *dev = disk->dev;
-	struct sdmmc_data *data = dev->data;
 
     switch (cmd) {
 	case DISK_IOCTL_GET_SECTOR_COUNT:
@@ -404,8 +403,11 @@ static const struct spi_flash_config spi_flash_config_0 =
 	},
 #undef LAYOUT_PAGES_COUNT
 #endif 
-
-	.flash_size = DT_INST_PROP(0, size),
+	/* Note: even though variables use dashes (-) in .yaml and devicetree, DT_INST_PROP requires them in underscores! (_)
+	 So, num-flashchips is num_flashchips.
+	*/
+	.flash_size = DT_INST_PROP(0, individual_size)*DT_INST_PROP(0, num_flashchips),
+	.num_flashes = DT_INST_PROP(0, num_flashchips),
 	.jedec_id = DT_INST_PROP(0, jedec_id),
 
 #if DT_INST_NODE_HAS_PROP(0, has_lock)
@@ -440,22 +442,10 @@ static int disk_sdmmc_init(const struct device *dev)
 
 	sdmmc_disk.dev = dev;
 	sdmmc_disk.name = "SD";//dev->name;
-	disk_nand_access_init(&sdmmc_disk);
+	int status = disk_nand_access_init(&sdmmc_disk);
 	return disk_access_register(&sdmmc_disk);
 }
 
-/*
-#define DISK_ACCESS_SDMMC_INIT(n)						\
-	static const struct sdmmc_config sdmmc_config_##n = {			\
-		.host_controller = DEVICE_DT_GET(DT_INST_PARENT(n)),		\
-	};									\
-										\
-	static struct sdmmc_data sdmmc_data_##n = {				\
-		.name = CONFIG_SDMMC_VOLUME_NAME,				\
-	};									\
-										\
-
-*/
 
 	DEVICE_DT_INST_DEFINE(0,						
 			&disk_sdmmc_init,					

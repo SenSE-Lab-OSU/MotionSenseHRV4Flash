@@ -19,36 +19,36 @@ LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
+    .sample_avg = PPG_FIXED_SAMPLE_AVG,
     .green_intensity = 0x30,
     .infraRed_intensity = 0x12,
 
     .sampling_time = 0x28,
-    .numCounts = 5,
+    .numCounts = PPG_FIXED_NUM_COUNTS,
     .txPacketEnable = false,
 };
 
 // struct that is used to store the saved value of the ppg sensor brightness
 struct ppg_configData ppg_saved_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_8,
+    .sample_avg = PPG_FIXED_SAMPLE_AVG,
     .sampling_time = 0x28,
-    .numCounts = 5,
+    .numCounts = PPG_FIXED_NUM_COUNTS,
     .txPacketEnable = false,
 };
 
 const struct ppg_configData ppg_default_config = {
     .isEnabled = true,
-    .sample_avg = PPG_SMP_AVE_16,
+    .sample_avg = PPG_FIXED_SAMPLE_AVG,
     .green_intensity = 0x28,
     .infraRed_intensity = 0x12,
     .sampling_time = 0x28,
-    .numCounts = 5,
+    .numCounts = PPG_FIXED_NUM_COUNTS,
     .txPacketEnable = false,
 };
 
 
-uint32_t timeWindow = 50;
+uint32_t timeWindow = PPG_FIXED_TIME_WINDOW;
 
 float32_t std_ppgThreshold_lower = 120;
 
@@ -77,6 +77,13 @@ uint8_t adaptIterMax = 30;
 uint8_t binarySteps = 0;
 
 bool use_fixed_ppg_brightness = false;
+
+static void ppg_apply_fixed_sampling_rate(void)
+{
+  ppgConfig.sample_avg = PPG_FIXED_SAMPLE_AVG;
+  ppgConfig.numCounts = PPG_FIXED_NUM_COUNTS;
+  timeWindow = PPG_FIXED_TIME_WINDOW;
+}
 
 // static float ppg_num[400];
 
@@ -127,6 +134,7 @@ void ppg_config()
 {
   if (ppgConfig.isEnabled)
   {
+    ppg_apply_fixed_sampling_rate();
     // fileOpen();
 
     uint8_t rxLen, txLen;
@@ -209,12 +217,12 @@ void ppg_config()
     cmd_array[0] = PPG_LED3_PA;
     spiWritePPG(cmd_array, txLen);
 
-    // System control reqister - Low Power Mode + shutoddown
+    // System control register - shutdown without low-power mode at 512 sps
     cmd_array[0] = PPG_SYS_CTRL;
-    cmd_array[2] = PPG_LP_MODE | PPG_SHUTDOWN;
+    cmd_array[2] = PPG_SHUTDOWN;
     spiWritePPG(cmd_array, txLen);
 
-    // FIFO configuration - 15 samples stored in FIFO
+    // FIFO almost-full threshold encoding. Keep frame alignment in mind if A_FULL is used.
     cmd_array[0] = PPG_FIFO_CONFIG_1;
     cmd_array[2] = 0x0F;
     spiWritePPG(cmd_array, txLen);
@@ -235,9 +243,9 @@ void ppg_config()
     cmd_array[2] = PPG_LEDC2_LED2_LED3_SIMULT | PPG_LEDC1_LED1;
     spiWritePPG(cmd_array, txLen);
 
-    // System control Dual PPG + Low power mode enabled + shutdown disabled
+    // System control Dual PPG with shutdown disabled; low-power mode is not used at 512 sps
     cmd_array[0] = PPG_SYS_CTRL;
-    cmd_array[2] = PPG_LP_MODE;
+    cmd_array[2] = 0;
     spiWritePPG(cmd_array, txLen);
 
     low_ch1 = 0;
@@ -290,6 +298,8 @@ void ppg_turn_on()
 
 void ppg_changeSamplingRate(void)
 {
+  ppg_apply_fixed_sampling_rate();
+
   if (ppgConfig.isEnabled)
   {
     uint8_t rxLen, txLen;
@@ -539,13 +549,10 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
   blePktPPG_noFilter[11] = (pktCounter & 0x00FF);
 }
 
-// formerly was 6
-uint32_t ppg_samples[6] = {0};
+uint32_t ppg_samples[5] = {0};
 uint32_t ppg_packet_counter = 0;
 void read_ppg_fifo_buffer(struct k_work *item)
 {
-  
-  //start_timer();
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
   uint16_t pktCounter = the_device->pktCounter;
@@ -554,10 +561,10 @@ void read_ppg_fifo_buffer(struct k_work *item)
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t read_array[128 * 2 * 2 * 3] = {0};
   uint8_t txLen, rxLen;
-  uint32_t led1A[32];
-  uint32_t led1B[32];
-  uint32_t led2A[32];
-  uint32_t led2B[32];
+  uint32_t led1A[32] = {0};
+  uint32_t led1B[32] = {0};
+  uint32_t led2A[32] = {0};
+  uint32_t led2B[32] = {0};
 
   uint8_t tag;
   float channel1A_in, channel1B_in, channel2A_in, channel2B_in;
@@ -583,13 +590,31 @@ void read_ppg_fifo_buffer(struct k_work *item)
   // we get count as a 24 bit number, but the actual size doesn't exceed 8 bits, so we just read (sampleCount[2]).
   
 
-  // Reading the actual PPG samples
+  int number_of_samples = sampleCount[2] / 4;
+
+  if (number_of_samples == 0) {
+    LOG_DBG("PPG FIFO has no complete frame yet: %u items", sampleCount[2]);
+    return;
+  }
+
+  if ((sampleCount[2] % 4) != 0)
+  {
+    LOG_ERR("PPG FIFO item count not frame-aligned: %u", sampleCount[2]);
+  }
+  if (number_of_samples > 32)
+  {
+    LOG_ERR("PPG FIFO backlog too large: %d frames", number_of_samples);
+    number_of_samples = 32;
+  }
+
+  // Reading the actual PPG samples. Each logical frame has four 3-byte FIFO
+  // items (PPG1/PPG2 for LEDC1, then PPG1/PPG2 for LEDC2).
   cmd_array[0] = PPG_FIFO_DATA;
-  spiReadWritePPG(cmd_array, txLen, read_array, sampleCount[2] * 3 + 2);
+  spiReadWritePPG(cmd_array, txLen, read_array, number_of_samples * 12 + 2);
 
   int i, j;
-  //for each sample (obtained earlier by reading the number of samples stored
-  for (i = 0; i < sampleCount[2]; i++)
+  //for each logical PPG frame (obtained earlier by reading the number of FIFO items stored)
+  for (i = 0; i < number_of_samples; i++)
   {
     // sample is stored as a sequence of 24 bit numbers so we iterate over 3 bytes (24 bits) 
     for (j = 0; j <= 9; j = j + 3)
@@ -644,14 +669,13 @@ void read_ppg_fifo_buffer(struct k_work *item)
     LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
     LOG_DBG("new IR intensity: %d\n", ppgConfig.infraRed_intensity);
   }
-  int number_of_samples = sampleCount[2] / 4;
   #if CONFIG_LOG
   static int last_ppg_count = 0;
   
   if (number_of_samples != 1){
       LOG_WRN("Samples in ppg got unexpected value: %d", number_of_samples);
     }
-    if (global_counter - last_ppg_count != 5) {
+    if (global_counter - last_ppg_count != ppgConfig.numCounts) {
       LOG_ERR("Detected ppg global counter offset: %d", global_counter - last_ppg_count);
     }
     last_ppg_count = global_counter;
@@ -663,8 +687,8 @@ void read_ppg_fifo_buffer(struct k_work *item)
     ppg_samples[1] = led1B[i];
     ppg_samples[2] = led2A[i];
     ppg_samples[3] = led2B[i];
-    ppg_samples[4] = get_current_unix_time();
-    ppg_samples[5] = global_counter;
+    uint32_t global_tick_512hz = global_counter;
+    ppg_samples[4] = global_tick_512hz;
     
     store_data(ppg_samples, sizeof(ppg_samples), 0);
     
@@ -698,74 +722,4 @@ void read_ppg_fifo_buffer(struct k_work *item)
 
   }
 
-  //int64_t timer_value = stop_timer();
-
-  if (rand() % 100 == 5){
-    //LOG_WRN("Timer Value: %lli ms", timer_value);
-  }
-}
-
-/* This function reads and fills bleSendArr with unfiltered ppg according
-to the desired packet format */
-void ppg_bluetooth_fill(uint8_t *bleSendArr)
-{
-
-  uint8_t txLen, rxLen;
-  uint32_t led1A[32];
-  uint32_t led1B[32];
-  uint32_t led2A[32];
-  uint32_t led2B[32];
-  uint16_t packet_counter;
-
-  float_cast buff_val_filtered;
-  uint32_cast buff_val_raw;
-  // Transmitting the un-filtered data on BLE
-  ppg_bluetooth_preprocessing_raw(&led1A, &led1B, &led2A, &led2B, packet_counter);
-
-  // creating a compressed signal to send here
-
-  // We are sending 18 bit values here that come from 24 bit values (we just chop off 1 from LSB)
-  //  additionally, these 24 bit values have five zeros, so we treat them as 19 bit values
-  buff_val_raw.integer = led2A[0];
-  // grab the first 3 bits (because 5 bits are 0s that we don't want)
-  bleSendArr[12] = (buff_val_raw.intcast[2] & 0x07) << 5;
-  // put in the remaining 5 bits
-  bleSendArr[12] = bleSendArr[12] | ((buff_val_raw.intcast[1]) & 0xF8); // 0xF8 = 11111000
-
-  // continue this pattern for the 2nd byte
-  bleSendArr[13] = ((buff_val_raw.intcast[1] & 0x07) << 5) | ((buff_val_raw.intcast[0] & 0xF8) >> 3);
-
-  // continue the pattern, but because we have reached the end of the 24 bit number, we need to shorten
-  // this from 19 bits to 18 bits, so we cut off 1
-  bleSendArr[14] = ((buff_val_raw.intcast[0] & 0x06) << 5); // 0x06 = 00000110
-
-  buff_val_raw.integer = led2B[0];
-  // again, we need to cut off 5 bits
-  // this means there are only 3 useable bits in intcast[2]
-  // in BleSendArr[14] only 6  bits remain
-
-  bleSendArr[14] = bleSendArr[14] | ((buff_val_raw.intcast[2] & 0x07) << 3); // there has to be 2 zeros, and we have 5 already, so we only need to shift by 3
-  // now only 3 bits remain in BleSendArr[13]
-  // place last 3 bits in
-  bleSendArr[14] = bleSendArr[14] | ((buff_val_raw.intcast[1] & 0x0E) >> 5);
-
-  // place remaining 5 bits of intcast[1]
-  bleSendArr[15] = (buff_val_raw.intcast[1] & 0x1F) << 3;
-  // place 3 bits of incast[0]
-  bleSendArr[15] = bleSendArr[15] | ((buff_val_raw.intcast[0] & 0xE0) >> 5); // E0 = 11100000
-
-  // we have to again cut off 1 bit. so we will only be placing 4 total bits
-  bleSendArr[16] = (buff_val_raw.intcast[0] & 0x1E) << 3; // 1E = 00011110
-
-  buff_val_raw.integer = (led1A[0] + led2A[0]) / 2;
-
-  // we need to place 4 bits in bleSendArr[16] and there are 3 useable bits in
-  //  buff_val_raw.intcast[2]. So, :( we have to place 1 bit of
-  bleSendArr[16] = bleSendArr[16] | ((buff_val_raw.intcast[2] & 0x07) << 1);
-
-  // place the final bit
-  bleSendArr[16] = bleSendArr[16] | ((buff_val_raw.intcast[1] & 0x80) >> 7); // 0x80 = 10000000
-  bleSendArr[17] = (buff_val_raw.intcast[1] & 0x3F) << 1;                    // 3F = 0111111
-  bleSendArr[17] = bleSendArr[17] | ((buff_val_raw.intcast[0] & 0x80) >> 7);
-  bleSendArr[18] = (buff_val_raw.intcast[0] & 0x3F) << 1;
 }

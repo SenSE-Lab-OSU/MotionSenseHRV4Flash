@@ -73,27 +73,35 @@ endif # DISK_DRIVER_FLASH
 config MSENSE3_BLUETOOTH_DATA_UPDATES
 	bool "Use MotionSenseHRV3Updates"
 	default n
-
+	help 
+		Enables the Previous MSense3 mode of data collection, which starts collection as soon as the device connects to usb
+		and sends data all through bluetooth
+		
 
 
 menuconfig COLLECTION_REQUIRES_DATE_ID
 	bool "Allows sensor collection only if the date time and id characteristics have been filled out by the central."
 	default n
 
-config BLUETOOTH_SETTINGS_OVERRIDE
-	int "Override User Set Bluetooth Settings"
-	default 1
 
 config USB_ALWAYS_ON
 	bool "whether the usb mass storage driver is on during bluetooth collection"
 	default n
+	help
+		Normally, when data collection starts the USB module turns off, preventing the user from being able to read the drive 
+		while data collection is taking place. This KConfig disables this, allowing users to always see logs
 
 config USB_WRITABLE
 	bool "whether one can write or modify files via USB"
 	default n
+	help 
+		If the device is plugged in via USB and this KConfig is not set, Users will not be able to create or write new files
+		(they can still read them).
+		for this to truly work, we must be using a file system driver that supports reading and writing, 
+		like flash area (NOR) or dhara (NAND)
 
 config MSENSE_USB_SECURITY
-	bool "Configures USB security mode, which requires a password in order to enable to usb behavior"
+	bool "Configures USB security mode, which requires a password in order to enable to usb behavior. Not Currently Implemented."
 	default n
 
 config LOG_BACKEND_FS_BUFFER
@@ -104,16 +112,13 @@ config LOG_BACKEND_FS_BUFFER
       When enabled, the double buffered filesystem backend (normally for ppg and accel) will be used for logging.
 
 
-config LOG_LEVEL_DATA_COLLECTION
-	int "whether data from sensors is printed in logs"
-	default 3
 
 config LOG_LEVEL_IMU_COLLECTION
-	int "whether data from sensors is printed in logs"
+	int "level at which data from imu is printed in logs"
 	default 3
 
 config LOG_LEVEL_PPG_COLLECTION
-	int "whether data from sensors is printed in logs"
+	int "level at which data from ppg is printed in logs"
 	default 3
 
 source "Kconfig.zephyr"

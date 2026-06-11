@@ -107,7 +107,6 @@ static inline const struct jesd216_erase_type* dev_erase_types(const struct devi
 	return &erasetype;
 }
 
-
 /* Get the size of the flash device.  Data for runtime, constant for
 * minimal and devicetree.
 */

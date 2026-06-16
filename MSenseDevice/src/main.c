@@ -475,7 +475,7 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 void battery_maintenance()
 {
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
-  dt_update_battery(dev);
+  dt_update_battery(dev, true);
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -624,8 +624,6 @@ void main(void)
       battery_maintenance();
       get_current_unix_time();
       LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
-      if (!file_lock){
-      }
     }
 
     if (!connectedFlag){

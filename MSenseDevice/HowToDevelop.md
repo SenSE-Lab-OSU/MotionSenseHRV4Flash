@@ -46,6 +46,23 @@ Due to the way zephyr sets up it's device driver model, There are 5 locations fo
 
 
 
+Migration Changes:
+
+2.5.3->2.6
+CONFIG_NRFX_GPIOTE=y -> removed as it's not implicitly set to y if it's used in the project.
+Removed CMSIS DSP Configs as they are no longer needed.
+
+2.6->2.7
+-header file for battery changed to #include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h> (added /ti, it is now inside a subdirectory for nrf)
+re-enabled CMSIS DSP Configs, I guess they got reverted back
+-Verified that that current DFU host tools support the dfu_application.zip file with the new format version (1), which was introduced in this version
+-prepped to migrate to sysbuild, it appears partition manager might be disabled now in this version?
+-child image changed from rpmsg to ipc: changed child image conf file from hci_rpmsg to hci_ipc. Also removed most KConfigs since there were no necessary settings anyway that we use (previous KConifgs were just for testing).
+removed the call to bt_disable() within bt_reset, as the sdk changed bt_disable to no longer be an async call and tied it to threads, causing a deadlock if disable is called on an bt thread (bt_reset is BT_RX thread). Instead, we now just disconnect from the current host and disable advertising (TODO: ultamitely, we should keep bt_disable and just process things via a different thread).
+
+2.7->2.8
+
+
 
 
 

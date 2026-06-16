@@ -21,6 +21,7 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
+#include "drivers/nand/nand_disk.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -64,11 +65,11 @@ const int data_limit = MAX_BUFFER_SIZE;
 
 
 // external globals
-int storage_percent_full;
+uint8_t storage_percent_full;
 
 int upload_timeout_errors;
 
-bool file_lock;
+bool reset_lock;
 
 uint64_t last_time_update_sent;
 
@@ -256,11 +257,23 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 	MSenseFile->first_sample_init = false;
 }
 
+
+void shutdown_filesystem(){
+	close_all_files();
+	struct fs_mount_t* mp = &fs_mnt;
+	fs_unmount(mp);
+}
+
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
 	if (storage_percent_full >= 99){
 		LOG_WRN("Storage is getting full, aborting write");
+		return;
+	}
+
+	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()){
+		LOG_WRN("Tried to write while in readonly mode, aborting");
 		return;
 	}
 	if (sensor == ppg){
@@ -347,7 +360,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		data_counter += total_written;
 	}
 	else if (total_written < 0){
-		LOG_WRN("system failed %d write for %d! tot writes before: ", size, sensor, MSenseFile->current_writes);
+		LOG_WRN("system failed %d write for %d! tot writes before: %d ", size, sensor, MSenseFile->current_writes);
 		file_system_malfunction = true;
 		status_reg_ble_notification();
 	}
@@ -455,8 +468,11 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == customlog){
 		work_item = &log_work_item;
 	}
-
-	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
+	int work_status = k_work_busy_get(work_item);
+	if (work_status != 0){
+		LOG_WRN("work state for %d not zero", type);
+	}
+	LOG_DBG("state for sensor %d: %d", type, work_status);
 	
 	if (!work_item->in_use){
 
@@ -510,7 +526,6 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
-	//memcpy(arr, address_to_write, size);
 	current_buffer->current_size += size;
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
@@ -733,12 +748,12 @@ int get_storage_percent_full(){
 	float storage_percent = (info.f_blocks - info.f_bfree);
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
-	storage_percent_full = (int)storage_percent;
+	storage_percent_full = (uint8_t)storage_percent;
 	if (storage_percent_full >= 99){
 		file_system_full = true;
 	}
 	storage_ble_notification(&storage_percent_full, sizeof(storage_percent_full));
-	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
+	LOG_INF("storage: %f and %i and total_errors %i", (double)storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 
 }

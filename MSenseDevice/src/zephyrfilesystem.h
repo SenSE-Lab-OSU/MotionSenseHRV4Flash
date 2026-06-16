@@ -1,5 +1,5 @@
 
-extern bool file_lock;
+extern bool reset_lock;
 
 extern bool file_system_ready;
 
@@ -32,6 +32,8 @@ void write_to_file(const void* data, size_t size);
 
 int close_all_files();
 
+void shutdown_filesystem();
+
 void submit_write(const void* data, size_t size, enum sensor_type type);
 
 
@@ -39,7 +41,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor);
 
 int get_storage_percent_full();
 
-extern int storage_percent_full;
+extern uint8_t storage_percent_full;
 
 int write_ble_uuid(char* ble_string);
 

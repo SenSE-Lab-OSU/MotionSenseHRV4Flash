@@ -163,8 +163,17 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	return ret;
 }
 
+// TODO: Potentially refactor because we can just mount the filesystem as readonly, instead of doing things this way.
 void set_read_only(bool enable){
+
+	if (IS_ENABLED(CONFIG_RAW_NAND_ALLOW_RUNTIME_READONLY_FS)){
+	LOG_INF("toggling readonly runtime status");
 	read_only = enable;
+	}
+}
+
+bool get_read_only(){
+	return read_only;
 }
 
 static int disk_nand_access_init(struct disk_info *disk)
@@ -246,69 +255,79 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 
 uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
-				 uint32_t sector, uint32_t count)
+								  uint32_t sector, uint32_t count)
 {
-	const char* name = k_thread_name_get(k_current_get());
+	const char *name = k_thread_name_get(k_current_get());
 	LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
 	bool disabled_usb_write = (strcmp(name, "usb_mass") == 0) && !IS_ENABLED(CONFIG_USB_WRITABLE);
-	if (!read_only && !disabled_usb_write){
-	
+	if (!read_only && !disabled_usb_write)
+	{
 
-	if (count > 1){
-		LOG_DBG("count: %i", count);
-	}
-	
-	const struct device *dev = disk->dev;
-	int ret = 0;
-	off_t addr;
-	
-	for (int x = 0; x < count; x++){
-		LOG_DBG("performing disk write at sector %i", sector+x);
-		if (sector+x < file_table_sector_num){
-			
-			file_table_access(&buf[x*4096], sector+x, true);
-			continue;
+		if (count > 1)
+		{
+			LOG_DBG("count: %i", count);
 		}
-		else {
-		int sector_num = x+sector;
-		if (CheckDuplicateAccess){
-			for (int y = 0; y < 1000; y++){
-				sector_num = get_sector_offset(x+sector);
-				
-				int error = check_duplicate_sector_write(disk, sector_num);
-				if (error == -1){
-					continue;
+
+		const struct device *dev = disk->dev;
+		int ret = 0;
+		off_t addr;
+
+		for (int x = 0; x < count; x++)
+		{
+			LOG_DBG("performing disk write at sector %i", sector + x);
+			if (sector + x < file_table_sector_num)
+			{
+
+				file_table_access(&buf[x * 4096], sector + x, true);
+				continue;
+			}
+			else
+			{
+				int sector_num = x + sector;
+				if (CheckDuplicateAccess)
+				{
+					for (int y = 0; y < 1000; y++)
+					{
+						sector_num = get_sector_offset(x + sector);
+
+						int error = check_duplicate_sector_write(disk, sector_num);
+						if (error == -1)
+						{
+							continue;
+						}
+						break;
+					}
 				}
-				break;	
-			}
-		}
 
-		addr = convert_page_to_address(dev, sector_num);
-		ret = spi_nand_page_write(dev, addr, &buf[x*4096], 4096);
-		// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
-		
-		if (VerifyWrites){
-			ret = spi_nand_page_read(dev, addr, read_back_buffer);
-			int equal = memcmp(&buf[x*4096], read_back_buffer, 4096);
-			if (!equal){
-				LOG_WRN("sect %d yield bad readback", sector_num);
-				#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-				register_bad_sector(sector_num);
-				#endif
+				addr = convert_page_to_address(dev, sector_num);
+				ret = spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
+				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
+
+				if (VerifyWrites)
+				{
+					ret = spi_nand_page_read(dev, addr, read_back_buffer);
+					int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
+					if (!equal)
+					{
+						LOG_WRN("sect %d yield bad readback", sector_num);
+#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+						register_bad_sector(sector_num);
+#endif
+					}
+				}
 			}
 		}
-		
-		}
-		
-	}
-		if (ret != 0){
+		if (ret != 0)
+		{
 			LOG_ERR("ret %d", ret);
 		}
-		return ret; 
+		return ret;
 	}
+	else{
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
 	return -1;
+	}
 }
 
 static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf)

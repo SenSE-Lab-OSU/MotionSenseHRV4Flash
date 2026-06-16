@@ -30,13 +30,12 @@ static uint32_t log_format_current = 0;
 int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 {
 	debug_messages++;
-	if (file_system_ready && !file_lock && collecting_data) {
+	if (file_system_ready) {
 		store_data(data, length, customlog);
 		
 	}
 	return length;
 }
-
 
 
 
@@ -55,10 +54,10 @@ static void log_backend_fs_init(const struct log_backend *const backend)
 
 static void panic(struct log_backend const *const backend)
 {
-	/* In case of panic deinitialize backend. It is better to keep
-	 * current data rather than log new and risk of failure.
-	 */
-	// TODO: Close the log file
+	// In case of panic, flush any remaining log data to the file.
+	log_backend_std_panic(&log_output);
+	// after the messages have logged, close files.
+	close_all_files();
 	log_backend_deactivate(backend);
 }
 

@@ -22,6 +22,15 @@ menuconfig RAW_NAND_BAD_SECTOR_SAVING
     help
        Not currently enabled since our Custom Sense FTL does not support block reallocation.
 
+config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
+	bool "allows the file system to be set as read only during runtime (via set_read_only)"
+	default n
+	help
+	   Dynamically allows the file system when using the NAND driver not allow any writes by calling the function set_read_only.
+	    Note that this is a system that will only work at the internal software level: the drive is not actually readonly
+		on windows, to do this, the drive must instead be mounted as readonly vs fs_mount. 
+
+
 menuconfig DISK_DRIVER_DHARA
     bool
     prompt "Disk Driver using dhara as the flash translation layer, instead of the SENSE lab custom nor solution."

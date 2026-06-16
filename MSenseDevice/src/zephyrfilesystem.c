@@ -137,13 +137,13 @@ static MotionSenseFile current_file;
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 timer, and uint32 counter"
+	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 global_tick_512hz"
 };
 
 MotionSenseFile accel_file = {
 	.write_size = 8192,
 	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 gyro, second avg float32 enmo, uint32 timer, uint32 counter"
+	.sensor_format = "3 int16 accel, 3 float32 quaternion, second avg float32 enmo, uint32 global_tick_512hz"
 };
 
 MotionSenseFile log_file = {
@@ -844,4 +844,3 @@ int64_t stop_timer(){
 	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }
-

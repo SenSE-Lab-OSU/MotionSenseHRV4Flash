@@ -25,7 +25,7 @@ typedef union{
 }uint32_cast;
 
  // common.h code goes here
-extern uint16_t global_counter;
+extern uint32_t global_counter;
 extern uint8_t movingFlag;
 extern uint8_t blePktPPG_noFilter[ble_ppg_noFilter_byteLength];
 extern uint8_t blePktPPG_Filter[ble_ppg_Filter_byteLength];

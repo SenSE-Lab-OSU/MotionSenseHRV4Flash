@@ -30,7 +30,7 @@ static uint32_t log_format_current = 0;
 int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 {
 	debug_messages++;
-	if (file_system_ready) {
+	if (file_system_ready && !reset_lock) {
 		store_data(data, length, customlog);
 		
 	}

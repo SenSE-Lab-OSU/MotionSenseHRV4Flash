@@ -351,7 +351,7 @@ void timer_handler(nrf_timer_event_t event_type, void* p_context){
   LOG_DBG("Timer Executing");
   static uint64_t prev_time = 0;
   if (k_uptime_get()-prev_time > 8){
-    LOG_ERR("Timer: %d", k_uptime_get()-prev_time);
+    LOG_ERR("Timer: %llu", k_uptime_get()-prev_time);
   }
   prev_time = k_uptime_get();
   #endif 
@@ -498,23 +498,10 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 
 void reset_device(bool reset_bad_blocks){
-
-  // disconnect bluetooth and usb
-  LOG_INF("disconnecting bluetooth.. \n");
-  bt_conn_disconnect(my_connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-  bt_le_adv_stop();
-  
-  reset_lock = true;
-  
   
   if (!IS_ENABLED(CONFIG_USB_ALWAYS_ON)){
     usb_disable();
-  }
-  else{
-    shutdown_filesystem();
-  }
-  
-  
+  } 
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
   // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
@@ -546,8 +533,7 @@ void reset_device(bool reset_bad_blocks){
   else {
     LOG_ERR("Couldn't erase flash chip, device not ready.");
   }
-  
-  
+   
   NVIC_SystemReset();
 
 }
@@ -707,8 +693,13 @@ uint16_t offset, uint8_t flags){
   LOG_INF("entered code: %i", val);
   if ((val == 68 || val == 121 || val == 132) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
+    LOG_INF("disconnecting bluetooth.. \n");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    bt_le_adv_stop();
     connectedFlag=false;
+    reset_lock = true;
+    shutdown_filesystem();
+
     
     storage_clear_led();
     k_sleep(K_SECONDS(1));
@@ -717,9 +708,8 @@ uint16_t offset, uint8_t flags){
       reset_device(val == 132);
     }
     else {
-      volatile uint32_t *bad_ptr = NULL;
-      *bad_ptr = 0xDEADBEEF; // This will trigger a CPU exception
-      //NVIC_SystemReset();
+      
+      NVIC_SystemReset();
     }
     return NRFX_SUCCESS;  
   }
@@ -785,6 +775,14 @@ void create_test_files_through_file_workqueue(struct k_work* work){
   create_test_files(100);
   blink_led(31);
 
+}
+
+void crash_device(){
+    // can use:
+    //k_oops();
+    // or:
+    volatile uint32_t *bad_ptr = NULL;
+    *bad_ptr = 0xDEADBEEF; // This will trigger a CPU exception
 }
 
 

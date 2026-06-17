@@ -283,8 +283,8 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 
 void shutdown_filesystem(){
 	close_all_files();
-	struct fs_mount_t* mp = &fs_mnt;
-	fs_unmount(mp);
+	//struct fs_mount_t* mp = &fs_mnt;
+	//fs_unmount(mp);
 }
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){

@@ -10,7 +10,7 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/services/bas.h>
-#include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h> // screw you zephyr 
+#include <zephyr/../../drivers/sensor/bq274xx/bq274xx.h> // screw you zephyr 
 #include "batteryMonitor.h"
 #include "BLEService.h"
 

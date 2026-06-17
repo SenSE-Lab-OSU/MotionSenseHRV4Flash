@@ -54,8 +54,10 @@ static void log_backend_fs_init(const struct log_backend *const backend)
 
 static void panic(struct log_backend const *const backend)
 {
+	panic_single_thread = true;
 	// In case of panic, flush any remaining log data to the file.
 	log_backend_std_panic(&log_output);
+	//flush_data_buffer(customlog);
 	// after the messages have logged, close files.
 	close_all_files();
 	log_backend_deactivate(backend);

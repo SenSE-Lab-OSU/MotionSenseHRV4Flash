@@ -3,6 +3,9 @@ extern bool reset_lock;
 
 extern bool file_system_ready;
 
+extern bool panic_single_thread;
+
+
 enum sensor_type {ppg, 
 accelorometer, passthrough, customlog};
 
@@ -28,7 +31,7 @@ void create_test_files(int number_of_files);
 
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type);
 
-void write_to_file(const void* data, size_t size);
+int write_to_file(const void* data, size_t size);
 
 int close_all_files();
 
@@ -38,6 +41,8 @@ void submit_write(const void* data, size_t size, enum sensor_type type);
 
 
 void store_data(const void* data, size_t size, enum sensor_type sensor);
+
+void flush_data_buffer(enum sensor_type sensor);
 
 int get_storage_percent_full();
 

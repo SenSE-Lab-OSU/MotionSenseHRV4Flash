@@ -711,13 +711,15 @@ uint16_t offset, uint8_t flags){
     connectedFlag=false;
     
     storage_clear_led();
-    k_sleep(K_SECONDS(2));
+    k_sleep(K_SECONDS(1));
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68 || val == 132){
       reset_device(val == 132);
     }
     else {
-      NVIC_SystemReset();
+      volatile uint32_t *bad_ptr = NULL;
+      *bad_ptr = 0xDEADBEEF; // This will trigger a CPU exception
+      //NVIC_SystemReset();
     }
     return NRFX_SUCCESS;  
   }
@@ -771,7 +773,7 @@ uint16_t offset, uint8_t flags){
     printk("Advertising successfully started\n");
   }
   */
-  k_sleep(K_SECONDS(2));
+  k_sleep(K_SECONDS(1));
   NVIC_SystemReset();
   return 0;
   

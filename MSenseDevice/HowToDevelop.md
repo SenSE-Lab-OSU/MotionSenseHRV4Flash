@@ -59,8 +59,11 @@ re-enabled CMSIS DSP Configs, I guess they got reverted back
 -prepped to migrate to sysbuild, it appears partition manager might be disabled now in this version?
 -child image changed from rpmsg to ipc: changed child image conf file from hci_rpmsg to hci_ipc. Also removed most KConfigs since there were no necessary settings anyway that we use (previous KConifgs were just for testing).
 removed the call to bt_disable() within bt_reset, as the sdk changed bt_disable to no longer be an async call and tied it to threads, causing a deadlock if disable is called on an bt thread (bt_reset is BT_RX thread). Instead, we now just disconnect from the current host and disable advertising (TODO: ultamitely, we should keep bt_disable and just process things via a different thread).
+added CONFIG_RESET_ON_FATAL_ERROR=y since apparently it was implicitly set to no or turned off
 
 2.7->2.8
+
+
 
 
 

@@ -479,13 +479,20 @@ void battery_maintenance()
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  if (battery_level < 5){
+    battery_low = true;
+  }
+  else if (battery_level > 15){
+    battery_low = false;
+  } 
+
   if (collecting_data || host_wants_collection){
-        if (battery_level < 5 && collecting_data){
-            battery_low = true;
+        if (battery_low && collecting_data){
+            
             start_stop_device_collection(false);
         }
-        else if (battery_level > 15 && host_wants_collection && !collecting_data){
-            battery_low = false;
+        else if (!battery_low && host_wants_collection && !collecting_data){
+
             start_stop_device_collection(true);
             
         }

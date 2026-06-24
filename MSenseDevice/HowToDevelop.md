@@ -62,6 +62,33 @@ removed the call to bt_disable() within bt_reset, as the sdk changed bt_disable 
 added CONFIG_RESET_ON_FATAL_ERROR=y since apparently it was implicitly set to no or turned off
 
 2.7->2.8
+CONFIG_NFCT_PINS_AS_GPIOS=y deprecated, moved to device tree instead: 
+&uicr {
+    nfct-pins-as-gpios;
+};
+DCDC CONFIGs deprecated, moved to device tree instead:
+
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+default system changed to sys-build: refactored project to work with this system:
+moved MCU Bootloader configs to sysbuild folder (sysbuild/mcuboot.conf)
+since DCDC KConfigs update inside mcuboot (but as mentioned, those KConfigs were deprecated), moved the device tree implementation (just like above) to mcuboot.overlay
+added sysbuild.conf, where the image and boot loaders are specified. See file for how images and MCU boot with dfu are setup.
+TODOs: mcuboot configs in mcuboot.conf are not really used anymore, they should eventually be taken out. 
+Same with prj.conf, I don't think these configs are needed anymore, but I still left them in for backwards compatibility:CONFIG_BOOTLOADER_MCUBOOT=y,
+CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU=y
+Partition manager configs have also moved to sysbuild, but we don't use partition manager anymore. However, if we do decide to use it, we must move KConfigs over to sysbuild following the guide: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/releases_and_maturity/migration/migration_sysbuild.html
+also note that device USB appears not to work when not using the MCU bootloader. This is a non issue since we will always use MCU bootloader.
+
+2.8 -> 2.9
+include from ssize_t changed from zephyr/types.h to sys/types.h, included the mentioned file to fix.
+
 
 
 

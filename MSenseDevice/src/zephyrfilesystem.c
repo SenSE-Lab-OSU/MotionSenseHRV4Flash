@@ -330,7 +330,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			uint64_t current_time = MSenseFile->start_time; 
 			
 			ID = current_time;
-			if (sensor = customlog){
+			if (sensor == customlog){
 				// could also add it onto the time instead?
 				total_log_files++;
 				ID = total_log_files;

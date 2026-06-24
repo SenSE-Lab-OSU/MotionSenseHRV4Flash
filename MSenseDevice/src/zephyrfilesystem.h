@@ -33,7 +33,11 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type);
 
 int write_to_file(const void* data, size_t size);
 
+
+
 int close_all_files();
+
+void reset_log_file();
 
 void shutdown_filesystem();
 

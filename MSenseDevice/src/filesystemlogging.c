@@ -5,6 +5,7 @@
 #include "zephyrfilesystem.h"
 #include "BLEService.h"
 
+
 #ifdef CONFIG_LOG_BACKEND_FS_BUFFER
 
 
@@ -23,7 +24,6 @@ enum backend_fs_state {
 int debug_messages = 0;
 
 static uint32_t log_format_current = 0;
-
 
 
 
@@ -49,7 +49,7 @@ LOG_OUTPUT_DEFINE(log_output, write_log_to_file, buf, MAX_FLASH_WRITE_SIZE);
 
 static void log_backend_fs_init(const struct log_backend *const backend)
 {
-
+	bool file_system_logging = true; 
 }
 
 static void panic(struct log_backend const *const backend)

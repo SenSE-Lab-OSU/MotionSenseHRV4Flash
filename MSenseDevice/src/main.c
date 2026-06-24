@@ -97,7 +97,7 @@ SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
 // SPI Mode-3 IMU
 struct spi_config spi_cfg_imu =
 {
-    .frequency = 1000000,
+    .frequency = 4000000,
     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
                  SPI_MODE_CPOL | SPI_MODE_CPHA,
     .slave = 0,
@@ -159,7 +159,7 @@ struct orientation_config orientationConfig;
 
 static K_SEM_DEFINE(ble_init_ok, 0, 1);
 
-uint16_t global_counter;
+uint32_t global_counter;
 
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -391,29 +391,33 @@ static void spi_init(void)
 
   accelConfig.isEnabled = true;
   accelConfig.txPacketEnable = true;
-  accelConfig.sample_bw = ACCEL_DLPFCFG_12HZ;
+  accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
   accelConfig.sensitivity = ACCEL_FS_SEL_4g;
 
   gyroConfig.isEnabled = true;
   gyroConfig.txPacketEnable = true;
-  gyroConfig.tot_samples = 10;
+  gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
   gyroConfig.sensitivity = GYRO_FS_SEL_500;
   orientationConfig.isEnabled = true;
   orientationConfig.txPacketEnable = true;
 
+  // Disabled until the magnetometer packet format is made memory-safe.
   magnetoConfig.isEnabled = false;
-  magnetoConfig.txPacketEnable = true;
+  magnetoConfig.txPacketEnable = false;
   //tfMicroCoonfig.isEnabled = true;
   //tfMicroCoonfig.txPacketEnable = true;
 
-  configRead[1] = IMU_ENABLE | MAGNETOMETER_ENABLE | PPG_ENABLE |
-                  ORIENTATION_ENABLE | TFMICRO_ENABLE;
-  configRead[0] = MOTION_BLE_ENABLE | MAGNETOMETER_BLE_ENABLE |
-                  PPG_BLE_ENABLE | ORIENTATION_BLE_ENABLE | TFMICRO_BLE_ENABLE;
+  configRead[1] = IMU_ENABLE | PPG_ENABLE | ORIENTATION_ENABLE | TFMICRO_ENABLE;
+  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE |
+                  ORIENTATION_BLE_ENABLE | TFMICRO_BLE_ENABLE;
+#if MAGNETOMETER_DATA_PATH_ENABLED
+  configRead[1] |= MAGNETOMETER_ENABLE;
+  configRead[0] |= MAGNETOMETER_BLE_ENABLE;
+#endif
   configRead[2] = ppgConfig.green_intensity;
   configRead[3] = ppgConfig.infraRed_intensity;
   configRead[4] = 0x12;
-  configRead[5] = 0x44;
+  configRead[5] = PPG_FIXED_256HZ_STATUS | MOTION_FIXED_32HZ_STATUS;
 }
 
 void spi_verify_sensor_ids()
@@ -653,4 +657,3 @@ int main(void)
     
   }
 }
-

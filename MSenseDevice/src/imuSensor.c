@@ -31,9 +31,16 @@ struct bleDataPacket my_motionData;
 struct bleDataPacket enmoThreshold;
 // Magnometer variables
  
-bool validMeasurement = false;
 bool magnoSecondReading = false;
 uint8_t burst_tx_magneto[17];	
+
+#if MAGNETOMETER_DATA_PATH_ENABLED
+#define IMU_USER_CTRL_VALUE (I2C_MST_EN | I2C_IF_DIS)
+#define IMU_LP_CONFIG_VALUE I2C_MST_CYCLE
+#else
+#define IMU_USER_CTRL_VALUE I2C_IF_DIS
+#define IMU_LP_CONFIG_VALUE 0x00
+#endif
 
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, 
 uint8_t * rx_buffer, uint8_t rxLen){
@@ -57,14 +64,14 @@ uint8_t * rx_buffer, uint8_t rxLen){
   };
 
   //there's some area where we might be able to use spi_transceive_dt, with SPI_DT_SPEC_GET to simplify code, but for now, we will just use the previous version.
-  
+
   err = spi_transceive(spi_dev_imu, &spi_cfg_imu, &tx, &rx);
-  if (err) 
+  if (err)
     printk("SPI error: %d\n", err);
 }
 
-// Reads the gyroscope raw data at 200 Hz and accumulates the samples 
-// using the quarternion representaiotn. This function also checks if 
+// Reads the gyroscope raw data at the global tick rate and accumulates samples
+// into a quaternion for the lower-rate motion record. This function also checks if
 // the sensor is moving based on a threshold on the angular velocity.
 static void gyroscope_measurement(float * quaternionResult){
   uint8_t temp3[8];
@@ -79,7 +86,7 @@ static void gyroscope_measurement(float * quaternionResult){
   const float deg_rad = (float)(2.0/360.0)*pi;
   float angularVelX,angularVelY,angularVelZ;
   float thetaRate;
-  const float deltaT = 1.0/200.0;
+  const float deltaT = 1.0f / (float)GLOBAL_TICK_HZ;
   float quaternions[4];
   float temp,temp1;
   float stdGyro;
@@ -435,7 +442,6 @@ static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCoun
   //printf("H_x=%f,H_y=%f,H_z=%f\n", 
   //  magnetoData1.Hx_val,magnetoData1.Hy_val,magnetoData1.Hz_val);
   motion_data_orientation_timeout_handler(pktCounter);
-  validMeasurement = false;
   magnoSecondReading = !magnoSecondReading;
 }
 
@@ -508,7 +514,12 @@ uint8_t enmo_threshold_packet[9] = {0};
 
 float fifteen_second_enmo = 0;
 const int enmo_update_rate = 2;
-uint8_t enmo_packet[6];
+#define ENMO_PACKET_ENMO_OFFSET 0U
+#define ENMO_PACKET_COUNTER_OFFSET (sizeof(fifteen_second_enmo))
+uint8_t enmo_packet[ENMO_DATA_LEN];
+BUILD_ASSERT(sizeof(enmo_packet) == 8, "ENMO packet must be 8 bytes");
+BUILD_ASSERT(sizeof(enmo_packet) == (sizeof(fifteen_second_enmo) + sizeof(global_counter)),
+  "ENMO packet layout must fit float ENMO plus promoted global_counter");
 /**@brief Function for calculating and sending the enmo when necessary.
  *
  * This function will return any enmo sent.
@@ -565,10 +576,12 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       fifteen_second_enmo /= enmo_update_rate;
 
-      memcpy(enmo_packet, &fifteen_second_enmo, sizeof(fifteen_second_enmo));
-      memcpy(&enmo_packet[4], &global_counter, sizeof(global_counter));
+      memcpy(&enmo_packet[ENMO_PACKET_ENMO_OFFSET], &fifteen_second_enmo,
+        sizeof(fifteen_second_enmo));
+      memcpy(&enmo_packet[ENMO_PACKET_COUNTER_OFFSET], &global_counter,
+        sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
-      my_motionData.packetLength = 6;
+      my_motionData.packetLength = sizeof(enmo_packet);
       LOG_INF("ENMO ble update: %f", currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
@@ -637,8 +650,6 @@ void enmo_threshold_evaluation(float enmo_number)
 
 void motion_data_timeout_handler(struct k_work *item)
 {
-
-  // start_timer();
   struct motionInfo *the_device = ((struct motionInfo *)(((char *)(item)) - offsetof(struct motionInfo, work)));
   uint16_t pktCounter = the_device->pktCounter;
   
@@ -661,8 +672,10 @@ void motion_data_timeout_handler(struct k_work *item)
   uint8_t m_rx_buf[15];      
   
 
+#if MAGNETOMETER_DATA_PATH_ENABLED
   if (magnetoConfig.isEnabled)
   {
+    bool measurement_valid = false;
     uint16_t checkMag = 0;
     uint8_t magneto_first_readTemp = the_device->magneto_first_read;
     // Point to register bank 0 for reading the data from sensors.
@@ -676,7 +689,7 @@ void motion_data_timeout_handler(struct k_work *item)
         spiReadWriteIMU(burst_tx_INT_STAT, 2, burst_rx, 2);
         if ((burst_rx[1] & 0x01) == 0x01)
         {
-          validMeasurement = true;
+          measurement_valid = true;
           checkMag = 0;
 
           break;
@@ -688,12 +701,18 @@ void motion_data_timeout_handler(struct k_work *item)
     }
 
     else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 1)
-      magnetometer_data_read_send(validMeasurement, pktCounter);
+      magnetometer_data_read_send(measurement_valid, pktCounter);
     else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 2)
       magnetometer_read_sample_config(MAGNETOMETER_SINGLE);
     else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 3)
       magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_TOREAD);
   }
+#else
+  if (magnetoConfig.isEnabled || magnetoConfig.txPacketEnable) {
+    magnetoConfig.isEnabled = false;
+    magnetoConfig.txPacketEnable = false;
+  }
+#endif
 
 
   // Point to register bank 0 for reading the data from sensors.
@@ -758,7 +777,7 @@ void motion_data_timeout_handler(struct k_work *item)
       quaternionResult_1[i] = 0.0;
     quaternionResult_1[3] = 1.0;
 
-    // collect gyroscope for values 6-12
+    // Seed the next accumulation window after storing the previous one.
     gyroscope_measurement(quaternionResult_1);
     // blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
 
@@ -771,38 +790,30 @@ void motion_data_timeout_handler(struct k_work *item)
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
     // int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
     // memcpy(&accel_and_gyro[7], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
-    //former value was 15
     #if CONFIG_LOG
     static int last_accel_count = 0; 
-    if (global_counter - last_accel_count != 10) {
+    if (global_counter - last_accel_count != gyroConfig.tot_samples) {
       LOG_ERR("Detected accel global counter offset: %d", global_counter - last_accel_count);
     }
     last_accel_count = global_counter;
     #endif
     
-    int16_t accel_and_gyro[15] = {dataReadAccX, dataReadAccY, dataReadAccZ};
+    int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ};
 
     memcpy(&accel_and_gyro[3], float_cast_arr[0].floatcast, sizeof(float_cast_arr[0].floatcast));
     memcpy(&accel_and_gyro[5], float_cast_arr[1].floatcast, sizeof(float_cast_arr[1].floatcast));
     memcpy(&accel_and_gyro[7], float_cast_arr[2].floatcast, sizeof(float_cast_arr[2].floatcast));
-		  
-    uint32_t current_time = get_current_unix_time();
-
-    uint64_t ticks = k_uptime_get();
-    // int16_t accel_and_gyro[13] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
 
     memcpy(&accel_and_gyro[9], &currentAccData.ENMO, sizeof(currentAccData.ENMO));
 
-    memcpy(&accel_and_gyro[11], &ticks, sizeof(current_time));
-
-    memcpy(&accel_and_gyro[13], &global_counter, sizeof(global_counter));
+    uint32_t global_tick_512hz = global_counter;
+    memcpy(&accel_and_gyro[11], &global_tick_512hz, sizeof(global_tick_512hz));
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
 
     
     // this function seperately fills blePktMotion with the desired size
     // TODO: Make sure packets are in correct size/order
-    // ppg_bluetooth_fill(blePktMotion);
 
     for (int i = 0; i < 6; i++){
       blePktMotion[i] = burst_rx[i + 1];
@@ -831,12 +842,6 @@ void motion_data_timeout_handler(struct k_work *item)
   {
     gyroscope_measurement(quaternionResult_1);
   }
-  /*
-  int64_t timer_value = stop_timer();
-  if (rand() % 100 == 5){
-    LOG_WRN("Timer Value: %lli ms", timer_value);
-  }
-  */
 }
 
 void magnetometer_config(void){
@@ -954,22 +959,21 @@ void motion_config(void){
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
 
-    static uint8_t imu_config[36] = {
+    uint8_t imu_config[36] = {
       REG_BANK_SEL, REG_BANK_0,// change register bank 0
-      USER_CTRL,I2C_MST_EN | I2C_IF_DIS, // SPI mode and enable I2c master
+      USER_CTRL,IMU_USER_CTRL_VALUE, // SPI mode; I2C master only when magnetometer path is enabled
       PWR_MGMT_1,IMU_TEMP_DISABLE | IMU_CLK_SEL_BEST_SEL, // Disable temparature sensor and select best available clock source
       PWR_MGMT_2,ENABLE_ACC | ENABLE_GYRO, // Not disabling Gyro and accel
-      LP_CONFIG,I2C_MST_CYCLE,
+      LP_CONFIG,IMU_LP_CONFIG_VALUE,
       INT_PIN_CFG,0x00,
       REG_BANK_SEL,REG_BANK_2, // changing the register bank to 2
-      GYRO_SMPLRT_DIV,0x03, // 1100/(1+GYRO_SMPLRT_DIV) 
-                            //  rate of Gyroscope = 275 Hz	
-      GYRO_CONFIG_1,GYRO_DLPFCFG_51HZ | GYRO_FS_SEL_500, 
-                            // gyro full scale =500 dps, LPF = 119.5 Hz 
-      ACCEL_CONFIG, ACCEL_DLPFCFG_12HZ | ACCEL_FS_SEL_4g |
-        ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 11.6 Hz
-      ACCEL_SMPLRT_DIV_1,0x00, // sample rate accel MSB
-      ACCEL_SMPLRT_DIV_2,0x10, // sampling rate accel = 66 Hz (1125/(1+DIV))
+      GYRO_SMPLRT_DIV,IMU_FIXED_GYRO_SMPLRT_DIV, // 1125/(1+1) = 562.5 Hz
+      GYRO_CONFIG_1,IMU_FIXED_GYRO_DLPFCFG | GYRO_FS_SEL_500,
+                            // gyro full scale =500 dps, LPF = 151.8 Hz
+      ACCEL_CONFIG, IMU_FIXED_ACCEL_DLPFCFG | ACCEL_FS_SEL_4g |
+        ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 246 Hz
+      ACCEL_SMPLRT_DIV_1,IMU_FIXED_ACCEL_SMPLRT_DIV_MSB, // sample rate accel MSB
+      ACCEL_SMPLRT_DIV_2,IMU_FIXED_ACCEL_SMPLRT_DIV_LSB, // 1125/(1+1) = 562.5 Hz
       REG_BANK_SEL,REG_BANK_3,
       I2C_MST_ODR_CONFIG, 0x01, // i2c master dutycycle configuration = 550 Hz,
       I2C_MST_DELAY_CTRL, DELAY_ES_SHADOW, // i2c_mst_delay_ctl = delays shadowing of external sensor
@@ -978,18 +982,27 @@ void motion_config(void){
       I2C_SLV0_ADDR_IMU, READMASTER| MAGNETOADDRESS, // setting I2c slave address to magnetometer address
       REG_BANK_SEL,REG_BANK_0
     };	/**< IMU configuration commands. */
+    size_t imu_config_length = sizeof(imu_config);
+
+#if !MAGNETOMETER_DATA_PATH_ENABLED
+    imu_config[24] = REG_BANK_SEL;
+    imu_config[25] = REG_BANK_0;
+    imu_config_length = 26;
+#endif
     
     // edit ACCEL_CONFIG 
-    imu_config[19] = 0x01 | accelConfig.sensitivity | accelConfig.sample_bw;
+    imu_config[19] = ACCEL_FCHOICE_DLPF_ENABLE | IMU_FIXED_ACCEL_DLPFCFG | accelConfig.sensitivity;
     // edit GYRO_CONFIG1
-    imu_config[17] = 0x11 | gyroConfig.sensitivity;
-    for(int i = 0; i < sizeof(imu_config); i += 2){
+    imu_config[17] = GYRO_FCHOICE_DLPF_EN | IMU_FIXED_GYRO_DLPFCFG | gyroConfig.sensitivity;
+    for(int i = 0; i < imu_config_length; i += 2){
       m_tx_buf[0] = imu_config[i];
       m_tx_buf[1] = imu_config[i+1];
       spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
     k_msleep(10);
-    magnetometer_config();    
+#if MAGNETOMETER_DATA_PATH_ENABLED
+    magnetometer_config();
+#endif
   }
 }
 
@@ -1008,16 +1021,17 @@ void motionSensitivitySampling_config(void){
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
 
-    static uint8_t imu_config[8] = {
+    uint8_t imu_config[12] = {
       REG_BANK_SEL,REG_BANK_2, // changing the register bank to 2
-      GYRO_SMPLRT_DIV,0x01, // 1100/(1+GYRO_SMPLRT_DIV) 
-                            //  rate of Gyroscope = 550 Hz	
-      GYRO_CONFIG_1,GYRO_DLPFCFG_51HZ , 
-                            // gyro full scale =500 dps, LPF = 119.5 Hz 
-      ACCEL_CONFIG,ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 11.6 Hz
+      GYRO_SMPLRT_DIV,IMU_FIXED_GYRO_SMPLRT_DIV, // 1125/(1+1) = 562.5 Hz
+      GYRO_CONFIG_1,IMU_FIXED_GYRO_DLPFCFG,
+                            // gyro full scale =500 dps, LPF = 151.8 Hz
+      ACCEL_CONFIG,ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 246 Hz
+      ACCEL_SMPLRT_DIV_1,IMU_FIXED_ACCEL_SMPLRT_DIV_MSB,
+      ACCEL_SMPLRT_DIV_2,IMU_FIXED_ACCEL_SMPLRT_DIV_LSB,
     };
     imu_config[5] = imu_config[5] | gyroConfig.sensitivity;
-    imu_config[7] = imu_config[7] | accelConfig.sample_bw 
+    imu_config[7] = ACCEL_FCHOICE_DLPF_ENABLE | IMU_FIXED_ACCEL_DLPFCFG
       | accelConfig.sensitivity;
 
     for(int i = 0; i < sizeof(imu_config); i += 2){

@@ -39,6 +39,7 @@ int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 
 
 
+
 BUILD_ASSERT(!IS_ENABLED(CONFIG_LOG_MODE_IMMEDIATE),
 	     "Immediate logging is not supported by LOG FS backend.");
 
@@ -49,7 +50,7 @@ LOG_OUTPUT_DEFINE(log_output, write_log_to_file, buf, MAX_FLASH_WRITE_SIZE);
 
 static void log_backend_fs_init(const struct log_backend *const backend)
 {
-	bool file_system_logging = true; 
+
 }
 
 static void panic(struct log_backend const *const backend)

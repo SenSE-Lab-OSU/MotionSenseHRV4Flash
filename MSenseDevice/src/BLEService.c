@@ -22,6 +22,12 @@
 #include <nrfx_timer.h>
 #include "BLEService.h"
 
+#include <nrfx_rtc.h>
+
+#if ((32768U % IMU_RTC_TICK_HZ) != 0)
+#error "IMU_RTC_TICK_HZ must divide the 32768 Hz RTC clock exactly"
+#endif
+
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
@@ -34,7 +40,7 @@
 #define MAGNETO_NAME "Magnetometer"
 #define ORIENTATION_NAME "Orientation vector"
 
-
+static const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(0);
 
 
 LOG_MODULE_REGISTER(user_bluetooth);
@@ -299,7 +305,7 @@ uint8_t ppgRead = 0;
 bool ppgTFPass = false;
 
 
-uint16_t sampleFreq=25;
+uint16_t sampleFreq = MAGNETO_SAMPLING_RATE;
 
 
 struct ppgInfo my_ppgSensor;
@@ -337,107 +343,62 @@ static ssize_t update_ble_status_register(struct bt_conn *conn, const struct bt_
   return read_generic_eight(conn, attr, buf, len, offset);
 }
 
+void rtc_handler(nrfx_rtc_int_type_t event_type){
+  int work_queue_result;
 
-//ble_update_status_register;
+  // Get the spurious cases out of the way...
+  if (!collecting_data) { return; }
+  if (event_type != NRFX_RTC_INT_TICK) { return; }
 
-static const nrfx_timer_t timer_global = NRFX_TIMER_INSTANCE(1); // Using TIMER1 as TIMER 0 is used by RTOS for blestruct device *spi_dev_imu;
-#define TIMER_MS 5
-#define TIMER_US 3125 
-#define TIMER_PRIORITY 7
+  // submit work to read gyro, acc, magnetometer and orientation
+  my_motionSensor.magneto_first_read = magneto_first_read;
+  my_motionSensor.pktCounter = global_counter;
+  my_motionSensor.gyro_first_read = gyro_first_read;
+  work_queue_result = k_work_submit(&my_motionSensor.work);
+  if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
 
-
-void timer_handler(nrf_timer_event_t event_type, void* p_context){
-  #ifdef CONFIG_LOG
-  LOG_DBG("Timer Executing");
-  static uint64_t prev_time = 0;
-  if (k_uptime_get()-prev_time > 8){
-    LOG_ERR("Timer: %llu", k_uptime_get()-prev_time);
+  if(ppgRead == 0){
+    my_ppgSensor.pktCounter = global_counter;
+    my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
+    my_ppgSensor.ppgTFPass = ppgTFPass;
+    work_queue_result = k_work_submit(&my_ppgSensor.work);
+    if (work_queue_result != 1) { LOG_ERR("PPG work queue was not submitted: %i", work_queue_result); }
   }
-  prev_time = k_uptime_get();
-  #endif 
 
-  if(collecting_data == true){
-    switch (event_type){
-      case NRF_TIMER_EVENT_COMPARE0:
-        int work_queue_result;
-        global_counter++;
-        // submit work to read gyro, acc, magnetometer and orientation
-        my_motionSensor.magneto_first_read = magneto_first_read;
-        my_motionSensor.pktCounter = global_counter;
-        my_motionSensor.gyro_first_read = gyro_first_read;
-        work_queue_result = k_work_submit(&my_motionSensor.work);
-        if (work_queue_result != 1){
-          LOG_ERR("accel work queue was not submitted: %i", work_queue_result);
-        }
-        if(ppgRead == 0){
-          my_ppgSensor.pktCounter = global_counter;
-          my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
-          my_ppgSensor.ppgTFPass = ppgTFPass;
-          work_queue_result = k_work_submit(&my_ppgSensor.work);
-          if (work_queue_result != 1){
-            LOG_ERR("PPG work queue was not submitted: %i", work_queue_result);
-          }
-        }  
-        // gyroConfig.tot_samples is 10 and ppg.numCounts is set in main.c at 5
-        ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-        magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
-        
-        gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
-        
-        break;
+  // ppgConfig.numCounts is derived from the RTC cadence.
+  ppgRead = (ppgRead+1) % ppgConfig.numCounts;
+  magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
 
-      default:
-              //Do nothing.
-        break;
-    }
-  }
+  gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
+
+  global_counter++;
 }
 
 
-static void timer_deinit(void){
-  nrfx_timer_disable(&timer_global);
-  nrfx_timer_uninit(&timer_global);	
+static void rtc_deinit(void){
+  nrfx_rtc_disable(&rtc);
+  nrfx_rtc_uninit(&rtc);
   motion_sleep();
   ppg_sleep();
 }
 
 
 
-static void timer_init(void){
-printk("timer init\n");
-  uint32_t time_ticks;
+static void rtc_init(void){
   nrfx_err_t          err;
-  nrfx_timer_config_t timer_cfg = {
-          .frequency = 1000000,
-          .mode      = NRF_TIMER_MODE_TIMER,
-          .bit_width = NRF_TIMER_BIT_WIDTH_24,
-          // timer priority is according to cortex m, not zephyr . Lower is still better, but 7 is the closest without
-          // interfering with ble.
-          .interrupt_priority = TIMER_PRIORITY,
-          .p_context = NULL,
-  };  
-  
-  
-  uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer_inst.p_reg);
-  nrfx_timer_config_t config = timer_cfg; 
-  //nrfx_timer_config_t config5_2 = NRFX_TIMER_DEFAULT_CONFIG(1000000);
-  err = nrfx_timer_init(&timer_global, &config, timer_handler);
-  if (err != NRFX_SUCCESS) {
-          printk("nrfx_timer_init failed with: %d\n", err);
-  }
-  else
-          printk("nrfx_timer_init success with: %d\n", err);
-  IRQ_CONNECT(TIMER1_IRQn, 0, nrfx_timer_1_irq_handler, NULL, 0);
-  irq_enable(TIMER1_IRQn);
-  
-  //time_ticks = nrfx_timer_ms_to_ticks(&timer_global, TIMER_MS);
-  time_ticks = nrfx_timer_us_to_ticks(&timer_global, TIMER_US);
-  nrfx_timer_extended_compare(&timer_global, NRF_TIMER_CC_CHANNEL0, time_ticks, 
-  NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, true);
 
-  nrfx_timer_enable(&timer_global);
-  printk("timer initialized\n");
-
+  // Setup RTC0 (RTC1 used by Zephyr)
+  // Initialize RTC: 32.768kHz / (IMU_RTC_PRESCALER + 1)
+  // We will use the TICK interrupt
+  nrfx_rtc_config_t config = NRFX_RTC_DEFAULT_CONFIG;
+  config.prescaler = IMU_RTC_PRESCALER;
+  config.interrupt_priority = IMU_RTC_IRQ_PRIORITY;
+  err = nrfx_rtc_init(&rtc, &config, rtc_handler);
+  if (err != NRFX_SUCCESS) { printk("nrfx_rtc_init() failed with: %d\n", err); }
+  nrfx_rtc_tick_enable(&rtc, true);
+  nrfx_rtc_enable(&rtc);
+  IRQ_CONNECT(RTC0_IRQn, IMU_RTC_IRQ_PRIORITY, nrfx_rtc_0_irq_handler, NULL, 0);
+  irq_enable(RTC0_IRQn);
 }
 
 void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
@@ -508,7 +469,7 @@ void reset_device(bool reset_bad_blocks){
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
-    
+    file_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
     if (reset_bad_blocks){
       LOG_WRN("Erasing bad block table...");
@@ -558,7 +519,7 @@ void start_stop_device_collection(uint8_t val){
       // TODO: Flush the PPG buffer before starting collection, if we sleep and don't do this samples will accumulate!
       //k_sleep(K_MSEC(500));
       
-      timer_init();
+      rtc_init();
       global_counter = 0;
       gyro_first_read = 0;
       magneto_first_read = 0;  
@@ -568,7 +529,7 @@ void start_stop_device_collection(uint8_t val){
       
     } 
     else{
-      timer_deinit();
+      rtc_deinit();
       k_sleep(K_MSEC(500));
       close_all_files();
       enmo_sample_counter = 0;
@@ -933,14 +894,19 @@ ssize_t on_settings_change(struct bt_conn *conn,
         accelConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFD;     
       }
+#if MAGNETOMETER_DATA_PATH_ENABLED
       if((buffer[1] & MAGNETOMETER_ENABLE) == MAGNETOMETER_ENABLE){
         magnetoConfig.isEnabled = true;
-        configRead[1] = configRead[1] | 0x10; 
+        configRead[1] = configRead[1] | MAGNETOMETER_ENABLE;
       }
       else if((buffer[1] & MAGNETOMETER_ENABLE) == 0x00){
         magnetoConfig.isEnabled = false;
-        configRead[1] = configRead[1] & 0xEF;        
+        configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
       }
+#else
+      magnetoConfig.isEnabled = false;
+      configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
+#endif
       if((buffer[1] & PPG_ENABLE) == PPG_ENABLE){
         ppgConfig.isEnabled = true;
         configRead[1] = configRead[1] | 0x01; 
@@ -967,14 +933,19 @@ ssize_t on_settings_change(struct bt_conn *conn,
         gyroConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFD;     
       }
+#if MAGNETOMETER_DATA_PATH_ENABLED
       if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == MAGNETOMETER_BLE_ENABLE){
         magnetoConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x10; 
+        configRead[0] = configRead[0] | MAGNETOMETER_BLE_ENABLE;
       }
       else if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == 0x00){
         magnetoConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xEF; 
+        configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
       }
+#else
+      magnetoConfig.txPacketEnable = false;
+      configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
+#endif
       if((buffer[2] & PPG_BLE_ENABLE) == PPG_BLE_ENABLE){
         ppgConfig.txPacketEnable = true;
         configRead[0] = configRead[0] | 0x01; 
@@ -1061,72 +1032,19 @@ ssize_t on_settings_change(struct bt_conn *conn,
       ppg_changeIntensity();
       break;
     case BLE_CONFIG_SAMPLING_RATE_ACC:
-      // configuring Gyroscope sampling-rate
-      if(buffer[1] == MOTION_25_FS){
-        accelConfig.sample_bw = ACCEL_DLPFCFG_12HZ;
-        gyroConfig.tot_samples = 8;
-        configRead[5] = 0x04 | (configRead[5]&0xF0);
-      }
-      else if(buffer[1] == MOTION_50_FS){
-        accelConfig.sample_bw = ACCEL_DLPFCFG_24HZ;
-        gyroConfig.tot_samples = 4;
-        configRead[5] = 0x03 | (configRead[5]&0xF0);
-      }
-      else if(buffer[1] == MOTION_100_FS){
-        accelConfig.sample_bw = ACCEL_DLPFCFG_50HZ;
-        gyroConfig.tot_samples = 2;
-        configRead[5] = 0x02 | (configRead[5]&0xF0);
-      }
-      else if(buffer[1] == MOTION_200_FS){
-        accelConfig.sample_bw = ACCEL_DLPFCFG_50HZ;
-        gyroConfig.tot_samples = 1;
-        configRead[5] = 0x01 | (configRead[5]&0xF0);
-      }
-      else{
-        accelConfig.sample_bw = ACCEL_DLPFCFG_12HZ;
-        gyroConfig.tot_samples = 8;
-        configRead[5] = 0x04 | (configRead[5]&0xF0);
-      }
+      // IMU integrates at 512 Hz and emits/stores one record every 16 ticks.
+      // Ignore host rate selections so the firmware has one motion cadence.
+      accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
+      gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
+      sampleFreq = MAGNETO_SAMPLING_RATE;
+      configRead[5] = MOTION_FIXED_32HZ_STATUS | (configRead[5]&0xF0);
       motionSensitivitySampling_config();
       break;
     case BLE_CONFIG_SAMPLING_RATE_PPG:
-      // configuring PPG sampling-rate
-      if(buffer[1] == PPG_25_FS){ 
-        ppgConfig.sample_avg = PPG_SMP_AVE_16;
-        ppgConfig.numCounts = 8;
-        configRead[5] = 0x40 | (configRead[5]&0x0F);
-        timeWindow = 50;
-        high_pass_filter_init_25();
-      }
-      else if(buffer[1] == PPG_50_FS){
-        ppgConfig.sample_avg = PPG_SMP_AVE_8;
-        ppgConfig.numCounts = 4;
-        configRead[5] = 0x30 | (configRead[5]&0x0F);
-        timeWindow = 100;
-        high_pass_filter_init_50();
-      }
-      else if(buffer[1] == PPG_100_FS){
-        ppgConfig.sample_avg = PPG_SMP_AVE_4;
-        ppgConfig.numCounts = 2;
-        configRead[5] = 0x20 | (configRead[5]&0x0F);
-        timeWindow = 200;
-        high_pass_filter_init_100();
-      }
-      else if(buffer[1] == PPG_200_FS){
-        ppgConfig.sample_avg = PPG_SMP_AVE_2;
-        ppgConfig.numCounts = 1;
-        configRead[5] = 0x10 | (configRead[5]&0x0F);
-        timeWindow = 400;
-        high_pass_filter_init_200();
-      }
-      else{
-        ppgConfig.sample_avg = PPG_SMP_AVE_16;
-        ppgConfig.numCounts = 8;
-        high_pass_filter_init_25();
-        timeWindow = 50;
-        configRead[5] = 0x40 | (configRead[5]&0x0F);
-      }
+      // PPG sampling is fixed at 512 sps with 2-sample averaging.
+      // Ignore host rate selections so the firmware has a single PPG cadence.
       ppg_changeSamplingRate();
+      configRead[5] = PPG_FIXED_256HZ_STATUS | (configRead[5]&0x0F);
       break;
     default: 
       printk("Error, CCCD has been set to an invalid value");        

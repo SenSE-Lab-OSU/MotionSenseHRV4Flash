@@ -311,9 +311,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 					if (!equal)
 					{
 						LOG_WRN("sect %d yield bad readback", sector_num);
-#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+            #ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 						register_bad_sector(sector_num);
-#endif
+            #endif
 					}
 				}
 			}
@@ -322,7 +322,12 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		{
 			LOG_ERR("ret %d", ret);
 		}
-		return ret;
+		
+	}
+		if (ret != 0){
+			LOG_ERR("ret %d", ret);
+		}
+		return ret; 
 	}
 	else{
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);

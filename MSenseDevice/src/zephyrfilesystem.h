@@ -6,6 +6,8 @@ extern bool file_system_ready;
 extern bool panic_single_thread;
 
 
+extern bool file_system_ready;
+
 enum sensor_type {ppg, 
 accelorometer, passthrough, customlog};
 

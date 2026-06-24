@@ -288,6 +288,7 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 
 void shutdown_filesystem(){
 	close_all_files();
+	file_system_ready = false;
 	//struct fs_mount_t* mp = &fs_mnt;
 	//fs_unmount(mp);
 }

@@ -469,7 +469,7 @@ void reset_device(bool reset_bad_blocks){
   struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
-    file_lock = true;
+    reset_lock = true;
     #if CONFIG_DISK_DRIVER_RAW_NAND
     if (reset_bad_blocks){
       LOG_WRN("Erasing bad block table...");
@@ -658,7 +658,6 @@ uint16_t offset, uint8_t flags){
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     bt_le_adv_stop();
     connectedFlag=false;
-    reset_lock = true;
     shutdown_filesystem();
 
     

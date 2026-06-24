@@ -357,22 +357,12 @@ void rtc_handler(nrfx_rtc_int_type_t event_type){
   work_queue_result = k_work_submit(&my_motionSensor.work);
   if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
 
-<<<<<<< HEAD
-
-void timer_handler(nrf_timer_event_t event_type, void* p_context){
-  #ifdef CONFIG_LOG
-  LOG_DBG("Timer Executing");
-  static uint64_t prev_time = 0;
-  if (k_uptime_get()-prev_time > 8){
-    LOG_ERR("Timer: %llu", k_uptime_get()-prev_time);
-=======
   if(ppgRead == 0){
     my_ppgSensor.pktCounter = global_counter;
     my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
     my_ppgSensor.ppgTFPass = ppgTFPass;
     work_queue_result = k_work_submit(&my_ppgSensor.work);
     if (work_queue_result != 1) { LOG_ERR("PPG work queue was not submitted: %i", work_queue_result); }
->>>>>>> 340adef474bbdc552acf38409c6a660322c26e0e
   }
 
   // ppgConfig.numCounts is derived from the RTC cadence.

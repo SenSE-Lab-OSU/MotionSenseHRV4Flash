@@ -459,12 +459,10 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 
 void reset_device(bool reset_bad_blocks){
-
-  // disconnect bluetooth and usb
-  LOG_INF("disabling bluetooth.. \n");
   
-  bt_disable();
-  usb_disable();
+  if (!IS_ENABLED(CONFIG_USB_ALWAYS_ON)){
+    usb_disable();
+  } 
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
   // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
@@ -496,8 +494,7 @@ void reset_device(bool reset_bad_blocks){
   else {
     LOG_ERR("Couldn't erase flash chip, device not ready.");
   }
-  
-  
+   
   NVIC_SystemReset();
 
 }
@@ -563,14 +560,13 @@ bool check_valid_date_and_id(){
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
-  LOG_INF("Attribute write, handle: %u, conn: %p", attr->handle,
+  LOG_INF("Attribute enable write, handle: %u, conn: %p", attr->handle,
 		(void *)conn);
 
 	
-	LOG_INF("Write length: %i", len);
 
 	if (offset != 0) {
-		LOG_INF("Write: Incorrect data offset");
+		LOG_WRN("Write: Incorrect data offset");
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 
   }
@@ -587,11 +583,9 @@ uint16_t offset, uint8_t flags){
 
 static ssize_t bt_write_date_time(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
-  LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+  LOG_INF("Attribute time write, handle: %u, conn: %p, length %i", attr->handle,
 		(void *)conn, len);
 
-	
-	LOG_INF("Write length: %i", len);
   if (len != 8){
     LOG_WRN("invalid packet length for date: %i", len);
     return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -616,7 +610,6 @@ uint16_t offset, uint8_t flags){
 		(void *)conn, len);
 
 	
-	LOG_INF("Write length: %i", len);
   // date has to be 4 byte int to work.
   if (len != 4){
     LOG_WRN("invalid packet length for date: %i", len);
@@ -661,16 +654,22 @@ uint16_t offset, uint8_t flags){
   LOG_INF("entered code: %i", val);
   if ((val == 68 || val == 121 || val == 132) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
+    LOG_INF("disconnecting bluetooth.. \n");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    bt_le_adv_stop();
     connectedFlag=false;
+    reset_lock = true;
+    shutdown_filesystem();
+
     
     storage_clear_led();
-    k_sleep(K_SECONDS(2));
+    k_sleep(K_SECONDS(1));
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68 || val == 132){
       reset_device(val == 132);
     }
     else {
+      
       NVIC_SystemReset();
     }
     return NRFX_SUCCESS;  
@@ -725,7 +724,7 @@ uint16_t offset, uint8_t flags){
     printk("Advertising successfully started\n");
   }
   */
-  k_sleep(K_SECONDS(2));
+  k_sleep(K_SECONDS(1));
   NVIC_SystemReset();
   return 0;
   
@@ -739,14 +738,21 @@ void create_test_files_through_file_workqueue(struct k_work* work){
 
 }
 
+void crash_device(){
+    // can use:
+    //k_oops();
+    // or:
+    volatile uint32_t *bad_ptr = NULL;
+    *bad_ptr = 0xDEADBEEF; // This will trigger a CPU exception
+}
+
 
 static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
   uint16_t offset, uint8_t flags){
-    LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
+    LOG_INF("Attribute other settings write, handle: %u, conn: %p, length %i", attr->handle,
       (void *)conn, len);
   
     
-    LOG_INF("Write length: %i", len);
     if (len != 1){
       LOG_WRN("invalid packet length: %i", len);
     }
@@ -774,7 +780,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
         if (val == 130 || val == 150 && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-          file_lock = true;
+          reset_lock = true;
           #ifndef CONFIG_USB_ALWAYS_ON
           usb_disable();
           #endif
@@ -799,7 +805,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             create_test_files(100);
           }
           
-          file_lock = false;
+          reset_lock = false;
           #if CONFIG_DISK_DRIVER_RAW_NAND
           set_read_only(true);
           #endif

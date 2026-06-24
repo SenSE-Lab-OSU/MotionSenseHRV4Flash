@@ -10,13 +10,33 @@
 
 // For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
 // You can also visit the nRF DeviceTree extension documentation at https://nrfconnect.github.io/vscode-nrf-connect/devicetree/nrfdevicetree.html
-
-
+//#include <zephyr/dt-bindings/regulator/nrf5x.h>
+/* Force the main regulator (VREGMAIN) to use LDO mode */
+/*
+ * &reg1 {
+ * regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+ * };
+ * &reg0 {
+ * regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+ * };
+ */
 /* Begin dk trim section, that removes all dev kit specific nodes. */
 
 
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&uicr {
+    nfct-pins-as-gpios;
+};
+
 &spi1 {
-    status = "disabled";
+	status = "disabled";
 };
 
 &spi4 {
@@ -26,8 +46,6 @@
 &qspi {
 	status = "disabled";
 };
-
-
 
 &uart0 {
 	status = "okay";
@@ -41,45 +59,39 @@
 	status = "disabled";
 };
 
-
 &led0 {
-    status = "okay";
+	status = "okay";
 	gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
 };
 
-
 &led1 {
-    status = "okay";
-    gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+	gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
 };
 
 &led2 {
-    status = "okay";
+	status = "okay";
 	gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
 };
 
-
-
 &led3 {
-    status = "disabled";
+	status = "disabled";
 };
 
-
-
 &button0 {
-    status = "disabled";
+	status = "disabled";
 };
 
 &button1 {
-    status = "disabled";
+	status = "disabled";
 };
 
 &button2 {
-    status = "disabled";
+	status = "disabled";
 };
 
 &button3 {
-    status = "disabled";
+	status = "disabled";
 };
 
 &gpio_fwd {
@@ -88,65 +100,54 @@
 
 /* End dev kit trim section */
 
-
 &timer0 {
-    status = "okay";
+	status = "okay";
 };
 
 &timer1 {
-    status = "okay";
+	status = "okay";
 };
-
-
 
 &arduino_adc {
-    io-channel-map = <0 &adc 0>, <1 &adc 1>, <2 &adc 2>, <3 &adc 3>, <4 &adc 4>, <5 &adc 5>;
+	io-channel-map = <0 &adc 0>, <1 &adc 1>, <2 &adc 2>, <3 &adc 3>, <4 &adc 4>, <5 &adc 5>;
 };
-
 
 / {
-    aliases {
-        customspi = &spi1;
+	aliases {
+		customspi = &spi1;
 		spi-flash0 = &mt29;
 		spi-flash1 = &mx25u80;
-    };
+	};
 };
-
 
 / {
 	chosen {
-	
+
 		//nordic,pm-ext-flash = &mt29;
 		zephyr,console = &cdc_acm_uart0;
-        zephyr,shell-uart = &cdc_acm_uart0;
-		
-		};
+		zephyr,shell-uart = &cdc_acm_uart0;
 	};
-	
-
+};
 ///delete-node/ &storage_partition;
-
 
 //uart cannot also be in operation with spi0, however, this means we have to use segger RTT, because uart is used for console output
 &uart0 {
 	status = "disabled";
 };
 
- 
 &zephyr_udc0 {
-    cdc_acm_uart0: cdc_acm_uart0 {
-        compatible = "zephyr,cdc-acm-uart";
-    };
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
 };
 
 &spi2 {
-compatible = "nordic,nrf-spim";
+	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
 	pinctrl-0 = <&spi1_default>;
 	pinctrl-1 = <&spi1_sleep>;
 	pinctrl-names = "default", "sleep";
-
 };
 
 // We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
@@ -159,30 +160,27 @@ compatible = "nordic,nrf-spim";
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
 	pinctrl-names = "default", "sleep";
+
 	bq27441@55 {
 		compatible = "ti,bq274xx";
-        reg = <0x55>;
-        design-voltage = <3700>;
-        design-capacity = <300>;
-        taper-current = <2>;
-        terminate-voltage = <3000>;
+		reg = <0x55>;
+		design-voltage = <3700>;
+		design-capacity = <300>;
+		taper-current = <2>;
+		terminate-voltage = <3000>;
 	};
 };
+/*
+ * &i2c0 {
+ * status = "okay";
+ * compatible = "nordic,nrf-twim";
+ * pinctrl-0 = < &i2c1_default>;
+ * pinctrl-1 = <&i2c1_sleep>;
+ * pinctrl-names = "default", "sleep";
+ * };
+ */
 
-
-
-/* 
-&i2c0 {
-	status = "okay";
-	compatible = "nordic,nrf-twim";
-	pinctrl-0 = < &i2c1_default>;
-	pinctrl-1 = <&i2c1_sleep>;
-	pinctrl-names = "default", "sleep";
-};
-*/
-
-
-&spi3{
+&spi3 {
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
@@ -190,9 +188,7 @@ compatible = "nordic,nrf-spim";
 	pinctrl-1 = <&ppg_sleep>;
 	pinctrl-names = "default", "sleep";
 };
-
-
-//External Flash, MX25 NOR 
+//External Flash, MX25 NOR
 
 &spi0 {
 	status = "okay";
@@ -200,6 +196,7 @@ compatible = "nordic,nrf-spim";
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
 	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+
 	mx25u80: mx25u8035f@0 {
 		compatible = "jedec,spi-nor";
 		// size needs to be in bits for nor
@@ -210,19 +207,18 @@ compatible = "nordic,nrf-spim";
 		jedec-id = [c2 25 34];
 		status = "okay";
 	};
-
 };
-
-
 // External Flash, MT29 NAND
 
 &spi4 {
 	status = "okay";
-	pinctrl-0 = < &spi_flash_default>;
+	pinctrl-0 = <&spi_flash_default>;
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
 	// You will also need to set these pins in the spi_nand.c too
-	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>, <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>,
+		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		// size parameter needs to be in bytes
@@ -235,48 +231,41 @@ compatible = "nordic,nrf-spim";
 		jedec-id = [ff 2c 47];
 		status = "okay";
 	};
-
 };
-
-
-
-
-
-
-/* 
-&qspi {
-	status = "okay";
-	pinctrl-0 = <&qspi_default>;
-	pinctrl-1 = <&qspi_sleep>;
-	pinctrl-names = "default", "sleep";
-	mx66u: mx66u2g45g@0 {
-		compatible = "nordic,qspi-nor";
-		//compatible = "vnd,customflash";
-		//compatible = "senselab,qspinor";
-	reg = <0>;
-	//MX25R64 supports only pp and pp4io
-	writeoc = "pp4io";
-	//MX25R64 supports all readoc options
-	readoc = "read4io";
-	sck-frequency = <8000000>;
-	jedec-id = [c2 25 3c];
-	sfdp-bfp = [
-		e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
-		ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
-		10 d8 00 ff  23 72 f5 00  82 ed 04 cc  44 83 68 44
-		30 b0 30 b0  f7 c4 d5 5c  00 be 29 ff  f0 d0 ff ff
-	];
-	size = <67108864>;
-	has-dpd;
-	t-enter-dpd = <10000>;
-	t-exit-dpd = <35000>;
-	};
-};
-*/
+/*
+ * &qspi {
+ * status = "okay";
+ * pinctrl-0 = <&qspi_default>;
+ * pinctrl-1 = <&qspi_sleep>;
+ * pinctrl-names = "default", "sleep";
+ * mx66u: mx66u2g45g@0 {
+ * compatible = "nordic,qspi-nor";
+ * //compatible = "vnd,customflash";
+ * //compatible = "senselab,qspinor";
+ * reg = <0>;
+ * //MX25R64 supports only pp and pp4io
+ * writeoc = "pp4io";
+ * //MX25R64 supports all readoc options
+ * readoc = "read4io";
+ * sck-frequency = <8000000>;
+ * jedec-id = [c2 25 3c];
+ * sfdp-bfp = [
+ * e5 20 f1 ff  ff ff ff 03  44 eb 08 6b  08 3b 04 bb
+ * ee ff ff ff  ff ff 00 ff  ff ff 00 ff  0c 20 0f 52
+ * 10 d8 00 ff  23 72 f5 00  82 ed 04 cc  44 83 68 44
+ * 30 b0 30 b0  f7 c4 d5 5c  00 be 29 ff  f0 d0 ff ff
+ * ];
+ * size = <67108864>;
+ * has-dpd;
+ * t-enter-dpd = <10000>;
+ * t-exit-dpd = <35000>;
+ * };
+ * };
+ */
 
 &pinctrl {
 	//spi 1, imu sensor
-    spi1_default: spi1_default {
+	spi1_default: spi1_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
@@ -293,22 +282,22 @@ compatible = "nordic,nrf-spim";
 		};
 	};
 
-	
 	//spi 4, ppg sensor
 	ppg_default: ppg_default {
 		group1 {
-			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
+				<NRF_PSEL(SPIM_SCK, 1, 8)>;
 		};
 	};
 
 	ppg_sleep: ppg_sleep {
-		group1{
-			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>, <NRF_PSEL(SPIM_SCK, 1, 8)>;
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
+				<NRF_PSEL(SPIM_SCK, 1, 8)>;
 			low-power-enable;
 		};
 	};
-	
-	 
+
 	//battery, on i2c0
 	battery_default: battery_default {
 		group1 {
@@ -325,27 +314,20 @@ compatible = "nordic,nrf-spim";
 		};
 	};
 
-	
 	spi_flash_default: spi_flash_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
 				<NRF_PSEL(SPIM_MOSI, 0, 13)>,
 				<NRF_PSEL(SPIM_MISO, 0, 14)>;
-				
 		};
 	};
-	
+
 	spi_flash_sleep: spi_flash_sleep {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 0, 17)>,
-			<NRF_PSEL(SPIM_MOSI, 0, 13)>,
-			<NRF_PSEL(SPIM_MISO, 0, 14)>;
+				<NRF_PSEL(SPIM_MOSI, 0, 13)>,
+				<NRF_PSEL(SPIM_MISO, 0, 14)>;
 			low-power-enable;
 		};
 	};
-
 };
-
-
-
-

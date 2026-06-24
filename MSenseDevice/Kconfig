@@ -42,8 +42,6 @@ config APP_MSC_STORAGE_SDCARD
 
 endchoice
 
-config DISK_RAM_VOLUME_SIZE
-	default 32 if APP_MSC_STORAGE_NONE
 
 config MASS_STORAGE_DISK_NAME
 	default "MX25R64" if DISK_DRIVER_FLASH
@@ -110,7 +108,6 @@ config LOG_BACKEND_FS_BUFFER
     select LOG_OUTPUT
     help
       When enabled, the double buffered filesystem backend (normally for ppg and accel) will be used for logging.
-
 
 
 config LOG_LEVEL_IMU_COLLECTION

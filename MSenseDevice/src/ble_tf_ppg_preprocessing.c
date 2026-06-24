@@ -206,9 +206,9 @@ ppg_bluetooth_preprocessing_filtered(){
   runningSquaredMeanCh2bFil = runningSquaredMeanCh2bFil +(channel2B_out - meanChannel2B)*
     (channel2B_out - meanChannel2B)/(FLOAT_CON_16UA*FLOAT_CON_16UA*timeWindow);
   ppgData1.green_ch2 = buff_val_filtered.float_val; 
-  counterCheck++;
-  if(counterCheck >timeWindow) 
-    counterCheck =0;
+  ppg_brightness_check_counter++;
+  if(ppg_brightness_check_counter >timeWindow) 
+    ppg_brightness_check_counter =0;
   blePktPPG_Filter[12] = buff_val_filtered.floatcast[0];
   blePktPPG_Filter[13] = buff_val_filtered.floatcast[1];
   blePktPPG_Filter[14] = buff_val_filtered.floatcast[2];

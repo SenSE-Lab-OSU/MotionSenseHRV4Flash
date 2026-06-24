@@ -46,6 +46,3 @@ Due to the way zephyr sets up it's device driver model, There are 5 locations fo
 
 
 
-
-
-

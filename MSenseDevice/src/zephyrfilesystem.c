@@ -21,6 +21,7 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
+#include "drivers/nand/nand_disk.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -39,6 +40,8 @@ FS_LITTLEFS_DECLARE_DEFAULT_CONFIG(storage);
 bool file_system_ready;
 
 bool security_lock;
+
+bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
 
@@ -64,11 +67,11 @@ const int data_limit = MAX_BUFFER_SIZE;
 
 
 // external globals
-int storage_percent_full;
+uint8_t storage_percent_full;
 
 int upload_timeout_errors;
 
-bool file_lock;
+bool reset_lock;
 
 uint64_t last_time_update_sent;
 
@@ -177,7 +180,11 @@ const char* sensor_enum_to_string(enum sensor_type sensor) {
 }
 
 
-int total_files = 0;
+int total_test_files = 0;
+int total_log_files = 0;
+
+
+
 
 
 
@@ -211,9 +218,9 @@ void create_test_file(int writes){
 
 	struct fs_file_t test_file;
 	fs_file_t_init(&test_file);
-	total_files++;
+	total_test_files++;
 	//ID = sys_rand32_get() % 90000;
-	ID = total_files;
+	ID = total_test_files;
 	
 	itoa(ID, IDString,  10);
 
@@ -246,6 +253,26 @@ void create_test_files(int number_of_files){
 
 }
 
+bool is_file_open(struct fs_file_t *zfp) {
+    // If filep is not NULL, the file wrapper structure is currently active/open
+    return (zfp != NULL && zfp->filep != NULL);
+}
+
+bool file_exists(const char *path)
+{
+    struct fs_dirent entry;
+    
+    // fs_stat returns 0 on success (file exists)
+    int ret = fs_stat(path, &entry);
+    
+    if (ret == 0) {
+        // Optional: Ensure it's a file and not a directory
+        return entry.type == FS_DIR_ENTRY_FILE;
+    }
+    
+    // Returns -ENOENT if the file does not exist
+    return false;
+}
 
 void reset_sensor_file(MotionSenseFile* MSenseFile){
 	fs_close(&MSenseFile->self_file);
@@ -256,11 +283,29 @@ void reset_sensor_file(MotionSenseFile* MSenseFile){
 	MSenseFile->first_sample_init = false;
 }
 
+
+
+
+void shutdown_filesystem(){
+	close_all_files();
+	//struct fs_mount_t* mp = &fs_mnt;
+	//fs_unmount(mp);
+}
+
+void reset_log_file(){
+	reset_sensor_file(&log_file);
+}
+
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
 	if (storage_percent_full >= 99){
 		LOG_WRN("Storage is getting full, aborting write");
+		return;
+	}
+
+	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()){
+		LOG_WRN("Tried to write while in readonly mode, aborting");
 		return;
 	}
 	if (sensor == ppg){
@@ -294,6 +339,11 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			uint64_t current_time = MSenseFile->start_time; 
 			
 			ID = current_time;
+			if (sensor == customlog){
+				// could also add it onto the time instead?
+				total_log_files++;
+				ID = total_log_files;
+			}
 
 		}
 		sprintf(IDString, "%llu", ID);
@@ -314,6 +364,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 		else {
 			strcat(MSenseFile->file_name, ".txt");
+			bool file_exists = false;
 		}
 		
 		// Now that we created the file name, open it and write the data
@@ -347,7 +398,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		data_counter += total_written;
 	}
 	else if (total_written < 0){
-		LOG_WRN("system failed %d write for %d! tot writes before: ", size, sensor, MSenseFile->current_writes);
+		LOG_WRN("system failed %d write for %d! tot writes before: %d ", size, sensor, MSenseFile->current_writes);
 		file_system_malfunction = true;
 		status_reg_ble_notification();
 	}
@@ -371,7 +422,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 }
 
 // writes data to a single file named 'test.txt' future TODO: make an extra string parameter so that the file name is customizable
-void write_to_file(const void* data, size_t size){
+int write_to_file(const void* data, size_t size){
 	struct fs_mount_t* mp = &fs_mnt;
 	if (!first_write ){
 		
@@ -401,6 +452,9 @@ void write_to_file(const void* data, size_t size){
 		strcat(file_name, "test.txt");
 		//printk("file: %s \n", file_name); 
 		int file_create = fs_open(&file, file_name, FS_O_CREATE | FS_O_WRITE);
+		if (file_create != 0){
+			return file_create;
+		}
 		first_write = true;
 
 	}
@@ -411,10 +465,13 @@ void write_to_file(const void* data, size_t size){
 	
 	int total_written = fs_write(&file, data, size);
 	//fs_write(&file, data, size);
-	if (total_written = size){
+	if (total_written == size){
 		//printk("sucessfully wrote file, bytes written = %i ! \n", total_written);
 		data_counter += total_written;
+		return 0;
 	}
+	return -1;
+
 }
 
 
@@ -455,8 +512,11 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == customlog){
 		work_item = &log_work_item;
 	}
-
-	LOG_INF("state: %d and %d", k_work_busy_get(work_item), k_work_is_pending(work_item));
+	int work_status = k_work_busy_get(work_item);
+	if (work_status != 0){
+		LOG_WRN("work state for %d not zero", type);
+	}
+	LOG_DBG("state for sensor %d: %d", type, work_status);
 	
 	if (!work_item->in_use){
 
@@ -494,6 +554,10 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
 	}
+	else{
+		LOG_WRN("sensor type unknown");
+		return;
+	}
 
 	if (MSenseFile->switch_buffer){
 		current_buffer = &MSenseFile->buffer2;
@@ -510,7 +574,6 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	void* result = memcpy(address_to_write, data, size);
-	//memcpy(arr, address_to_write, size);
 	current_buffer->current_size += size;
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
@@ -519,12 +582,67 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
 		}
+		if (!panic_single_thread){
 		LOG_INF("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+		}
+		else {
+			sensor_write_to_file(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+		}
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
 	}
 }
+
+void flush_data_buffer(enum sensor_type sensor){
+	
+	LOG_DBG("Flush data called");
+	data_upload_buffer* current_buffer;
+	//int16_t arr[6];
+	MotionSenseFile* MSenseFile;
+	bool first_init = false;
+	if (sensor == ppg){
+		MSenseFile = &ppg_file;
+	}
+	else if (sensor == accelorometer){
+		MSenseFile = &accel_file;
+	}
+	else if (sensor == customlog){
+		MSenseFile = &log_file;
+	}
+	else{
+		LOG_WRN("sensor type unknown");
+		return;
+	}
+
+	if (MSenseFile->switch_buffer){
+		current_buffer = &MSenseFile->buffer2;
+	}
+	else {
+		current_buffer = &MSenseFile->buffer1;
+	}
+	if (current_buffer->current_size != 0){
+		if (current_buffer->current_size != MSenseFile->write_size){
+				LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
+			}
+			if ((MSenseFile->current_writes + 1) >= max_writes){
+				MSenseFile->first_sample_init = false;
+			}
+			if (!panic_single_thread){
+			LOG_INF("Submitting Write!");
+			submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+			}
+			else {
+				sensor_write_to_file(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+			}
+			current_buffer->current_size = 0;
+			MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
+	}
+	else {
+		LOG_INF("empty buffers, no flushing required");
+	}
+}
+
 
 int write_ble_uuid(char* uuid){
 
@@ -704,7 +822,8 @@ void setup_disk(void)
 		       ent.size,
 		       ent.name);
 		if (ent.name != NULL){
-			strstr(ent.name, "test") != NULL ? total_files++ : 0;
+			strstr(ent.name, "test") != NULL ? total_test_files++ : 0;
+			strstr(ent.name, "log") != NULL ? total_log_files++ : 0;
 		}
 
 	}
@@ -733,12 +852,12 @@ int get_storage_percent_full(){
 	float storage_percent = (info.f_blocks - info.f_bfree);
 	storage_percent /= info.f_blocks;
 	storage_percent *= 100;
-	storage_percent_full = (int)storage_percent;
+	storage_percent_full = (uint8_t)storage_percent;
 	if (storage_percent_full >= 99){
 		file_system_full = true;
 	}
 	storage_ble_notification(&storage_percent_full, sizeof(storage_percent_full));
-	LOG_INF("storage: %f and %i and total_errors %i", storage_percent, storage_percent_full, upload_timeout_errors);
+	LOG_INF("storage: %f and %i and total_errors %i", (double)storage_percent, storage_percent_full, upload_timeout_errors);
 	return (int)storage_percent;
 
 }

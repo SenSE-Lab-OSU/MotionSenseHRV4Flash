@@ -479,17 +479,37 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 void battery_maintenance()
 {
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
-  dt_update_battery(dev);
+  dt_update_battery(dev, true);
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  if (battery_level < 5){
+    // if this is our first time
+    if (!battery_low){
+      battery_low = true;
+      LOG_WRN("battery low, turning off file logs and data collection.");
+      LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15%)");
+      if (!collecting_data){
+        reset_log_file();
+      }
+    }
+    
+  }
+  else if (battery_level > 15){
+    if (battery_low){
+    LOG_INF("resuming log after battery improved");
+    }
+    battery_low = false;
+    
+  } 
+
   if (collecting_data || host_wants_collection){
-        if (battery_level < 5 && collecting_data){
-            battery_low = true;
+        if (battery_low && collecting_data){
+            
             start_stop_device_collection(false);
         }
-        else if (battery_level > 15 && host_wants_collection && !collecting_data){
-            battery_low = false;
+        else if (!battery_low && host_wants_collection && !collecting_data){
+
             start_stop_device_collection(true);
             
         }
@@ -512,7 +532,7 @@ void storage_clear_led(){
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
 }
 
-void main(void)
+int main(void)
 {
 
   printk("Starting Application... \n");
@@ -628,8 +648,6 @@ void main(void)
       battery_maintenance();
       get_current_unix_time();
       LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
-      if (!file_lock){
-      }
     }
 
     if (!connectedFlag){
@@ -649,5 +667,6 @@ void main(void)
     }
 
     k_msleep(update_time);
+    
   }
 }

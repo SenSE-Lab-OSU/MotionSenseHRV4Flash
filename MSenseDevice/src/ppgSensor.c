@@ -600,9 +600,11 @@ void read_ppg_fifo_buffer(struct k_work *item)
     return;
   }
 
-  if ((sampleCount[2] % 4) != 0)
+  uint8_t partial_fifo_items = sampleCount[2] % 4;
+  if (partial_fifo_items != 0)
   {
-    LOG_ERR("PPG FIFO item count not frame-aligned: %u", sampleCount[2]);
+    LOG_DBG("PPG FIFO has partial frame tail: %u of 4 items (%u total)",
+            partial_fifo_items, sampleCount[2]);
   }
   if (number_of_samples > 32)
   {
@@ -675,13 +677,13 @@ void read_ppg_fifo_buffer(struct k_work *item)
   #if CONFIG_LOG
   static int last_ppg_count = 0;
   
-  if (number_of_samples != 1){
-      LOG_WRN("Samples in ppg got unexpected value: %d", number_of_samples);
-    }
-    if (global_counter - last_ppg_count != ppgConfig.numCounts) {
-      LOG_ERR("Detected ppg global counter offset: %d", global_counter - last_ppg_count);
-    }
-    last_ppg_count = global_counter;
+  if (number_of_samples > 2) {
+    LOG_WRN("PPG FIFO backlog: %d complete frames", number_of_samples);
+  }
+  if (global_counter - last_ppg_count != ppgConfig.numCounts) {
+    LOG_ERR("Detected ppg global counter offset: %d", global_counter - last_ppg_count);
+  }
+  last_ppg_count = global_counter;
   #endif
   // We divide by 4 because it represents the number of channels, 4, so we're reading 4 at a time.
   for (int i = 0; i < number_of_samples; i++){

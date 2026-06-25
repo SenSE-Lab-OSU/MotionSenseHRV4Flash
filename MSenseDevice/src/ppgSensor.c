@@ -77,12 +77,18 @@ uint8_t adaptIterMax = 30;
 uint8_t binarySteps = 0;
 
 bool use_fixed_ppg_brightness = false;
+static bool ppg_fifo_alignment_check_pending = false;
 
 static void ppg_apply_fixed_sampling_rate(void)
 {
   ppgConfig.sample_avg = PPG_FIXED_SAMPLE_AVG;
   ppgConfig.numCounts = PPG_FIXED_NUM_COUNTS;
   timeWindow = PPG_FIXED_TIME_WINDOW;
+}
+
+static uint8_t ppg_fifo_tag(const uint8_t *read_array, uint8_t fifo_item_index)
+{
+  return (read_array[fifo_item_index * 3 + 2] & 0xF8) >> 3;
 }
 
 // static float ppg_num[400];
@@ -247,6 +253,7 @@ void ppg_config()
     cmd_array[0] = PPG_SYS_CTRL;
     cmd_array[2] = 0;
     spiWritePPG(cmd_array, txLen);
+    ppg_fifo_alignment_check_pending = true;
 
     low_ch1 = 0;
     up_ch1 = 0x3f;
@@ -617,6 +624,22 @@ void read_ppg_fifo_buffer(struct k_work *item)
   cmd_array[0] = PPG_FIFO_DATA;
   spiReadWritePPG(cmd_array, txLen, read_array, number_of_samples * 12 + 2);
 
+  if (ppg_fifo_alignment_check_pending)
+  {
+    uint8_t tag0 = ppg_fifo_tag(read_array, 0);
+    uint8_t tag1 = ppg_fifo_tag(read_array, 1);
+    uint8_t tag2 = ppg_fifo_tag(read_array, 2);
+    uint8_t tag3 = ppg_fifo_tag(read_array, 3);
+
+    if (tag0 != PPG1_LEDC1_DATA || tag1 != PPG2_LEDC1_DATA ||
+        tag2 != PPG1_LEDC2_DATA || tag3 != PPG2_LEDC2_DATA)
+    {
+      LOG_ERR("PPG FIFO first frame tag alignment unexpected: %u %u %u %u",
+              tag0, tag1, tag2, tag3);
+    }
+    ppg_fifo_alignment_check_pending = false;
+  }
+
   int i, j;
   //for each logical PPG frame (obtained earlier by reading the number of FIFO items stored)
   for (i = 0; i < number_of_samples; i++)
@@ -626,7 +649,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
     {
       /* every 24 bit sample breaks into a 5 bit tag and 19 bit integer.
        the tag indicates what photo diode it is */
-      tag = (read_array[i * 12 + j + 2] & 0xF8) >> 3;
+      tag = ppg_fifo_tag(&read_array[i * 12 + j], 0);
       
       switch (tag)
       {

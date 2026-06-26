@@ -669,4 +669,5 @@ int main(void)
     k_msleep(update_time);
     
   }
+  return 0;
 }

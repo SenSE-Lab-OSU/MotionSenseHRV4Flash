@@ -35,6 +35,10 @@
     nfct-pins-as-gpios;
 };
 
+&vregh {
+	status = "disabled";
+};
+
 &spi1 {
 	status = "disabled";
 };

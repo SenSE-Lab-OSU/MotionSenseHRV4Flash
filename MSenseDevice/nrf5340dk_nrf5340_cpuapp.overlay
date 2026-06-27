@@ -22,7 +22,8 @@
  */
 /* Begin dk trim section, that removes all dev kit specific nodes. */
 
-
+/* Since this code is executed in the bootloader phase, we actually need to enable it (copy and past
+e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more details. */
 &vregmain {
 	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
 };
@@ -31,13 +32,16 @@
 	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
 };
 
+&vregh {
+	status = "disabled";
+};
+
+
 &uicr {
     nfct-pins-as-gpios;
 };
 
-&vregh {
-	status = "disabled";
-};
+
 
 &spi1 {
 	status = "disabled";

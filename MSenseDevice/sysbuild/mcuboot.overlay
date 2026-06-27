@@ -6,4 +6,9 @@
 	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
 };
 
+&vregh {
+	status = "disabled";
+};
+
+
 

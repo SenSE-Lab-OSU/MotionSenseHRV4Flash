@@ -219,7 +219,7 @@ void getIMUID();
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
 void motion_data_timeout_handler(struct k_work *);
 void motionSensitivitySampling_config(void);
-void motion_data_orientation_timeout_handler(uint16_t );
+
 void motion_sleep(void);
-static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCounter);
+
 #endif

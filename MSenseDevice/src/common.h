@@ -7,7 +7,6 @@
 #define ble_motionPktLength 20
 #define ble_magnetometerPktLength 8
 #define ble_orientationPktLength 18
-#define ble_tfMicroPktLength 66
 extern uint32_t timeWindow;
 extern uint16_t sampleFreq;
 extern struct bt_conn *my_connection;
@@ -32,7 +31,6 @@ extern uint8_t blePktPPG_Filter[ble_ppg_Filter_byteLength];
 extern uint8_t blePktMotion[ble_motionPktLength];
 extern uint8_t blePktMagneto[ble_magnetometerPktLength];
 extern uint8_t blePktOrientation[ble_orientationPktLength];
-extern uint8_t blePktTFMicro[ble_tfMicroPktLength];
 
 
 #endif

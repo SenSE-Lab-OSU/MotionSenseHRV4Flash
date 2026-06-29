@@ -129,8 +129,6 @@ const struct device *i2c_dev;
 
 
 
-uint8_t blePktTFMicro[ble_tfMicroPktLength];
-
 struct accData currentAccData;
 struct gyroData current_gyro_data;
 struct magnetoData current_magneto_data;
@@ -176,7 +174,7 @@ SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
 
 
 
-struct bt_conn *my_connection;
+struct bt_conn* my_connection;
 
 // Setting up the device information service
 static int settings_runtime_load(void)

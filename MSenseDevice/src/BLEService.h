@@ -19,7 +19,7 @@ extern bool file_system_malfunction;
 extern bool battery_charging;
 
 
-#define TFMICRO_DATA_LEN 66
+
 #define PPG_DATA_LEN 18
 #define PPG_DATA_UNFILTER_LEN 12
 #define ACC_GYRO_DATA_LEN 20
@@ -30,13 +30,7 @@ extern bool battery_charging;
 #define PPGQUALITY_DATA_LEN 4
 #define ACCQUALITY_DATA_LEN 4
 
-#define BLE_ATTR_PRIMARY_SERVICE 0
-#define BLE_ATTR_CONFIG_CHARACTERISTIC 1
-#define BLE_ATTR_TFMICRO_CHARACTERISTIC 4
-#define BLE_ATTR_PPG_CHARACTERISTIC 8
-#define BLE_ATTR_ACC_CHARACTERISTIC 13
-#define BLE_ATTR_MAGNETO_CHARACTERISTIC 18
-#define BLE_ATTR_ORIENTATION_CHARACTERISTIC 22
+
 
 
 // BLE CONFIG COMMAND
@@ -58,8 +52,6 @@ extern bool battery_charging;
 #define PPG_BLE_ENABLE 0x01
 #define ORIENTATION_ENABLE 0x04
 #define ORIENTATION_BLE_ENABLE 0x04
-#define TFMICRO_ENABLE 0x08
-#define TFMICRO_BLE_ENABLE 0x08
 #define GYRO_250_DPS 0x00
 #define GYRO_500_DPS 0x01
 #define GYRO_1000_DPS 0x02
@@ -168,11 +160,7 @@ extern uint8_t accQuality[4];
 /** @brief Callback type for when new data is received. */
 typedef void (*data_rx_cb_t)(uint8_t *data, uint8_t length);
 
-/** @brief Callback struct used by the tfMicro_service Service. */
-struct tfMicro_service_cb {
-  /** Data received callback. */
-  data_rx_cb_t    data_rx_cb;
-};
+
 
 struct bleDataPacket {
     struct k_work work;
@@ -187,11 +175,10 @@ void disconnected(struct bt_conn *conn, uint8_t reason);
 
 void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param);
 
-int tfMicro_service_init(void);
+
 
 static void on_sent(struct bt_conn *conn, void *user_data);
-void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void tfMicro_notify(struct k_work *);
+
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 void enmo_threshold_send(uint8_t* data, uint8_t len);

@@ -279,7 +279,6 @@ void ppg_changeIntensity(void)
     uint8_t rxLen, txLen;
     // Read chip ID
     uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
-    uint8_t read_array[5] = {0};
     txLen = 3;
     rxLen = 3;
     // LED 1 Driver current setting (IR )
@@ -382,6 +381,7 @@ uint8_t searchStep(uint8_t adapt_counter, float meanCha, float stdCha_fil,
   }
   return midVal;
 }
+
 
 void ppg_led_update(void)
 {
@@ -561,13 +561,14 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
 
 uint32_t ppg_samples[5] = {0};
 uint32_t ppg_packet_counter = 0;
+
+
 void read_ppg_fifo_buffer(struct k_work *item)
 {
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
   uint16_t pktCounter = the_device->pktCounter;
   bool movingFlag = the_device->movingFlag;
-  bool ppgTFPass = the_device->ppgTFPass;
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t read_array[128 * 2 * 2 * 3] = {0};
   uint8_t txLen, rxLen;
@@ -730,19 +731,6 @@ void read_ppg_fifo_buffer(struct k_work *item)
   my_ppgDataSensor.dataPacket = blePktPPG_noFilter;
   my_ppgDataSensor.packetLength = PPG_DATA_UNFILTER_LEN;
   k_work_submit(&my_ppgDataSensor.work);
-  if (ppgTFPass)
-  {
-    // This was a pass to send the compressed signal
-    ppgData1.green_ch1_buffer[ppgData1.bufferIndex] = ppgData1.green_ch1;
-    ppgData1.green_ch2_buffer[ppgData1.bufferIndex] = ppgData1.green_ch2;
-    ppgData1.infraRed_ch1_buffer[ppgData1.bufferIndex] = ppgData1.infraRed_ch1;
-    ppgData1.infraRed_ch1_buffer[ppgData1.bufferIndex] = ppgData1.infraRed_ch2;
-    ppgData1.bufferIndex = (ppgData1.bufferIndex + 1) % 400;
-    if (ppgData1.bufferIndex == 0)
-    {
-      ppgData1.dataReadyTF = true;
-    }
-  }
 #endif
  if (!(use_fixed_ppg_brightness)){
 

@@ -104,7 +104,6 @@ struct ppgInfo {
   struct k_work work;
   bool movingFlag;
   uint16_t pktCounter;
-  bool ppgTFPass;
 }; 
 
 extern struct ppgInfo my_ppgSensor;
@@ -112,7 +111,8 @@ extern struct bleDataPacket my_ppgDataSensor;
 
 extern const struct device *spi_dev_ppg;
 extern struct spi_config spi_cfg_ppg;
-/*and also here */
+
+
 struct ppgData {
 float green_ch1;
 float green_ch2;
@@ -131,7 +131,7 @@ float green_ch2_buffer[1];
 float infraRed_ch1_buffer[1];
 float infraRed_ch2_buffer[1];
 uint32_t bufferIndex;
-bool dataReadyTF;
+
 };
 
 struct ppg_configData {
@@ -143,15 +143,12 @@ struct ppg_configData {
   uint8_t infraRed_intensity;
   uint8_t numCounts;
 };
-struct tfMicro_configData {
-  bool isEnabled;
-  bool txPacketEnable;
-};
 
 
 extern struct ppg_configData ppgConfig;
 extern struct ppgData ppgData1;
-extern struct tfMicro_configData tfMicroCoonfig;
+
+
 extern bool use_fixed_ppg_brightness;
 void spiReadWritePPG(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
 void spiWritePPG(uint8_t * tx_buffer, uint8_t txLen);
@@ -169,13 +166,4 @@ void ppg_sleep(void);
 
 void ppg_turn_on();
 
-void fs_umountFilesys(void);
-void getFileSysSize(void);
-void fs_mount_init(void);
-void fileOpenRead(void);
-void fileClose(void);
-void fileOpenAppend(void);
-void fileOpen(void);
-void fileWrite(uint32_t dataFlash);
-uint32_t fileRead(void);
 #endif

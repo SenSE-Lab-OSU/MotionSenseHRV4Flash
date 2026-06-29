@@ -375,19 +375,16 @@ static void spi_init(void)
   imu_cs.gpio.port = gpio0_device;
   ppg_cs.gpio.port = gpio1_device;
   
-  struct spi_config* spi_test_config = spi_dev_imu->config;
-  //spi_cfg_ppg.gpio.port = gpio1_device;
+  
   spi_cfg_imu.cs = imu_cs;
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
   
   // high_pass_filter_init_25();
-
-  // fileOpen();
+  
   dataFlash = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
   printk("intensity = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
-  // fileWrite(dataFlash);
-  // fileClose();
+  
 
   accelConfig.isEnabled = true;
   accelConfig.txPacketEnable = true;
@@ -404,12 +401,10 @@ static void spi_init(void)
   // Disabled until the magnetometer packet format is made memory-safe.
   magnetoConfig.isEnabled = false;
   magnetoConfig.txPacketEnable = false;
-  //tfMicroCoonfig.isEnabled = true;
-  //tfMicroCoonfig.txPacketEnable = true;
 
-  configRead[1] = IMU_ENABLE | PPG_ENABLE | ORIENTATION_ENABLE | TFMICRO_ENABLE;
+  configRead[1] = IMU_ENABLE | PPG_ENABLE | ORIENTATION_ENABLE;
   configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE |
-                  ORIENTATION_BLE_ENABLE | TFMICRO_BLE_ENABLE;
+                  ORIENTATION_BLE_ENABLE;
 #if MAGNETOMETER_DATA_PATH_ENABLED
   configRead[1] |= MAGNETOMETER_ENABLE;
   configRead[0] |= MAGNETOMETER_BLE_ENABLE;

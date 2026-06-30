@@ -14,7 +14,6 @@
 LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_IMU_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
-float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[32];
 uint16_t testcounter = 0;
@@ -28,10 +27,13 @@ uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
 struct bleDataPacket my_motionData;
 
+struct accData currentAccData;
+struct gyroData current_gyro_data;
+
 struct bleDataPacket enmoThreshold;
 // Magnometer variables
  
-bool magnoSecondReading = false;
+
 uint8_t burst_tx_magneto[17];	
 
 #if MAGNETOMETER_DATA_PATH_ENABLED
@@ -278,8 +280,9 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 32;
       currentAccData.ENMO = enmo;
-      LOG_INF("%f, %f, %f", accelX, accelY, accelZ);
-      LOG_INF("Enmo: %f", enmo*1000);
+      // floats are cast to double in print calls
+      LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
+      LOG_INF("Enmo: %f", (double)enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
       
@@ -309,7 +312,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %f", currentAccData.ENMO);
+      LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
     }
@@ -381,7 +384,7 @@ void motion_data_timeout_handler(struct k_work *item)
   uint16_t pktCounter = the_device->pktCounter;
   
 
-  // printk("gyro: %i \n", gyro_first_readTemp);
+  
   uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL}; // SPI burst read holders.
   
   uint8_t burst_tx[13] = {
@@ -397,50 +400,6 @@ void motion_data_timeout_handler(struct k_work *item)
   uint8_t burst_rx[23];                                           // SPI burst read holders.
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];      
-  
-
-#if MAGNETOMETER_DATA_PATH_ENABLED
-  if (magnetoConfig.isEnabled)
-  {
-    bool measurement_valid = false;
-    uint16_t checkMag = 0;
-    uint8_t magneto_first_readTemp = the_device->magneto_first_read;
-    // Point to register bank 0 for reading the data from sensors.
-    spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
-    if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2)
-    {
-      // Checking the magnetometer status bits
-
-      while (checkMag < 40000)
-      {
-        spiReadWriteIMU(burst_tx_INT_STAT, 2, burst_rx, 2);
-        if ((burst_rx[1] & 0x01) == 0x01)
-        {
-          measurement_valid = true;
-          checkMag = 0;
-
-          break;
-        }
-        checkMag = checkMag + 1;
-      }
-
-      magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_SENSOR);
-    }
-
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 1)
-      magnetometer_data_read_send(measurement_valid, pktCounter);
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 2)
-      magnetometer_read_sample_config(MAGNETOMETER_SINGLE);
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 3)
-      magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_TOREAD);
-  }
-#else
-  if (magnetoConfig.isEnabled || magnetoConfig.txPacketEnable) {
-    magnetoConfig.isEnabled = false;
-    magnetoConfig.txPacketEnable = false;
-  }
-#endif
-
 
   // Point to register bank 0 for reading the data from sensors.
   spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
@@ -488,9 +447,9 @@ void motion_data_timeout_handler(struct k_work *item)
     currentAccData.raw_accy = dataReadAccY;
     currentAccData.raw_accz = dataReadAccZ;
 
-    accelX = dataReadAccX * dividerAcc / 1.0;
-    accelY = dataReadAccY * dividerAcc / 1.0;
-    accelZ = dataReadAccZ * dividerAcc / 1.0;
+    accelX = dataReadAccX * dividerAcc / 1.0f;
+    accelY = dataReadAccY * dividerAcc / 1.0f;
+    accelZ = dataReadAccZ * dividerAcc / 1.0f;
     currentAccData.accx_val = accelX;
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
@@ -628,9 +587,6 @@ void motion_config(void){
       spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
     k_msleep(10);
-#if MAGNETOMETER_DATA_PATH_ENABLED
-    magnetometer_config();
-#endif
   }
 }
 

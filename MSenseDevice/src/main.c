@@ -15,7 +15,7 @@
 #include <nrfx_uarte.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
-#include "batteryMonitor.h"
+#include "batterymonitordt.h"
 #include "ppgSensor.h"
 #include "imuSensor.h"
 #include "common.h"
@@ -24,28 +24,13 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
-#include <zephyr/bluetooth/conn.h>
-#include <zephyr/bluetooth/uuid.h>
-#include <zephyr/bluetooth/gatt.h>
-
-// dfu configuration
 
 
-#ifdef INCLUDE_DFU
-#ifdef CONFIG_BOOTLOADER_MCUBOOT 
 
-#include "os_mgmt/os_mgmt.h"
-#include "img_mgmt/img_mgmt.h"
-#include "stats/stats.h"
-#include "stat_mgmt/stat_mgmt.h"
-
-#include <mgmt/mcumgr/smp_bt.h>
-#endif
-#endif
 
 LOG_MODULE_REGISTER(main);
 
-#define READMASTER 0x80
+
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS 6000
@@ -55,12 +40,13 @@ LOG_MODULE_REGISTER(main);
 #define LED1_NODE DT_ALIAS(led1)
 #define PPG_POWER_NODE DT_ALIAS(led2) 
 
-// #define LED0	DT_GPIO_LABEL(LED0_NODE, gpios)
-// #define LED0 DEVICE_DT_NAME(LED0_NODE)
+// define our red and green leds
 #define LED_PIN DT_GPIO_PIN(LED0_NODE, gpios)
+#define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
+
 #define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
 
-#define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
+
 
 #define PPG_POWER_PIN DT_GPIO_PIN(PPG_POWER_NODE, gpios)
 #define PPG_POWER_FLAGS DT_GPIO_FLAGS(PPG_POWER_NODE, gpios)
@@ -68,17 +54,10 @@ LOG_MODULE_REGISTER(main);
 const struct device* gpio0_device;
 const struct device* gpio1_device;
 
-struct spi_cs_control imu_cs = {
-    .delay = 0,
-    .gpio = {.pin = 26, .dt_flags = GPIO_ACTIVE_LOW}};
 
-// the gpio struct now requires a port? not sure what to do in this case
-struct spi_cs_control ppg_cs = {
-    .delay = 0,
-    .gpio = {
-        .pin = 9,
-        .dt_flags = GPIO_ACTIVE_LOW,
-    }};
+/* SPI Definitions */
+
+
 /*
 ------------------------------------------------------------------------------------
 SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
@@ -106,7 +85,6 @@ struct spi_config spi_cfg_imu =
     //.cs = SPI_CS_CONTROL_PTR_DT(DT_NODELABEL(spi2), 0)
     };
 
-//struct spi_config spi_cfg_imu2 = SPI_CONFIG_DT(DT_NODELABEL(spi2), spi_cfg_imu.operation, 0);
 
 // SPI Mode-3 PPG
 struct spi_config spi_cfg_ppg = {
@@ -121,22 +99,33 @@ struct spi_config spi_cfg_ppg = {
   */
 };
 
+// Now we define the cs pins
 
-struct ppgData ppgData1;
+struct spi_cs_control imu_cs = {
+    .delay = 0,
+    .gpio = {.pin = 26, .dt_flags = GPIO_ACTIVE_LOW}};
+
+
+struct spi_cs_control ppg_cs = {
+    .delay = 0,
+    .gpio = {
+        .pin = 9,
+        .dt_flags = GPIO_ACTIVE_LOW,
+    }};
+
+
+
 
 const struct device *spi_dev_ppg, *spi_dev_imu;
 const struct device *i2c_dev;
 
 
 
-struct accData currentAccData;
-struct gyroData current_gyro_data;
-struct magnetoData current_magneto_data;
 
 struct accel_config accelConfig;
 struct gyro_config gyroConfig;
-struct magneto_config magnetoConfig;
-struct orientation_config orientationConfig;
+
+
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -174,7 +163,7 @@ SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
 
 
 
-struct bt_conn* my_connection;
+
 
 // Setting up the device information service
 static int settings_runtime_load(void)
@@ -214,14 +203,6 @@ void write_uuid_file(){
   }
 }
 
-static bool le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
-{
-  // If acceptable params, return true, otherwise return false.
-  if ((param->interval_min > 9) && (param->interval_max > 20))
-    return false;
-  else
-    return true;
-}
 
 static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
@@ -338,7 +319,7 @@ static void ble_init(void)
 // which is defined by the macro-variable TIMER_MS
 static void spi_init(void)
 {
-  uint32_t dataFlash;
+  
   // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
   const char *const spiName_imu = "spi@9000";
   const char *const spiName_ppg = "spi@c000";
@@ -378,12 +359,6 @@ static void spi_init(void)
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
 
   
-  // high_pass_filter_init_25();
-  
-  dataFlash = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
-  printk("intensity = %d,%d,%d\n", dataFlash, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
-  
-
   accelConfig.isEnabled = true;
   accelConfig.txPacketEnable = true;
   accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
@@ -393,20 +368,9 @@ static void spi_init(void)
   gyroConfig.txPacketEnable = true;
   gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
   gyroConfig.sensitivity = GYRO_FS_SEL_500;
-  orientationConfig.isEnabled = true;
-  orientationConfig.txPacketEnable = true;
 
-  // Disabled until the magnetometer packet format is made memory-safe.
-  magnetoConfig.isEnabled = false;
-  magnetoConfig.txPacketEnable = false;
-
-  configRead[1] = IMU_ENABLE | PPG_ENABLE | ORIENTATION_ENABLE;
-  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE |
-                  ORIENTATION_BLE_ENABLE;
-#if MAGNETOMETER_DATA_PATH_ENABLED
-  configRead[1] |= MAGNETOMETER_ENABLE;
-  configRead[0] |= MAGNETOMETER_BLE_ENABLE;
-#endif
+  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE;
+  configRead[1] = IMU_ENABLE | PPG_ENABLE;
   configRead[2] = ppgConfig.green_intensity;
   configRead[3] = ppgConfig.infraRed_intensity;
   configRead[4] = 0x12;
@@ -425,19 +389,11 @@ void spi_verify_sensor_ids()
     LOG_WRN("IMU not ready, setup avoided");
   }
   
-  uint8_t tx_buffer[4], rx_buffer[4];
-  uint8_t txLen = 3, rxLen = 3;
-  tx_buffer[0] = PPG_CHIP_ID_1;
-  tx_buffer[1] = READMASTER;
-  tx_buffer[2] = 0x00;
-
-  txLen = 3;
-  rxLen = 3;
+ 
   k_sleep(K_SECONDS(1));
   if (device_is_ready(spi_dev_ppg))
   {
-    spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
-    LOG_INF("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
+    read_ppg_chip_id();
   }
   else
   {
@@ -458,14 +414,11 @@ static void i2c_init(void)
   // Previously we used to set values, but these are now set by device tree.
 }
 
-// Timer handler that periodically executes commands with a period,
-// which is defined by the macro-variable TIMER_MS
+
 
 #define WORKQUEUE_PRIORITY 8
 #define WORKQUEUE_STACK_SIZE 20048
 K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
-
-
 
 
 
@@ -573,8 +526,6 @@ int main(void)
   spi_init();
   spi_verify_sensor_ids();
 
-  
-
   i2c_init();
 
   // Shutdown our ppg and imu sensors until we need to get data from them
@@ -599,13 +550,11 @@ int main(void)
   k_work_init(&my_motionData.work, motion_notify);
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   // These items all handle sending data across bluetooth
-  
-  k_work_init(&my_magnetoSensor.work, magneto_notify);
-  k_work_init(&my_orientaionSensor.work, orientation_notify);
+
   k_work_init(&my_ppgDataSensor.work, ppgData_notify);
 #endif
 
-  
+  // these are our file system workqueue objects
   k_work_init(&ppg_work_item.work, work_write);
   ppg_work_item.sensor = ppg;
 

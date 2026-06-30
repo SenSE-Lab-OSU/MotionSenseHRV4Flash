@@ -1,5 +1,3 @@
-// #include "arm_const_structs.h"
-// #include "arm_math.h"
 
 #include "ppgSensor.h"
 #include "imuSensor.h"
@@ -15,7 +13,7 @@
 
 LOG_MODULE_REGISTER(ppg_sensor, CONFIG_LOG_LEVEL_PPG_COLLECTION);
 
-#define LED_GREEN 1
+
 
 struct ppg_configData ppgConfig = {
     .isEnabled = true,
@@ -47,6 +45,7 @@ const struct ppg_configData ppg_default_config = {
     .txPacketEnable = false,
 };
 
+struct ppgData ppgData1;
 
 uint32_t timeWindow = PPG_FIXED_TIME_WINDOW;
 
@@ -135,11 +134,26 @@ void spiWritePPG(uint8_t *tx_buffer, uint8_t txLen)
     LOG_ERR("SPI error: %d\n", err);
 }
 
+void read_ppg_chip_id(){
+    uint8_t tx_buffer[4], rx_buffer[4];
+    uint8_t txLen = 3, rxLen = 3;
+    tx_buffer[0] = PPG_CHIP_ID_1;
+    tx_buffer[1] = READMASTER;
+    tx_buffer[2] = 0x00;
+    spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
+    LOG_INF("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
+}
+
+
 // bool use_specific, struct ppgConfig_data* conf_data
 void ppg_config()
 {
   if (ppgConfig.isEnabled)
   {
+    LOG_INF("configuring ppg...");
+    uint32_t ppg_intensity = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
+    printk("intensity = %d,%d,%d\n", ppg_intensity, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
+
     ppg_apply_fixed_sampling_rate();
     // fileOpen();
 
@@ -308,12 +322,9 @@ void ppg_changeSamplingRate(void)
 
   if (ppgConfig.isEnabled)
   {
-    uint8_t rxLen, txLen;
+    uint8_t txLen= 3;
     // Read chip ID
     uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
-    uint8_t read_array[5] = {0};
-    txLen = 3;
-    rxLen = 3;
     // Change Sampling rate PPG
     cmd_array[0] = PPG_CONFIG_2;
     cmd_array[2] = PPG_SR_512_1 | ppgConfig.sample_avg;
@@ -346,7 +357,7 @@ uint8_t searchStep(uint8_t adapt_counter, float meanCha, float stdCha_fil,
 {
   //chLED_upperBound - 40000
   
-  LOG_DBG("in ppg brightness search step, mean: %f", meanCha);
+  LOG_DBG("in ppg brightness search step, mean: %f", (double)meanCha);
   if (meanCha < chLED_target)
   {
     if (stdCha_fil > std_ppgThreshold)
@@ -440,8 +451,8 @@ void ppg_led_update(void)
       
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
       LOG_DBG("adapt_flag: %d\n", adapt_Ch2);
-      LOG_DBG("green mean: %f \n", meanGreen);
-      LOG_DBG("IR mean: %f \n", meanIR);
+      LOG_DBG("green mean: %f \n", (double)meanGreen);
+      LOG_DBG("IR mean: %f \n", (double)meanIR);
       LOG_DBG("bad counter: %d\n", badDataCounterCh2);
       
         /* if we are not currently doing any adaptation, check to see if our data is bad */   
@@ -453,7 +464,7 @@ void ppg_led_update(void)
           // if it is bad for 10 cycles, trigger the collection 
           if (badDataCounterCh1 > 15)
           {
-            LOG_INF("PPG Ch1 overloaded brightness %f, triggering recalibration...", meanIR);
+            LOG_INF("PPG Ch1 overloaded brightness %f, triggering recalibration...", (double)meanIR);
             adapt_counterCh1 = 0;
             adapt_Ch1 = 1;
             badDataCounterCh1 = 0;
@@ -466,7 +477,7 @@ void ppg_led_update(void)
             badDataCounterCh2++;
           if (badDataCounterCh2 > 15)
           {
-            LOG_INF("PPG Ch2 overloaded brightness %f, triggering recalibration...", meanGreen);
+            LOG_INF("PPG Ch2 overloaded brightness %f, triggering recalibration...", (double)meanGreen);
             adapt_counterCh2 = 0;
             adapt_Ch2 = 1;
             badDataCounterCh2 = 0;
@@ -578,11 +589,6 @@ void read_ppg_fifo_buffer(struct k_work *item)
   uint32_t led2B[32] = {0};
 
   uint8_t tag;
-  float channel1A_in, channel1B_in, channel2A_in, channel2B_in;
-  float meanChannel1A, meanChannel1B, meanChannel2A, meanChannel2B;
-
-  float channel1A_out, channel1B_out, channel2A_out, channel2B_out;
-  float_cast buff_val_filtered;
 
   ppg_brightness_check_counter++;
   if (ppg_brightness_check_counter > timeWindow)

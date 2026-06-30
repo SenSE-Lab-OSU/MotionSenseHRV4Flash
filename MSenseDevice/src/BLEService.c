@@ -8,12 +8,11 @@
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
-#include <zephyr/drivers/flash.h>
+
 #include "ppgSensor.h"
 #include "imuSensor.h"
-#include "batteryMonitor.h"
+#include "batterymonitordt.h"
 #include "zephyrfilesystem.h"
-#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -62,7 +61,7 @@ uint32_t uptime;
 
 static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
@@ -87,7 +86,26 @@ uint16_t offset, uint8_t flags);
 static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
   uint16_t offset, uint8_t flags);
 
+/* This function is called whenever the CCCD register has been changed by the client*/
+void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
+  
+  ARG_UNUSED(attr);
+  switch(value){
+    case BT_GATT_CCC_NOTIFY: 
+      // Start sending stuff!
+      break;
+    case BT_GATT_CCC_INDICATE: 
+      // Start sending stuff via indications
+      break;
 
+    case 0: 
+      // Stop sending stuff
+      break;
+        
+    default: 
+      printk("Error, CCCD has been set to an invalid value");     
+  }
+}
 
 
 //#if CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -178,19 +196,7 @@ BT_GATT_SERVICE_DEFINE(data_service, // 0
   BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY, //8
     BT_GATT_PERM_READ, read_acc_quality,
     NULL, accQuality),
-  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ), //9
-  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX, //10
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //11
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_CUD(MAGNETO_NAME, BT_GATT_PERM_READ),//12
-  BT_GATT_CHARACTERISTIC(BT_UUID_ORIENTATION_TX,//13
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-BT_GATT_CCC(on_cccd_changed, //14
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ) //15
+  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ) //9
 );
 
 #define BLE_ATTR_PRIMARY_SERVICE 0
@@ -210,32 +216,32 @@ BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ) //15
 /* Write Service: Enable device, reset device, Write date time, patient num characteristics*/
 BT_GATT_SERVICE_DEFINE(tfMicro_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
+  BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable.uuid,//18,19
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_one, write_enable_value, &host_wants_collection),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_datetime, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_datetime.uuid, 
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_eight, bt_write_date_time, &set_date_time),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum.uuid, 
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_four, bt_write_patient_num, &patient_num),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_reset.uuid, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
-BT_GATT_SERVICE_DEFINE(status_service, 
+BT_GATT_SERVICE_DEFINE(status_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
+  BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage.uuid,//18,19
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
-    BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_status.uuid,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-    BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime.uuid,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_uptime, NULL, &uptime),
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
@@ -244,16 +250,16 @@ BT_GATT_SERVICE_DEFINE(status_service,
 /* update service: read ENMO updates */
 BT_GATT_SERVICE_DEFINE(update_service, // 0
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service), // 1
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
     NULL, NULL, NULL), // 2
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //3 
 
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify.uuid, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
     read_enmo_threshold, NULL, &enmo_threshold_packet), // 4
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
   );
 
-
+struct bt_conn* my_connection;
 
 uint8_t configRead[6] = {0,0,0,0,0,0};
 uint8_t ppgQuality[4] = {0};
@@ -264,18 +270,16 @@ uint8_t accQuality[4] = {0};
 uint8_t gyro_first_read = 0;
 uint8_t magneto_first_read = 0;  
 uint8_t ppgRead = 0;
-bool ppgTFPass = false;
 
 
-uint16_t sampleFreq = MAGNETO_SAMPLING_RATE;
+
 
 
 struct ppgInfo my_ppgSensor;
 struct ble_battery_info my_battery ;  // work-queue instance for batter level
 
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
-struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
-struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
+
 struct bleDataPacket my_ppgDataSensor;
 
 
@@ -289,7 +293,7 @@ bool read_status_register(int position){
     return *status_registers[position];
 }
 
-void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
     uptime = k_uptime_get() / 1000;
   
@@ -427,7 +431,7 @@ void reset_device(bool reset_bad_blocks){
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
   // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
-  struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  const struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
     reset_lock = true;
@@ -639,6 +643,7 @@ uint16_t offset, uint8_t flags){
 }
 
 // Note: Currently does not work, more work is needed to allow dynamic runtime name changing.
+/*
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   int status;
@@ -676,20 +681,19 @@ uint16_t offset, uint8_t flags){
       .interval_max = BT_GAP_ADV_FAST_INT_MAX_2,
       .peer = NULL};
 
-  /*err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+  err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
     printk("Advertising failed to start (err %d)\n", err);
   else
   {
     printk("Advertising successfully started\n");
   }
-  */
   k_sleep(K_SECONDS(1));
   NVIC_SystemReset();
   return 0;
   
 }
-
+*/
 void create_test_files_through_file_workqueue(struct k_work* work){
   storage_clear_led();
   create_test_files(100);
@@ -736,7 +740,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
-        if (val == 130 || val == 150 && !collecting_data){
+        if ((val == 130 || val == 150) && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
           reset_lock = true;
@@ -853,19 +857,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         accelConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFD;     
       }
-#if MAGNETOMETER_DATA_PATH_ENABLED
-      if((buffer[1] & MAGNETOMETER_ENABLE) == MAGNETOMETER_ENABLE){
-        magnetoConfig.isEnabled = true;
-        configRead[1] = configRead[1] | MAGNETOMETER_ENABLE;
-      }
-      else if((buffer[1] & MAGNETOMETER_ENABLE) == 0x00){
-        magnetoConfig.isEnabled = false;
-        configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
-      }
-#else
-      magnetoConfig.isEnabled = false;
-      configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
-#endif
       if((buffer[1] & PPG_ENABLE) == PPG_ENABLE){
         ppgConfig.isEnabled = true;
         configRead[1] = configRead[1] | 0x01; 
@@ -874,14 +865,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         ppgConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFE; 
       }     
-      if((buffer[1] & ORIENTATION_ENABLE) == ORIENTATION_ENABLE){
-        orientationConfig.isEnabled = true;
-        configRead[1] = configRead[1] | 0x04; 
-      }
-      else if((buffer[1] & ORIENTATION_ENABLE) == 0x00){
-        orientationConfig.isEnabled = false;
-        configRead[1] = configRead[1] & 0xFB; 
-      }
       if((buffer[2] & MOTION_BLE_ENABLE) == MOTION_BLE_ENABLE){
         accelConfig.txPacketEnable = true;
         gyroConfig.txPacketEnable = true;
@@ -892,19 +875,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         gyroConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFD;     
       }
-#if MAGNETOMETER_DATA_PATH_ENABLED
-      if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == MAGNETOMETER_BLE_ENABLE){
-        magnetoConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | MAGNETOMETER_BLE_ENABLE;
-      }
-      else if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == 0x00){
-        magnetoConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
-      }
-#else
-      magnetoConfig.txPacketEnable = false;
-      configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
-#endif
       if((buffer[2] & PPG_BLE_ENABLE) == PPG_BLE_ENABLE){
         ppgConfig.txPacketEnable = true;
         configRead[0] = configRead[0] | 0x01; 
@@ -912,14 +882,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
       else if((buffer[2] & PPG_BLE_ENABLE) == 0x00){
         ppgConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFE; 
-      }
-      if((buffer[2] & ORIENTATION_BLE_ENABLE) == ORIENTATION_BLE_ENABLE){
-        orientationConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x04; 
-      }
-      else if((buffer[2] & ORIENTATION_BLE_ENABLE) == 0x00){
-        orientationConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xFB; 
       }
       break;
     case BLE_CONFIG_GYRO_SENSITIVITY:
@@ -987,7 +949,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
       // Ignore host rate selections so the firmware has one motion cadence.
       accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
       gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
-      sampleFreq = MAGNETO_SAMPLING_RATE;
       configRead[5] = MOTION_FIXED_32HZ_STATUS | (configRead[5]&0xF0);
       motionSensitivitySampling_config();
       break;
@@ -1006,7 +967,7 @@ ssize_t on_settings_change(struct bt_conn *conn,
 /* This function is called whenever a Notification has been sent by the TX Characteristic */
 static void on_sent(struct bt_conn* conn, void* user_data){
   ARG_UNUSED(user_data);
-  const bt_addr_le_t * addr = bt_conn_get_dst(conn);
+  //const bt_addr_le_t * addr = bt_conn_get_dst(conn);
     /*    
 	//printk("Data sent to Address 0x %02X %02X %02X %02X %02X %02X \n", addr->a.val[0]
                                                                     , addr->a.val[1]
@@ -1016,26 +977,7 @@ static void on_sent(struct bt_conn* conn, void* user_data){
                                                                     , addr->a.val[5]);*/
 }
 
-/* This function is called whenever the CCCD register has been changed by the client*/
-void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
-  
-  ARG_UNUSED(attr);
-  switch(value){
-    case BT_GATT_CCC_NOTIFY: 
-      // Start sending stuff!
-      break;
-    case BT_GATT_CCC_INDICATE: 
-      // Start sending stuff via indications
-      break;
 
-    case 0: 
-      // Stop sending stuff
-      break;
-        
-    default: 
-      printk("Error, CCCD has been set to an invalid value");     
-  }
-}
                         
 
 
@@ -1076,7 +1018,7 @@ void enmo_threshold_send(uint8_t* data, uint8_t len){
 }
 
 
-int status_reg_ble_notification(){
+void status_reg_ble_notification(){
 
   for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
@@ -1131,14 +1073,15 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
 
 void motion_notify(struct k_work *item){
   
-  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);    
+  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
+  
   uint8_t packetLength = the_device->packetLength;
   printk("%i", packetLength);
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
-  
+  uint8_t *dataPacket = the_device->dataPacket;
   memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
@@ -1200,62 +1143,6 @@ void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   }
 }
 
-void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_MAGNETO_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_MAGNETO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            //printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_ORIENTATION_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_ORIENTATION_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            //printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-void magneto_notify(struct k_work *item){
-  struct magnetoInfo* the_device=  ((struct magnetoInfo *)(((char *)(item)) - offsetof(struct magnetoInfo, work)));
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  magnetometer_send(my_connection, the_device->dataPacket, MAGNETOMETER_DATA_LEN);
-}
-void orientation_notify(struct k_work *item){
-  struct orientationInfo* the_device=  ((struct orientationInfo *)(((char *)(item)) - offsetof(struct orientationInfo, work)));
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  orientation_send(my_connection, the_device->dataPacket, ORIENTATION_DATA_LEN);
-}
 
 
 void ppgData_notify(struct k_work *item){
@@ -1265,17 +1152,8 @@ void ppgData_notify(struct k_work *item){
   ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
 }
 
-#endif
 
 
-static ssize_t configSet(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,CONFIG_RX_DATA_LEN);
-}
 static ssize_t read_ppg_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   uint8_t *value1 = (uint8_t *)attr->user_data;
@@ -1294,3 +1172,4 @@ static ssize_t read_acc_quality(struct bt_conn *conn,const struct bt_gatt_attr *
 
   return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,ACCQUALITY_DATA_LEN);
 }
+#endif

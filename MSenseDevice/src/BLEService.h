@@ -6,9 +6,9 @@
 
 
 extern uint8_t gyro_first_read;
-extern uint8_t magneto_first_read;  
+ 
 extern uint8_t ppgRead;
-extern bool ppgTFPass;
+
 
 extern bool connectedFlag;
 extern bool collecting_data;
@@ -45,13 +45,10 @@ extern bool battery_charging;
 // BLE CONFIG DATA
 #define IMU_ENABLE 0x02
 #define MOTION_BLE_ENABLE 0x02
-#define MAGNETOMETER_ENABLE 0x10
-#define MAGNETOMETER_BLE_ENABLE 0x10
-#define MAGNETOMETER_DATA_PATH_ENABLED 0
+
 #define PPG_ENABLE 0x01
 #define PPG_BLE_ENABLE 0x01
-#define ORIENTATION_ENABLE 0x04
-#define ORIENTATION_BLE_ENABLE 0x04
+
 #define GYRO_250_DPS 0x00
 #define GYRO_500_DPS 0x01
 #define GYRO_1000_DPS 0x02
@@ -168,7 +165,7 @@ struct bleDataPacket {
     uint8_t packetLength;
 }; 
 
-extern struct bleDataPacket my_motionData;  // work-queue instance for tflite notifications
+extern struct bleDataPacket my_motionData;  
 
 void connected(struct bt_conn *conn, uint8_t err);
 void disconnected(struct bt_conn *conn, uint8_t reason);
@@ -177,30 +174,26 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param);
 
 
 
-static void on_sent(struct bt_conn *conn, void *user_data);
 
-void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+
 void enmo_threshold_send(uint8_t* data, uint8_t len);
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic);
-int status_reg_ble_notification();
+void status_reg_ble_notification();
 
-void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+
 void motion_notify(struct k_work *item);
 int storage_ble_notification(uint8_t* data, uint8_t len);
-void magneto_notify(struct k_work *item);
-void orientation_notify(struct k_work *item);
+
 void ppgData_notify(struct k_work *item);
 
-void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value);
+
 void start_stop_device_collection(uint8_t val);
 void reset_device(bool reset_bad_blocks);
-static ssize_t configSet(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
+
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 static ssize_t read_ppg_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
-
-
-
-
+#endif
  #endif

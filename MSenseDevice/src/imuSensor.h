@@ -19,9 +19,7 @@
 #define I2C_SLV0_CTRL_IMU 0x05    // UB3
 #define EXT_SENSE_DATA_0_IMU 0x3B // UB0
 #define REG_BANK_SEL 0x7F
-#define MAGNETOMETER_CNTL2 0x31
-#define MAGNETOMETER_HXL 0x11
-#define MAGNETOMETER_ST1 0x10
+
 #define ACCEL_XOUT_H 0x2D
 #define INT_STAATUS_1 0x1A
 #define PWR_MGMT_1 0x06
@@ -116,22 +114,12 @@ extern struct spi_config spi_cfg_imu;
 struct motionInfo {
   struct k_work work;
   uint16_t pktCounter;
-  uint8_t magneto_first_read;
   uint8_t gyro_first_read;
 }; 
-struct magnetoInfo {
-  struct k_work work;
-  uint8_t *dataPacket;
-  uint8_t packetLength;
-}; 
-struct orientationInfo {
-  struct k_work work;
-  uint8_t *dataPacket;
-  uint8_t packetLength;
-}; 
+
 extern struct motionInfo my_motionSensor; 
-extern struct magnetoInfo my_magnetoSensor; 
-extern struct orientationInfo my_orientaionSensor;
+ 
+
 struct accData {
   int16_t raw_accx;
   int16_t raw_accy;
@@ -155,25 +143,13 @@ struct gyroData {
   float gyroz_val;
   bool movingFlag;
 };
-struct magnetoData {
-  int16_t Hx;
-  int16_t Hy;
-  int16_t Hz;
-  float Hx_val;
-  float Hy_val;
-  float Hz_val;
-};
+
 struct orientationData {
   float q0;
   float q1;
   float q2;
   float q3;
 };
-typedef enum{
-  MAGNETOMETER_SINGLE,
-  MAGNETOMETER_SET_EXT_SENSOR,
-  MAGNETOMETER_SET_EXT_TOREAD,
-} magneto_sample_config_t;
 
 struct accel_config{
   bool isEnabled;
@@ -190,24 +166,15 @@ struct gyro_config{
   uint8_t tot_samples;
   uint8_t sampling_time;
 };
-struct orientation_config{
-  bool isEnabled;
-  bool txPacketEnable;
-};
 
-struct magneto_config{
-  bool isEnabled;
-  bool txPacketEnable;
-};
 
 extern struct accData currentAccData;
 extern struct gyroData current_gyro_data;
-extern struct magnetoData current_magneto_data;  
-extern struct orientationData orientationData1; 
+
                     
 extern struct accel_config accelConfig;
 extern struct gyro_config gyroConfig;
-extern struct magneto_config magnetoConfig;
+
 extern struct orientation_config orientationConfig;
 
 extern uint8_t enmo_threshold_packet[9];
@@ -219,7 +186,10 @@ void getIMUID();
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, uint8_t * rx_buffer, uint8_t rxLen);
 void motion_data_timeout_handler(struct k_work *);
 void motionSensitivitySampling_config(void);
-void motion_data_orientation_timeout_handler(uint16_t );
+
 void motion_sleep(void);
-static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCounter);
+
+void calculate_enmo(float accelX, float accelY, float accelZ);
+void enmo_threshold_evaluation(float enmo_number);
+
 #endif

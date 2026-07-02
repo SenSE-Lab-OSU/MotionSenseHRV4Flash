@@ -3,12 +3,13 @@
 #include <zephyr/types.h>
 #include <sys/types.h>
 #include "common.h"
+#include <zephyr/bluetooth/bluetooth.h>
 
 
 extern uint8_t gyro_first_read;
-extern uint8_t magneto_first_read;  
-extern uint8_t ppgRead;
-extern bool ppgTFPass;
+ 
+extern uint8_t ppg_read;
+
 
 extern bool connectedFlag;
 extern bool collecting_data;
@@ -19,24 +20,16 @@ extern bool file_system_malfunction;
 extern bool battery_charging;
 
 
-#define TFMICRO_DATA_LEN 66
+
 #define PPG_DATA_LEN 18
 #define PPG_DATA_UNFILTER_LEN 12
 #define ACC_GYRO_DATA_LEN 20
-#define MAGNETOMETER_DATA_LEN 8
-#define ORIENTATION_DATA_LEN 18
 #define ENMO_DATA_LEN 8
 #define CONFIG_RX_DATA_LEN 6
 #define PPGQUALITY_DATA_LEN 4
 #define ACCQUALITY_DATA_LEN 4
 
-#define BLE_ATTR_PRIMARY_SERVICE 0
-#define BLE_ATTR_CONFIG_CHARACTERISTIC 1
-#define BLE_ATTR_TFMICRO_CHARACTERISTIC 4
-#define BLE_ATTR_PPG_CHARACTERISTIC 8
-#define BLE_ATTR_ACC_CHARACTERISTIC 13
-#define BLE_ATTR_MAGNETO_CHARACTERISTIC 18
-#define BLE_ATTR_ORIENTATION_CHARACTERISTIC 22
+
 
 
 // BLE CONFIG COMMAND
@@ -51,15 +44,10 @@ extern bool battery_charging;
 // BLE CONFIG DATA
 #define IMU_ENABLE 0x02
 #define MOTION_BLE_ENABLE 0x02
-#define MAGNETOMETER_ENABLE 0x10
-#define MAGNETOMETER_BLE_ENABLE 0x10
-#define MAGNETOMETER_DATA_PATH_ENABLED 0
+
 #define PPG_ENABLE 0x01
 #define PPG_BLE_ENABLE 0x01
-#define ORIENTATION_ENABLE 0x04
-#define ORIENTATION_BLE_ENABLE 0x04
-#define TFMICRO_ENABLE 0x08
-#define TFMICRO_BLE_ENABLE 0x08
+
 #define GYRO_250_DPS 0x00
 #define GYRO_500_DPS 0x01
 #define GYRO_1000_DPS 0x02
@@ -93,10 +81,7 @@ extern bool battery_charging;
 // Configuration characteristic UUID
 #define RX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x21, 0xC9, 0x39, 0xDA       
-
-// TF micro PPG HR characteristic UUID
-#define TF_HR_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x22, 0xC9, 0x39, 0xDA       
+    
 	
 // PPG data characteristic UUID
 #define PPG_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
@@ -106,19 +91,10 @@ extern bool battery_charging;
 #define ACC_GRYO_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x24, 0xC9, 0x39, 0xDA   
 
-// Magnetometer data characteristic UUID
-#define MAGNETO_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x25, 0xC9, 0x39, 0xDA   
-
-// Orientation data characteristic UUID
-#define ORIENTATION_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x26, 0xC9, 0x39, 0xDA  
    
 // PPG Singal quality descriptor characteristic UUID
 #define PPG_QUALITY_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x27, 0xC9, 0x39, 0xDA   
-
-
 
 
 // Acc Singal quality descriptor characteristic UUID
@@ -161,18 +137,12 @@ extern bool battery_charging;
 #define NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x52, 0xC9, 0x39, 0xDA
 
-extern uint8_t configRead[6];
-extern uint8_t ppgQuality[4];
-extern uint8_t accQuality[4];
+
 
 /** @brief Callback type for when new data is received. */
 typedef void (*data_rx_cb_t)(uint8_t *data, uint8_t length);
 
-/** @brief Callback struct used by the tfMicro_service Service. */
-struct tfMicro_service_cb {
-  /** Data received callback. */
-  data_rx_cb_t    data_rx_cb;
-};
+
 
 struct bleDataPacket {
     struct k_work work;
@@ -180,40 +150,34 @@ struct bleDataPacket {
     uint8_t packetLength;
 }; 
 
-extern struct bleDataPacket my_motionData;  // work-queue instance for tflite notifications
+extern struct bleDataPacket my_motionData;  
 
 void connected(struct bt_conn *conn, uint8_t err);
 void disconnected(struct bt_conn *conn, uint8_t reason);
 
-void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param);
 
-int tfMicro_service_init(void);
 
-static void on_sent(struct bt_conn *conn, void *user_data);
-void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void tfMicro_notify(struct k_work *);
-void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+
+
+
 void enmo_threshold_send(uint8_t* data, uint8_t len);
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic);
-int status_reg_ble_notification();
+void status_reg_ble_notification();
 
-void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+
 void motion_notify(struct k_work *item);
 int storage_ble_notification(uint8_t* data, uint8_t len);
-void magneto_notify(struct k_work *item);
-void orientation_notify(struct k_work *item);
+
 void ppgData_notify(struct k_work *item);
 
-void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value);
+
 void start_stop_device_collection(uint8_t val);
 void reset_device(bool reset_bad_blocks);
-static ssize_t configSet(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
+
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
+void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 static ssize_t read_ppg_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
-
-
-
-
+#endif
  #endif

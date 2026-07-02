@@ -4,7 +4,7 @@
 #include <zephyr/fs/fs.h>
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/random/rand32.h>
+#include <zephyr/random/random.h>
 #include <time.h>
 
 
@@ -45,8 +45,8 @@ bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
 
-#define GET_FATTIME() (DWORD)get_current_unix_time()
-#undef GET_FATTIME()
+//#undef GET_FATTIME
+//#define GET_FATTIME() (DWORD)get_current_unix_time()
 
 
 
@@ -86,10 +86,6 @@ int last_packet_number_processed = 0;
 
 const int max_writes = 512;
 
-typedef struct k_sensor_upload {
-	enum sensor_type sensor;
-	struct k_work work;
-};
 
 
 typedef struct data_upload_buffer {
@@ -134,7 +130,7 @@ typedef struct MotionSenseFile {
 
 
 //File Objects
-static MotionSenseFile current_file;
+//static MotionSenseFile current_file;
 
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
@@ -229,7 +225,11 @@ void create_test_file(int writes){
 	strcat(destination, IDString);
 	strcat(destination, "testing.txt");
 	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
-	FRESULT res = f_expand(&test_file, 4096*max_writes*2, 1);
+	FIL* fatfs_file_ptr = (FIL *)test_file.filep;
+	FRESULT res = f_expand(fatfs_file_ptr, 4096*max_writes*2, 1);
+	if (res != 0){
+		LOG_WRN("failed to expand test file");
+	}
 	if (file_create == 0)
 	{
 		
@@ -318,6 +318,10 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
 	}
+	else {
+		LOG_WRN("invalid file type given");
+		return;
+	}
 
 
 	if (MSenseFile->current_writes == 0){
@@ -365,7 +369,6 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		}
 		else {
 			strcat(MSenseFile->file_name, ".txt");
-			bool file_exists = false;
 		}
 		
 		// Now that we created the file name, open it and write the data
@@ -443,7 +446,8 @@ int write_to_file(const void* data, size_t size){
 			ID = current_time;
 
 		}
-		itoa(ID, IDString,  10);
+		sprintf(IDString, "%d", ID);
+		//itoa(ID, IDString,  10);
 
 		
 
@@ -513,7 +517,11 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == customlog){
 		work_item = &log_work_item;
 	}
-	int work_status = k_work_busy_get(work_item);
+	else {
+		LOG_WRN("invalid file type given");
+		return;
+	}
+	int work_status = k_work_busy_get(&work_item->work);
 	if (work_status != 0){
 		LOG_WRN("work state for %d not zero", type);
 	}
@@ -574,7 +582,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
-	void* result = memcpy(address_to_write, data, size);
+	memcpy(address_to_write, data, size);
 	current_buffer->current_size += size;
 	if (current_buffer->current_size + size >= MSenseFile->write_size){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
@@ -601,7 +609,6 @@ void flush_data_buffer(enum sensor_type sensor){
 	data_upload_buffer* current_buffer;
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
-	bool first_init = false;
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
@@ -822,10 +829,10 @@ void setup_disk(void)
 		       (ent.type == FS_DIR_ENTRY_FILE) ? 'F' : 'D',
 		       ent.size,
 		       ent.name);
-		if (ent.name != NULL){
-			strstr(ent.name, "test") != NULL ? total_test_files++ : 0;
-			strstr(ent.name, "log") != NULL ? total_log_files++ : 0;
-		}
+		
+		strstr(ent.name, "test") != NULL ? total_test_files++ : 0;
+		strstr(ent.name, "log") != NULL ? total_log_files++ : 0;
+		
 
 	}
 	file_system_ready = true;
@@ -874,7 +881,8 @@ int get_storage_percent_full(){
 int test_desk_driver(){
 	uint8_t write_buf[4096] = {1};
 	uint8_t read_buf[4096];
-	const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
+	// you can do:
+	//const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
 	// OR
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
 	spi_nand_page_write(filesystem_device2, 63, write_buf, sizeof(read_buf));
@@ -886,6 +894,7 @@ int test_desk_driver(){
 	print_page_hex(read_buf, sizeof(read_buf), true);
 	spi_nand_page_read(filesystem_device2, 64, read_buf);
 	print_page_hex(read_buf, sizeof(read_buf), true);
+	return 0;
 }
 
 

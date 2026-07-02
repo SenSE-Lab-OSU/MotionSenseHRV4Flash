@@ -2,18 +2,15 @@
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <string.h>
-#include <errno.h>
 #include <zephyr/logging/log.h>
-//#include <sys/byteorder.h>
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
-#include <zephyr/drivers/flash.h>
+
 #include "ppgSensor.h"
 #include "imuSensor.h"
-#include "batteryMonitor.h"
+#include "batterymonitordt.h"
 #include "zephyrfilesystem.h"
-#include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -33,19 +30,14 @@
 #include "drivers/nand/nand_disk.h"
 #endif
 
-#define CONFIG_NAME "Configure sensor"
-#define TFMICRO_NAME "Micromarker Heart-rate"
-#define PPG_NAME "PPG Sensor"
-#define ACC_NAME "Acc and Gyroscope"
-#define MAGNETO_NAME "Magnetometer"
-#define ORIENTATION_NAME "Orientation vector"
+
 
 static const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(0);
 
 
 LOG_MODULE_REGISTER(user_bluetooth);
 
-
+// define our status registers
 bool connectedFlag = false;
 bool collecting_data = false;
 bool host_wants_collection = false;
@@ -62,17 +54,17 @@ uint32_t uptime;
 
 static ssize_t update_ble_status_register(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-  static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-  static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
-  static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
 static ssize_t bt_write_patient_num(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
@@ -88,60 +80,43 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
   uint16_t offset, uint8_t flags);
 
 
+/* This function is called whenever the CCCD register has been changed by the client*/
+void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
+  
+  ARG_UNUSED(attr);
+  switch(value){
+    case BT_GATT_CCC_NOTIFY: 
+      // Start sending stuff!
+      break;
+    case BT_GATT_CCC_INDICATE: 
+      // Start sending stuff via indications
+      break;
+
+    case 0: 
+      // Stop sending stuff
+      break;
+        
+    default: 
+      printk("Error, CCCD has been set to an invalid value");     
+  }
+}
 
 
-//#if CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-// Config Data Tx
-// B_1 B_2 - 0x0001 PPG enabled
-//         - 0x0002 IMU enabled
-//         - 0x0004 orientation enabled
-//         - 0x0008 TF micro enabled
-//         - 0x0010 Magnetometer enabled
-//         - 0x0100 PPG BLE transmit enable
-//         - 0x0200 IMU BLE transmit enable
-//         - 0x0400 orientation BLE transmit enable
-//         - 0x0800 TF micro BLE transmit enable
-//         - 0x1000 Magnetometer BLE transmit enable
-// B_3     - Green intensity
-// B_4     - Infra-red intensity
-// B_5     - Gyro Sensitivity, Acc sensitivity
-//         - 0x01 2g
-//         - 0x02 4g
-//         - 0x03 8g
-//         - 0x04 16g
-//         - 0x10 250 dps
-//         - 0x20 500 dps
-//         - 0x30 1000 dps
-//         - 0x40 2000 dps
-// B_6     - PPG sampling Rate, Motion Sampling rate
-//         - 0x10 - PPG FS=200
-//         - 0x20 - PPG FS=100
-//         - 0x30 - PPG FS=50
-//         - 0x40 - PPG FS=25
-//         - 0x01 - Motion FS=200
-//         - 0x02 - Motion FS=100
-//         - 0x03 - Motion FS=50
-//         - 0x04 - Motion FS=25
 /* Later, we should just delete these and move the defining bluetooth to the bottom. */
  struct bt_uuid_128 bt_uuid_data = BT_UUID_INIT_128(UPDATE3_SERVICE_UUID);
  struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_tfmicro_tx = BT_UUID_INIT_128(TF_HR_TX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_ppg_tx = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_acc_gyro_tx = BT_UUID_INIT_128(ACC_GRYO_TX_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_magneto_tx = BT_UUID_INIT_128(MAGNETO_TX_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_orientation_tx = BT_UUID_INIT_128(ORIENTATION_TX_CHARACTERISTIC_UUID);
+ 
  struct bt_uuid_128 bt_uuid_ppg_quality = BT_UUID_INIT_128(PPG_QUALITY_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_acc_quality = BT_UUID_INIT_128(ACC_QUALITY_CHARACTERISTIC_UUID);
 #define BT_UUID_DATA_SERVICE      (struct bt_uuid_128 *)(&bt_uuid_data)
-#define BT_UUID_TFMICRO_CONFIG_RX   (struct bt_uuid_128 *)(&bt_uuid_config_rx)
-#define BT_UUID_TFMICRO_TX   (struct bt_uuid_128 *)(&bt_uuid_tfmicro_tx)
+
 #define BT_UUID_PPG_TX   (struct bt_uuid_128 *)(&bt_uuid_ppg_tx)
 #define BT_UUID_ACC_GYRO_TX   (struct bt_uuid_128 *)(&bt_uuid_acc_gyro_tx)
-#define BT_UUID_MAGNETO_TX   (struct bt_uuid_128 *)(&bt_uuid_magneto_tx)
-#define BT_UUID_ORIENTATION_TX   (struct bt_uuid_128 *)(&bt_uuid_orientation_tx)
 #define BT_UUID_PPG_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_ppg_quality)
 #define BT_UUID_ACC_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_acc_quality)
-//#else
+// control service characteristics
 struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(CONTROL_SERVICE_UUID);
 struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTERISTIC_UUID);
@@ -149,7 +124,7 @@ struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_reset = BT_UUID_INIT_128(WRITE_RESET_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_name = BT_UUID_INIT_128(WRITE_DEVICE_NAME_CHARACTERISTIC_UUID);
-//#endif
+// status service characteristics
 struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
 struct bt_uuid_128 bt_uuid_read_status = BT_UUID_INIT_128(READ_STATUS_REGISTER_UUID);
@@ -160,52 +135,33 @@ struct bt_uuid_128 bt_uuid_enmothreshold_notify = BT_UUID_INIT_128(NOTIFY_ENMOTH
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
-BT_GATT_SERVICE_DEFINE(data_service,
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_DATA_SERVICE), //0
-  /*BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_CONFIG_RX, //1,2
-    BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE, 
-    configSet, on_settings_change, configRead),
-  BT_GATT_CUD(CONFIG_NAME, BT_GATT_PERM_READ),//3
-  BT_GATT_CHARACTERISTIC(BT_UUID_TFMICRO_TX, //4,5
-    BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //6
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), 
-  BT_GATT_CUD(TFMICRO_NAME, BT_GATT_PERM_READ),
-  */
-  //7
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX,//8,9
+BT_GATT_SERVICE_DEFINE(data_service, // 0
+  BT_GATT_PRIMARY_SERVICE(BT_UUID_DATA_SERVICE), // 1 
+  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX, //2
     BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
     NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //10
+  BT_GATT_CCC(on_cccd_changed, //3
     BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//11
+  BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//4
     BT_GATT_PERM_READ, read_ppg_quality,
     NULL, ppgQuality),
-  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ),//12
-  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_GYRO_TX,//13,14
+  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ),//5
+  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_GYRO_TX,//6,
     BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
     NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //15
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY,//16
+  BT_GATT_CCC(on_cccd_changed, 
+        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //7
+  BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY, //8
     BT_GATT_PERM_READ, read_acc_quality,
     NULL, accQuality),
-  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ),//17
-  BT_GATT_CHARACTERISTIC(BT_UUID_MAGNETO_TX,//18,19
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //20
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_CUD(MAGNETO_NAME, BT_GATT_PERM_READ),//21
-  BT_GATT_CHARACTERISTIC(BT_UUID_ORIENTATION_TX,//22,23
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-BT_GATT_CCC(on_cccd_changed, //24
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
+  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ) //9
 );
+
+#define BLE_ATTR_PRIMARY_SERVICE 0
+#define BLE_ATTR_CONFIG_CHARACTERISTIC 1
+#define BLE_ATTR_PPG_CHARACTERISTIC 2
+#define BLE_ATTR_ACC_CHARACTERISTIC 6
+
 #endif
 
 /* See bas.c for more information, but essentially, the battery service in configured in this exact same way as here,
@@ -213,107 +169,71 @@ BT_GATT_CUD(ORIENTATION_NAME, BT_GATT_PERM_READ)//25
 */
 
 /* Write Service: Enable device, reset device, Write date time, patient num characteristics*/
-BT_GATT_SERVICE_DEFINE(tfMicro_service,
+BT_GATT_SERVICE_DEFINE(control_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_control),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable,//18,19
+  BT_GATT_CHARACTERISTIC(&bt_uuid_write_enable.uuid,//18,19
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_one, write_enable_value, &host_wants_collection),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_datetime, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_datetime.uuid, 
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_eight, bt_write_date_time, &set_date_time),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_patientnum.uuid, 
     BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ, BT_GATT_PERM_WRITE | BT_GATT_PERM_READ,
     read_generic_four, bt_write_patient_num, &patient_num),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_reset, 
+  BT_GATT_CHARACTERISTIC(&bt_uuid_reset.uuid, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_name, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
-BT_GATT_SERVICE_DEFINE(status_service, 
+BT_GATT_SERVICE_DEFINE(status_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage,//18,19
+  BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage.uuid,//18,19
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     read_generic_four, NULL, &storage_percent_full),
-    BT_GATT_CHARACTERISTIC(&bt_uuid_read_status,
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_status.uuid,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-    BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime,
+    BT_GATT_CHARACTERISTIC(&bt_uuid_read_uptime.uuid,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_uptime, NULL, &uptime),
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
 /* update service: read ENMO updates */
-BT_GATT_SERVICE_DEFINE(update_service,
-  BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+BT_GATT_SERVICE_DEFINE(update_service, // 0
+  BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service), // 1
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
+    NULL, NULL, NULL), // 2
+  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //3 
 
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
-    read_enmo_threshold, NULL, &enmo_threshold_packet),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify.uuid, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
+    read_enmo_threshold, NULL, &enmo_threshold_packet), // 4
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
   );
 
 
 
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-
-  /* 
-    The attribute for the TX characteristic is used with bt_gatt_is_subscribed 
-    to check whether notification has been enabled by the peer or not.
-    Attribute table: 0 = Service, 1 = Primary service, 2 = RX, 3 = TX, 4 = CCC,.
-  */
-
-void tfMicro_service_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_TFMICRO_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_TFMICRO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-      //  printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-
-uint8_t configRead[6] = {0,0,0,0,0,0};
-uint8_t ppgQuality[4] = {0};
-uint8_t accQuality[4] = {0};
+struct bt_conn* my_connection;
 
 
 
-uint8_t gyro_first_read = 0;
-uint8_t magneto_first_read = 0;  
-uint8_t ppgRead = 0;
-bool ppgTFPass = false;
 
 
-uint16_t sampleFreq = MAGNETO_SAMPLING_RATE;
+uint8_t gyro_first_read = 0; 
+uint8_t ppg_read = 0;
+
+
+
 
 
 struct ppgInfo my_ppgSensor;
 struct ble_battery_info my_battery ;  // work-queue instance for batter level
 
 struct motionInfo my_motionSensor; // work-queue instance for motion sensor
-struct magnetoInfo my_magnetoSensor; // work-queue instance for magnetometer
-struct orientationInfo my_orientaionSensor; // work-queue instance for orientation
+
 struct bleDataPacket my_ppgDataSensor;
 
 
@@ -327,7 +247,7 @@ bool read_status_register(int position){
     return *status_registers[position];
 }
 
-void update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t update_uptime(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
     uptime = k_uptime_get() / 1000;
   
@@ -351,23 +271,21 @@ void rtc_handler(nrfx_rtc_int_type_t event_type){
   if (event_type != NRFX_RTC_INT_TICK) { return; }
 
   // submit work to read gyro, acc, magnetometer and orientation
-  my_motionSensor.magneto_first_read = magneto_first_read;
   my_motionSensor.pktCounter = global_counter;
   my_motionSensor.gyro_first_read = gyro_first_read;
   work_queue_result = k_work_submit(&my_motionSensor.work);
   if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
 
-  if(ppgRead == 0){
+  if(ppg_read == 0){
     my_ppgSensor.pktCounter = global_counter;
     my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
-    my_ppgSensor.ppgTFPass = ppgTFPass;
     work_queue_result = k_work_submit(&my_ppgSensor.work);
     if (work_queue_result != 1) { LOG_ERR("PPG work queue was not submitted: %i", work_queue_result); }
   }
 
   // ppgConfig.numCounts is derived from the RTC cadence.
-  ppgRead = (ppgRead+1) % ppgConfig.numCounts;
-  magneto_first_read = (magneto_first_read + 1) % (GYRO_SAMPLING_RATE/MAGNETO_SAMPLING_RATE);
+  ppg_read = (ppg_read+1) % ppgConfig.numCounts;
+  
 
   gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
 
@@ -401,11 +319,7 @@ static void rtc_init(void){
   irq_enable(RTC0_IRQn);
 }
 
-void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
-    
-  LOG_INF("USB Status: %d", status);
 
-}
 
 
 
@@ -466,7 +380,7 @@ void reset_device(bool reset_bad_blocks){
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
   // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
-  struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  const struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
     reset_lock = true;
@@ -522,8 +436,7 @@ void start_stop_device_collection(uint8_t val){
       rtc_init();
       global_counter = 0;
       gyro_first_read = 0;
-      magneto_first_read = 0;  
-      ppgRead = 0;
+      ppg_read = 0;
       host_wants_collection = true;
       collecting_data = true;
       
@@ -552,11 +465,6 @@ void start_stop_device_collection(uint8_t val){
 
 }
 
-
-bool check_valid_date_and_id(){
-    
-    return true;
-}
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -678,6 +586,7 @@ uint16_t offset, uint8_t flags){
 }
 
 // Note: Currently does not work, more work is needed to allow dynamic runtime name changing.
+/*
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   int status;
@@ -715,21 +624,19 @@ uint16_t offset, uint8_t flags){
       .interval_max = BT_GAP_ADV_FAST_INT_MAX_2,
       .peer = NULL};
 
-  /*err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+  err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
     printk("Advertising failed to start (err %d)\n", err);
   else
   {
     printk("Advertising successfully started\n");
   }
-  */
   k_sleep(K_SECONDS(1));
   NVIC_SystemReset();
   return 0;
   
-  return -1;
 }
-
+*/
 void create_test_files_through_file_workqueue(struct k_work* work){
   storage_clear_led();
   create_test_files(100);
@@ -776,7 +683,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
-        if (val == 130 || val == 150 && !collecting_data){
+        if ((val == 130 || val == 150) && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
           reset_lock = true;
@@ -837,7 +744,7 @@ static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *
 
 }
 
-static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+static ssize_t read_generic_four(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset){
   
   const char* value = attr->user_data;
@@ -865,8 +772,237 @@ static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_att
 
 }
 
+/* This function sends a notification to a Client with the provided data,
+given that the Client Characteristic Control Descripter has been set to Notify (0x1).
+It also calls the on_sent() callback if successful*/
+void enmo_send(struct bt_conn* conn, uint8_t* data, uint8_t len){
+
+
+  
+  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
+  const struct bt_gatt_attr *attr = &update_service.attrs[2];
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(conn, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+
+}
+
+/* This function sends a notification to a Client with the provided data,
+given that the Client Characteristic Control Descripter has been set to Notify (0x1).
+It also calls the on_sent() callback if successful*/
+void enmo_threshold_send(uint8_t* data, uint8_t len){
+
+  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
+  const struct bt_gatt_attr *attr = &update_service.attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+
+}
+
+
+void status_reg_ble_notification(){
+
+  for (int x = 0; x < num_of_status_registers; x++){
+    ble_status_register_send[x] = *status_registers[x];
+  }
+  const struct bt_gatt_attr *attr = &status_service.attrs[4];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending status reg...");
+    int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  } 
+}
+
+int storage_ble_notification(uint8_t* data, uint8_t len){
+  // if there is no notification, then we technically have an error.
+  int ret = -1;
+  const struct bt_gatt_attr *attr = &status_service.attrs[2];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  }
+  return ret; 
+}
+
+
+int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
+
+  int ret = 0;
+  
+  const struct bt_gatt_service_static* selected_service;
+  switch (service){
+    case 0:
+      selected_service = &control_service;
+
+  }
+  const struct bt_gatt_attr *attr = &selected_service->attrs[characteristic];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  }
+  return ret; 
+}
+
+
+
+void motion_notify(struct k_work *item){
+  
+  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
+  
+  uint8_t packetLength = the_device->packetLength;
+  printk("%i", packetLength);
+  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #else
+  uint8_t *dataPacket = the_device->dataPacket;
+  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
+  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
+  #endif
+
+}
+
+#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+
+uint8_t configRead[6] = {0,0,0,0,0,0};
+uint8_t ppgQuality[4] = {0};
+uint8_t accQuality[4] = {0};
+
+
+void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
+  
+  const struct bt_gatt_attr *attr = &data_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
+  struct bt_gatt_notify_params params = {
+    .uuid   = BT_UUID_ACC_GYRO_TX,
+    .attr   = attr,
+    .data   = data,
+    .len    = len,
+    .func   = on_sent
+  };
+    
+  // Check whether notifications are enabled or not
+
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    // Send the notification
+    
+    if(bt_gatt_notify_cb(conn, &params)){
+            printk("Error, unable to send notification\n");
+    }
+    
+  }
+  else{
+      //  printk("Warning, notification not enabled on the selected attribute\n");
+  }
+
+}
+
+
+void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
+  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
+  struct bt_gatt_notify_params params = {
+    .uuid   = BT_UUID_PPG_TX,
+    .attr   = attr,
+    .data   = data,
+    .len    = len,
+    .func   = on_sent
+  };
+  
+  // Check whether notifications are enabled or not
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    // Send the notification
+    if(bt_gatt_notify_cb(conn, &params)){
+            LOG_WRN("Error, unable to send notification\n");
+    }
+  }
+  else{
+        //printk("Warning, notification not enabled on the selected attribute\n");
+  }
+}
+
+
+
+void ppgData_notify(struct k_work *item){
+  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
+
+  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
+  ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
+}
+
+
+
+static ssize_t read_ppg_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  uint8_t *value1 = (uint8_t *)attr->user_data;
+  uint8_t *rsp;
+
+  rsp = value1;
+
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,PPGQUALITY_DATA_LEN);
+}
+static ssize_t read_acc_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
+  uint16_t len, uint16_t offset){
+  uint8_t *value1 = (uint8_t *)attr->user_data;
+  uint8_t *rsp;
+
+  rsp = value1;
+
+  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,ACCQUALITY_DATA_LEN);
+}
+
+
+
+
+//#if CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
+// Config Data Tx
+// B_1 B_2 - 0x0001 PPG enabled
+//         - 0x0002 IMU enabled
+//         - 0x0004 orientation enabled
+//         - 0x0008 TF micro enabled (deprecated)
+//         - 0x0010 Magnetometer enabled (deprecated)
+//         - 0x0100 PPG BLE transmit enable
+//         - 0x0200 IMU BLE transmit enable
+//         - 0x0400 orientation BLE transmit enable
+//         - 0x0800 TF micro BLE transmit enable
+//         - 0x1000 Magnetometer BLE transmit enable (deprecated)
+// B_3     - Green intensity
+// B_4     - Infra-red intensity
+// B_5     - Gyro Sensitivity, Acc sensitivity
+//         - 0x01 2g
+//         - 0x02 4g
+//         - 0x03 8g
+//         - 0x04 16g
+//         - 0x10 250 dps
+//         - 0x20 500 dps
+//         - 0x30 1000 dps
+//         - 0x40 2000 dps
+// B_6     - PPG sampling Rate, Motion Sampling rate
+//         - 0x10 - PPG FS=200
+//         - 0x20 - PPG FS=100
+//         - 0x30 - PPG FS=50
+//         - 0x40 - PPG FS=25
+//         - 0x01 - Motion FS=200
+//         - 0x02 - Motion FS=100
+//         - 0x03 - Motion FS=50
+//         - 0x04 - Motion FS=25
 /* This function is called whenever the RX Characteristic has been written to by a Client */
-ssize_t on_settings_change(struct bt_conn *conn,
+ssize_t legacy_on_settings_change(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,
 			  const void *buf,
 			  uint16_t len,
@@ -893,19 +1029,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         accelConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFD;     
       }
-#if MAGNETOMETER_DATA_PATH_ENABLED
-      if((buffer[1] & MAGNETOMETER_ENABLE) == MAGNETOMETER_ENABLE){
-        magnetoConfig.isEnabled = true;
-        configRead[1] = configRead[1] | MAGNETOMETER_ENABLE;
-      }
-      else if((buffer[1] & MAGNETOMETER_ENABLE) == 0x00){
-        magnetoConfig.isEnabled = false;
-        configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
-      }
-#else
-      magnetoConfig.isEnabled = false;
-      configRead[1] = configRead[1] & ((uint8_t)~MAGNETOMETER_ENABLE);
-#endif
       if((buffer[1] & PPG_ENABLE) == PPG_ENABLE){
         ppgConfig.isEnabled = true;
         configRead[1] = configRead[1] | 0x01; 
@@ -914,14 +1037,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         ppgConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFE; 
       }     
-      if((buffer[1] & ORIENTATION_ENABLE) == ORIENTATION_ENABLE){
-        orientationConfig.isEnabled = true;
-        configRead[1] = configRead[1] | 0x04; 
-      }
-      else if((buffer[1] & ORIENTATION_ENABLE) == 0x00){
-        orientationConfig.isEnabled = false;
-        configRead[1] = configRead[1] & 0xFB; 
-      }
       if((buffer[2] & MOTION_BLE_ENABLE) == MOTION_BLE_ENABLE){
         accelConfig.txPacketEnable = true;
         gyroConfig.txPacketEnable = true;
@@ -932,19 +1047,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
         gyroConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFD;     
       }
-#if MAGNETOMETER_DATA_PATH_ENABLED
-      if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == MAGNETOMETER_BLE_ENABLE){
-        magnetoConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | MAGNETOMETER_BLE_ENABLE;
-      }
-      else if((buffer[2] & MAGNETOMETER_BLE_ENABLE) == 0x00){
-        magnetoConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
-      }
-#else
-      magnetoConfig.txPacketEnable = false;
-      configRead[0] = configRead[0] & ((uint8_t)~MAGNETOMETER_BLE_ENABLE);
-#endif
       if((buffer[2] & PPG_BLE_ENABLE) == PPG_BLE_ENABLE){
         ppgConfig.txPacketEnable = true;
         configRead[0] = configRead[0] | 0x01; 
@@ -952,22 +1054,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
       else if((buffer[2] & PPG_BLE_ENABLE) == 0x00){
         ppgConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFE; 
-      }
-      if((buffer[2] & ORIENTATION_BLE_ENABLE) == ORIENTATION_BLE_ENABLE){
-        orientationConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x04; 
-      }
-      else if((buffer[2] & ORIENTATION_BLE_ENABLE) == 0x00){
-        orientationConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xFB; 
-      }
-      if((buffer[2] & TFMICRO_BLE_ENABLE) == TFMICRO_BLE_ENABLE){
-        tfMicroCoonfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x08; 
-      }
-      else if((buffer[2] & TFMICRO_BLE_ENABLE) == 0x00){
-        tfMicroCoonfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xF7; 
       }
       break;
     case BLE_CONFIG_GYRO_SENSITIVITY:
@@ -1035,7 +1121,6 @@ ssize_t on_settings_change(struct bt_conn *conn,
       // Ignore host rate selections so the firmware has one motion cadence.
       accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
       gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
-      sampleFreq = MAGNETO_SAMPLING_RATE;
       configRead[5] = MOTION_FIXED_32HZ_STATUS | (configRead[5]&0xF0);
       motionSensitivitySampling_config();
       break;
@@ -1051,10 +1136,19 @@ ssize_t on_settings_change(struct bt_conn *conn,
   return len;
 }
 
+void legacy_initialize_settings(){
+  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE;
+  configRead[1] = IMU_ENABLE | PPG_ENABLE;
+  configRead[2] = ppgConfig.green_intensity;
+  configRead[3] = ppgConfig.infraRed_intensity;
+  configRead[4] = 0x12;
+  configRead[5] = PPG_FIXED_256HZ_STATUS | MOTION_FIXED_32HZ_STATUS;
+}
+
 /* This function is called whenever a Notification has been sent by the TX Characteristic */
 static void on_sent(struct bt_conn* conn, void* user_data){
   ARG_UNUSED(user_data);
-  const bt_addr_le_t * addr = bt_conn_get_dst(conn);
+  //const bt_addr_le_t * addr = bt_conn_get_dst(conn);
     /*    
 	//printk("Data sent to Address 0x %02X %02X %02X %02X %02X %02X \n", addr->a.val[0]
                                                                     , addr->a.val[1]
@@ -1064,303 +1158,8 @@ static void on_sent(struct bt_conn* conn, void* user_data){
                                                                     , addr->a.val[5]);*/
 }
 
-/* This function is called whenever the CCCD register has been changed by the client*/
-void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
-  
-  ARG_UNUSED(attr);
-  switch(value){
-    case BT_GATT_CCC_NOTIFY: 
-      // Start sending stuff!
-      break;
-    case BT_GATT_CCC_INDICATE: 
-      // Start sending stuff via indications
-      break;
 
-    case 0: 
-      // Stop sending stuff
-      break;
-        
-    default: 
-      printk("Error, CCCD has been set to an invalid value");     
-  }
-}
-                        
-
-
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-void enmo_send(struct bt_conn* conn, uint8_t* data, uint8_t len){
-
-
-  
-  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
-  const struct bt_gatt_attr *attr = &update_service.attrs[2];
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(conn, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-
-}
-
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-void enmo_threshold_send(uint8_t* data, uint8_t len){
-
-  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
-  const struct bt_gatt_attr *attr = &update_service.attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(my_connection, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-
-}
-
-
-int status_reg_ble_notification(){
-
-  for (int x = 0; x < num_of_status_registers; x++){
-    ble_status_register_send[x] = *status_registers[x];
-  }
-  const struct bt_gatt_attr *attr = &status_service.attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending status reg...");
-    int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-}
-
-int storage_ble_notification(uint8_t* data, uint8_t len){
-  // if there is no notification, then we technically have an error.
-  int ret = -1;
-  const struct bt_gatt_attr *attr = &status_service.attrs[2];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(my_connection, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  }
-  return ret; 
-}
-
-
-int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
-
-  int ret = 0;
-  
-  const struct bt_gatt_service_static* selected_service;
-  switch (service){
-    case 0:
-      selected_service = &tfMicro_service;
-
-  }
-  const struct bt_gatt_attr *attr; //= selected_service->attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    ret = bt_gatt_notify(my_connection, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  }
-  return ret; 
-}
-
-
-
-void motion_notify(struct k_work *item){
-  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
-        
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
-  printk("%i", packetLength);
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #else
-  
-  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
-  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #endif
-
-}
-
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-
-
-void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  
-  const struct bt_gatt_attr *attr = &data_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_ACC_GYRO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-
-    //printk("attr Counts = %d,selected = %d,handle=%d\n",tfMicro_service.attr_count,BLE_ATTR_ACC_CHARACTERISTIC,attr->handle);
-    
-  // Check whether notifications are enabled or not
-
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    
-    if(bt_gatt_notify_cb(conn, &params)){
-            printk("Error, unable to send notification\n");
-    }
-    
-  }
-  else{
-      //  printk("Warning, notification not enabled on the selected attribute\n");
-  }
-
-}
-
-
-void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_PPG_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-  
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            LOG_WRN("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-void magnetometer_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_MAGNETO_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_MAGNETO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            //printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-void orientation_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &tfMicro_service.attrs[BLE_ATTR_ORIENTATION_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_ORIENTATION_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            //printk("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-void tfMicro_notify(struct k_work *item){
-  struct bleDataPacket* the_device =  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
-  
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  tfMicro_service_send(my_connection, the_device->dataPacket, TFMICRO_DATA_LEN);
-}
-
-
-
-void magneto_notify(struct k_work *item){
-  struct magnetoInfo* the_device=  ((struct magnetoInfo *)(((char *)(item)) - offsetof(struct magnetoInfo, work)));
-  
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  magnetometer_send(my_connection, the_device->dataPacket, MAGNETOMETER_DATA_LEN);
-}
-void orientation_notify(struct k_work *item){
-  struct orientationInfo* the_device=  ((struct orientationInfo *)(((char *)(item)) - offsetof(struct orientationInfo, work)));
-  
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  orientation_send(my_connection, the_device->dataPacket, ORIENTATION_DATA_LEN);
-}
-
-
-void ppgData_notify(struct k_work *item){
-  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
-  
-  uint8_t *dataPacket = the_device->dataPacket;
-  uint8_t packetLength = the_device->packetLength;
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
-}
-
-#endif
 
 
 
-static ssize_t configSet(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,CONFIG_RX_DATA_LEN);
-}
-static ssize_t read_ppg_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,PPGQUALITY_DATA_LEN);
-}
-static ssize_t read_acc_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,ACCQUALITY_DATA_LEN);
-}
+#endif

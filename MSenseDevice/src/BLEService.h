@@ -3,11 +3,12 @@
 #include <zephyr/types.h>
 #include <sys/types.h>
 #include "common.h"
+#include <zephyr/bluetooth/bluetooth.h>
 
 
 extern uint8_t gyro_first_read;
  
-extern uint8_t ppgRead;
+extern uint8_t ppg_read;
 
 
 extern bool connectedFlag;
@@ -23,8 +24,6 @@ extern bool battery_charging;
 #define PPG_DATA_LEN 18
 #define PPG_DATA_UNFILTER_LEN 12
 #define ACC_GYRO_DATA_LEN 20
-#define MAGNETOMETER_DATA_LEN 8
-#define ORIENTATION_DATA_LEN 18
 #define ENMO_DATA_LEN 8
 #define CONFIG_RX_DATA_LEN 6
 #define PPGQUALITY_DATA_LEN 4
@@ -82,10 +81,7 @@ extern bool battery_charging;
 // Configuration characteristic UUID
 #define RX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x21, 0xC9, 0x39, 0xDA       
-
-// TF micro PPG HR characteristic UUID
-#define TF_HR_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x22, 0xC9, 0x39, 0xDA       
+    
 	
 // PPG data characteristic UUID
 #define PPG_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
@@ -95,19 +91,10 @@ extern bool battery_charging;
 #define ACC_GRYO_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x24, 0xC9, 0x39, 0xDA   
 
-// Magnetometer data characteristic UUID
-#define MAGNETO_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x25, 0xC9, 0x39, 0xDA   
-
-// Orientation data characteristic UUID
-#define ORIENTATION_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x26, 0xC9, 0x39, 0xDA  
    
 // PPG Singal quality descriptor characteristic UUID
 #define PPG_QUALITY_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x27, 0xC9, 0x39, 0xDA   
-
-
 
 
 // Acc Singal quality descriptor characteristic UUID
@@ -150,9 +137,7 @@ extern bool battery_charging;
 #define NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x52, 0xC9, 0x39, 0xDA
 
-extern uint8_t configRead[6];
-extern uint8_t ppgQuality[4];
-extern uint8_t accQuality[4];
+
 
 /** @brief Callback type for when new data is received. */
 typedef void (*data_rx_cb_t)(uint8_t *data, uint8_t length);
@@ -170,7 +155,6 @@ extern struct bleDataPacket my_motionData;
 void connected(struct bt_conn *conn, uint8_t err);
 void disconnected(struct bt_conn *conn, uint8_t reason);
 
-void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param);
 
 
 

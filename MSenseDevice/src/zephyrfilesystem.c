@@ -446,7 +446,8 @@ int write_to_file(const void* data, size_t size){
 			ID = current_time;
 
 		}
-		itoa(ID, IDString,  10);
+		sprintf(IDString, "%d", ID);
+		//itoa(ID, IDString,  10);
 
 		
 
@@ -880,7 +881,8 @@ int get_storage_percent_full(){
 int test_desk_driver(){
 	uint8_t write_buf[4096] = {1};
 	uint8_t read_buf[4096];
-	const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
+	// you can do:
+	//const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
 	// OR
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
 	spi_nand_page_write(filesystem_device2, 63, write_buf, sizeof(read_buf));

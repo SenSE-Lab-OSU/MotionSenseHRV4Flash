@@ -5,8 +5,7 @@
 #define ble_ppg_noFilter_byteLength 12
 #define ble_ppg_Filter_byteLength 18
 #define ble_motionPktLength 20
-#define ble_magnetometerPktLength 8
-#define ble_orientationPktLength 18
+
 extern uint32_t timeWindow;
 
 
@@ -29,8 +28,7 @@ extern uint8_t movingFlag;
 extern uint8_t blePktPPG_noFilter[ble_ppg_noFilter_byteLength];
 extern uint8_t blePktPPG_Filter[ble_ppg_Filter_byteLength];
 extern uint8_t blePktMotion[ble_motionPktLength];
-extern uint8_t blePktMagneto[ble_magnetometerPktLength];
-extern uint8_t blePktOrientation[ble_orientationPktLength];
+
 
 
 #endif

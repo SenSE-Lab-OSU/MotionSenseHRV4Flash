@@ -20,7 +20,6 @@ struct ppg_configData ppgConfig = {
     .sample_avg = PPG_FIXED_SAMPLE_AVG,
     .green_intensity = 0x30,
     .infraRed_intensity = 0x12,
-
     .sampling_time = 0x28,
     .numCounts = PPG_FIXED_NUM_COUNTS,
     .txPacketEnable = false,
@@ -49,7 +48,6 @@ struct ppgData ppgData1;
 
 uint32_t timeWindow = PPG_FIXED_TIME_WINDOW;
 
-float32_t std_ppgThreshold_lower = 120;
 
 uint8_t low_ch1 = 0, up_ch1 = 0x3f;
 uint8_t low_ch2 = 0, up_ch2 = 0xff;
@@ -71,7 +69,7 @@ uint32_t chLED_target = 300000;
 uint8_t ppg_brightness_check_counter = 0;
 float32_t std_ppgThreshold = 150;
 
-// #endif // #ifdef MOTIONSENSE_MAGNETO
+
 uint8_t adaptIterMax = 30;
 uint8_t binarySteps = 0;
 
@@ -532,11 +530,6 @@ void ppg_led_update(void)
         }
       }
       }
-      if (adapt_counterCh2 == adaptIterMax && adapt_counterCh2 == adaptIterMax)
-      {
-
-        uint32_t brightness_setting = (ppgConfig.green_intensity) << 8 + ppgConfig.infraRed_intensity;
-      }
     }
   }
 }
@@ -578,8 +571,7 @@ void read_ppg_fifo_buffer(struct k_work *item)
 {
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
-  uint16_t pktCounter = the_device->pktCounter;
-  bool movingFlag = the_device->movingFlag;
+  
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t read_array[128 * 2 * 2 * 3] = {0};
   uint8_t txLen, rxLen;

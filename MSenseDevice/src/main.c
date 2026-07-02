@@ -36,12 +36,12 @@ LOG_MODULE_REGISTER(main);
 #define SLEEP_TIME_MS 6000
 
 /* The devicetree node identifier for the "led0" alias. */
-#define LED0_NODE DT_ALIAS(led0)
+#define LED_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 #define PPG_POWER_NODE DT_ALIAS(led2) 
 
 // define our red and green leds
-#define LED_PIN DT_GPIO_PIN(LED0_NODE, gpios)
+#define LED_PIN DT_GPIO_PIN(LED_NODE, gpios)
 #define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
 
 #define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
@@ -122,10 +122,6 @@ const struct device *i2c_dev;
 
 
 
-struct accel_config accelConfig;
-struct gyro_config gyroConfig;
-
-
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -142,7 +138,6 @@ struct gyro_config gyroConfig;
 #define DIS_MODEL CONFIG_BT_DIS_MODEL
 #define DIS_MODEL_LEN (sizeof(DIS_MODEL))
 
-#define RUN_STATUS_LED DK_LED1
 
 static K_SEM_DEFINE(ble_init_ok, 0, 1);
 
@@ -169,18 +164,20 @@ SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
 static int settings_runtime_load(void)
 {
 
-/*#ifdef CONFIG_BOOTLOADER_MCUBOOT
+/*
   settings_runtime_set("bt/dis/model",
                        DIS_MODEL, DIS_MODEL_LEN);
   settings_runtime_set("bt/dis/manuf",
                        DIS_MANUF, DIS_MANUF_LEN);
-  settings_runtime_set("bt/dis/fw",
-                       DIS_FW_REV_STR, DIS_FW_REV_STR_LEN);
-  settings_runtime_set("bt/dis/hw",
-                       DIS_HW_REV_STR, DIS_HW_REV_STR_LEN);
-#endif
 */
   return 0;
+}
+
+
+void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
+    
+  LOG_INF("USB Status: %d", status);
+
 }
 
 void write_uuid_file(){
@@ -243,7 +240,6 @@ static void bt_ready(int err)
     settings_load();
   #endif
 
-  //settings_runtime_load();
 
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
@@ -296,7 +292,7 @@ static void bt_ready(int err)
 static void ble_init(void)
 {
   int err;
-  //bt_uuid_create()
+
   
   err = bt_enable(bt_ready);
   if (err)
@@ -324,8 +320,9 @@ static void spi_init(void)
   const char *const spiName_imu = "spi@9000";
   const char *const spiName_ppg = "spi@c000";
 
-  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); // device_get_binding(spiName_imu);
+  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); 
   spi_dev_ppg = DEVICE_DT_GET(DT_NODELABEL(spi3));
+  // device_get_binding(spiName_imu);
   //spi_dev_ppg = device_get_binding(spiName_ppg);
 
   if (!device_is_ready(gpio0_device))
@@ -357,24 +354,7 @@ static void spi_init(void)
   
   spi_cfg_imu.cs = imu_cs;
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
-
   
-  accelConfig.isEnabled = true;
-  accelConfig.txPacketEnable = true;
-  accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
-  accelConfig.sensitivity = ACCEL_FS_SEL_4g;
-
-  gyroConfig.isEnabled = true;
-  gyroConfig.txPacketEnable = true;
-  gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
-  gyroConfig.sensitivity = GYRO_FS_SEL_500;
-
-  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE;
-  configRead[1] = IMU_ENABLE | PPG_ENABLE;
-  configRead[2] = ppgConfig.green_intensity;
-  configRead[3] = ppgConfig.infraRed_intensity;
-  configRead[4] = 0x12;
-  configRead[5] = PPG_FIXED_256HZ_STATUS | MOTION_FIXED_32HZ_STATUS;
 }
 
 void spi_verify_sensor_ids()
@@ -389,8 +369,8 @@ void spi_verify_sensor_ids()
     LOG_WRN("IMU not ready, setup avoided");
   }
   
- 
   k_sleep(K_SECONDS(1));
+
   if (device_is_ready(spi_dev_ppg))
   {
     read_ppg_chip_id();
@@ -434,7 +414,7 @@ void battery_maintenance()
     if (!battery_low){
       battery_low = true;
       LOG_WRN("battery low, turning off file logs and data collection.");
-      LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15%)");
+      LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15 percent)");
       if (!collecting_data){
         reset_log_file();
       }

@@ -22,10 +22,26 @@ int log_counter = 0;
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
-uint8_t blePktMagneto[ble_magnetometerPktLength];
+
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
 struct bleDataPacket my_motionData;
+
+
+struct accel_config accelConfig = {
+  .isEnabled = true, 
+  .txPacketEnable = true,
+  .sample_bw = IMU_FIXED_ACCEL_DLPFCFG,
+  .sensitivity = ACCEL_FS_SEL_4g
+};
+
+struct gyro_config gyroConfig = {
+  .isEnabled = true,
+  .txPacketEnable = true,
+  .tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR,
+  .sensitivity = GYRO_FS_SEL_500
+};
+
 
 struct accData currentAccData;
 struct gyroData current_gyro_data;
@@ -34,15 +50,8 @@ struct bleDataPacket enmoThreshold;
 // Magnometer variables
  
 
-uint8_t burst_tx_magneto[17];	
-
-#if MAGNETOMETER_DATA_PATH_ENABLED
-#define IMU_USER_CTRL_VALUE (I2C_MST_EN | I2C_IF_DIS)
-#define IMU_LP_CONFIG_VALUE I2C_MST_CYCLE
-#else
 #define IMU_USER_CTRL_VALUE I2C_IF_DIS
 #define IMU_LP_CONFIG_VALUE 0x00
-#endif
 
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, 
 uint8_t * rx_buffer, uint8_t rxLen){
@@ -128,8 +137,6 @@ static void gyroscope_measurement(float * quaternionResult){
   angularVelY = (float)dataReadGyroY*dividerGyro;
   angularVelZ = (float)dataReadGyroZ*dividerGyro;
   
-  //printf("angX = %f,angy = %f,angz = %f,counterGyro=%d\n",
-   // angularVelX,angularVelY,angularVelZ,counterGyro);
 				
   arm_sqrt_f32(angularVelX*angularVelX+angularVelY*angularVelY+
     angularVelZ*angularVelZ,&newMagGyro);
@@ -382,10 +389,6 @@ void motion_data_timeout_handler(struct k_work *item)
 {
   struct motionInfo *the_device = ((struct motionInfo *)(((char *)(item)) - offsetof(struct motionInfo, work)));
   uint16_t pktCounter = the_device->pktCounter;
-  
-
-  
-  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL}; // SPI burst read holders.
   
   uint8_t burst_tx[13] = {
       READMASTER | ACCEL_XOUT_H, SPI_FILL,

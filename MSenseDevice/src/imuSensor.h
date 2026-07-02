@@ -114,7 +114,6 @@ extern struct spi_config spi_cfg_imu;
 struct motionInfo {
   struct k_work work;
   uint16_t pktCounter;
-  uint8_t magneto_first_read;
   uint8_t gyro_first_read;
 }; 
 
@@ -189,5 +188,8 @@ void motion_data_timeout_handler(struct k_work *);
 void motionSensitivitySampling_config(void);
 
 void motion_sleep(void);
+
+void calculate_enmo(float accelX, float accelY, float accelZ);
+void enmo_threshold_evaluation(float enmo_number);
 
 #endif

@@ -461,7 +461,8 @@ static int disk_sdmmc_init(const struct device *dev)
 	//data->status = SD_UNINIT;
 
 	//spi_nor_data* nand_data = dev->data;
-	LOG_INF("Init disk regist"); 
+	LOG_INF("Init disk regist IGNORED");
+	return 0;
 
 	sdmmc_disk.dev = dev;
 	sdmmc_disk.name = "SD";//dev->name;

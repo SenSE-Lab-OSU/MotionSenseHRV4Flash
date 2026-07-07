@@ -15,14 +15,14 @@ LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_IMU_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
-float enmo_store[32];
-uint16_t testcounter = 0;
+
 int log_counter = 0;
 
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
 
+#define ble_motionPktLength 20
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
 struct bleDataPacket my_motionData;
@@ -237,24 +237,28 @@ static void prepare_gyros(float* quaternionResult){
   current_gyro_data.quaternion_4_val = quaternionResult[3];
 }
 
-
+float enmo_store[32];
 // our global variables needed for enmo calculation
 #define enmo_samples_size 600
 float second_enmo_arr[enmo_samples_size] = {0.0};
+
+
 uint32_t enmo_sample_counter = 0;
 // samples since the last activated trigger
 uint32_t last_activated_trigger_counter = 0;
 
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9] = {0};
+#define ENMO_UPDATE_RATE 2
+float n_second_enmo = 0;
+const int enmo_update_rate = ENMO_UPDATE_RATE;
+float update_enmo_arr[ENMO_UPDATE_RATE] = {0.0};
 
-float fifteen_second_enmo = 0;
-const int enmo_update_rate = 2;
 #define ENMO_PACKET_ENMO_OFFSET 0U
-#define ENMO_PACKET_COUNTER_OFFSET (sizeof(fifteen_second_enmo))
+#define ENMO_PACKET_COUNTER_OFFSET (sizeof(n_second_enmo))
 uint8_t enmo_packet[ENMO_DATA_LEN];
 BUILD_ASSERT(sizeof(enmo_packet) == 8, "ENMO packet must be 8 bytes");
-BUILD_ASSERT(sizeof(enmo_packet) == (sizeof(fifteen_second_enmo) + sizeof(global_counter)),
+BUILD_ASSERT(sizeof(enmo_packet) == (sizeof(n_second_enmo) + sizeof(global_counter)),
   "ENMO packet layout must fit float ENMO plus promoted global_counter");
 /**@brief Function for calculating and sending the enmo when necessary.
  *
@@ -289,37 +293,33 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       currentAccData.ENMO = enmo;
       // floats are cast to double in print calls
       LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
-      LOG_INF("Enmo: %f", (double)enmo*1000);
+      LOG_DBG("Enmo: %f", (double)enmo*1000);
       //currentAccData.time = get_current_unix_time();
-       
-      
-      // Testing: Make Enmo a random counter that increments instead.
-      testcounter++;
-      //accData1.ENMO = testcounter;
 
-
-
+      update_enmo_arr[enmo_sample_counter % enmo_update_rate] = enmo;
+      // this function will increment enmo_sample_counter
       enmo_threshold_evaluation(enmo);
-      // Submit our data to the bluetooth work thread.
+      
 
       int enmo_modulo = enmo_sample_counter % enmo_update_rate; 
 
-      if (enmo_modulo == 0 && enmo_sample_counter >= enmo_update_rate){
+      if (enmo_modulo == 0){
       
-      // compute the 15 second summary
-      fifteen_second_enmo = 0;
-      for (int x = enmo_sample_counter - enmo_update_rate; x < enmo_sample_counter; x++){
-        fifteen_second_enmo += second_enmo_arr[x];
+      // compute the n second summary (n is defined as enmo_update_rate)
+      n_second_enmo = 0;
+      for (int x = 0; x < enmo_update_rate; x++){
+        n_second_enmo += update_enmo_arr[x];
       }
-      fifteen_second_enmo /= enmo_update_rate;
+      n_second_enmo /= enmo_update_rate;
 
-      memcpy(&enmo_packet[ENMO_PACKET_ENMO_OFFSET], &fifteen_second_enmo,
-        sizeof(fifteen_second_enmo));
+      memcpy(&enmo_packet[ENMO_PACKET_ENMO_OFFSET], &n_second_enmo,
+        sizeof(n_second_enmo));
       memcpy(&enmo_packet[ENMO_PACKET_COUNTER_OFFSET], &global_counter,
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
       LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
+      // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
       }
     }
@@ -468,13 +468,6 @@ void motion_data_timeout_handler(struct k_work *item)
 
     // Seed the next accumulation window after storing the previous one.
     gyroscope_measurement(quaternionResult_1);
-    // blePktMotion[6] = ((uint16_t)dataReadGyroX >> 8) & 0xFF;
-
-    // blePktMotion[7] = (uint16_t)dataReadGyroX & 0xFF;
-    // blePktMotion[8] = ((uint16_t)dataReadGyroY >> 8) & 0xFF;
-    // blePktMotion[9] = (uint16_t)dataReadGyroY & 0xFF;
-    // blePktMotion[10] = ((uint16_t)dataReadGyroZ >> 8) & 0xFF;
-    // blePktMotion[11] = (uint16_t)dataReadGyroZ & 0xFF;
 
     // TODO: If needed, store enmo as well through memcpy-> currentAccData.ENMO,
     // int16_t accel_and_gyro[9] = {dataReadAccX, dataReadAccY, dataReadAccZ, dataReadGyroX, dataReadGyroY, dataReadGyroZ, global_counter};
@@ -499,23 +492,17 @@ void motion_data_timeout_handler(struct k_work *item)
     memcpy(&accel_and_gyro[11], &global_tick_512hz, sizeof(global_tick_512hz));
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
+  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 
-    
     // this function seperately fills blePktMotion with the desired size
-    // TODO: Make sure packets are in correct size/order
-
     for (int i = 0; i < 6; i++){
       blePktMotion[i] = burst_rx[i + 1];
     }
 
-
-    blePktMotion[18] = blePktMotion[18] | ((pktCounter >> 8) & 0x03);
-
     // collect packet counter
-    // blePktMotion[18] = (pktCounter&) >> 14;
+    blePktMotion[18] = blePktMotion[18] | ((pktCounter >> 8) & 0x03);
     blePktMotion[19] = ((pktCounter) & 0xFF);
 
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     my_motionData.dataPacket = blePktMotion;
     my_motionData.packetLength = ACC_GYRO_DATA_LEN;
     if (accelConfig.txPacketEnable == true)
@@ -525,7 +512,7 @@ void motion_data_timeout_handler(struct k_work *item)
         k_work_submit(&my_motionData.work);
       }
     }
-#endif
+  #endif
   }
   else
   {

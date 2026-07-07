@@ -123,6 +123,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 / {
 	aliases {
 		customspi = &spi1;
+		ecg = &max30001;
 		spi-flash0 = &mt29;
 		spi-flash1 = &mx25u80;
 	};
@@ -192,9 +193,18 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&ppg_default>;
-	pinctrl-1 = <&ppg_sleep>;
+	pinctrl-0 = <&max30001_default>;
+	pinctrl-1 = <&max30001_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	max30001: max30001@0 {
+		compatible = "maxim,max30001";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		intb-gpios = <&gpio0 21 GPIO_ACTIVE_LOW>;
+		intb2-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
 };
 //External Flash, MX25 NOR
 
@@ -224,8 +234,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
 	// You will also need to set these pins in the spi_nand.c too
-	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>,
-		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>;
 
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
@@ -233,7 +242,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		// 4294901760 bytes is aproximately 4 GB. Updated from 2147450880 bytes (1.99 GB)
 		size = <4294901760>;
 		individual-size = <1073725440>;
-		num-flashchips = <4>;
+		num-flashchips = <2>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];
@@ -290,15 +299,15 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		};
 	};
 
-	//spi 4, ppg sensor
-	ppg_default: ppg_default {
+	//spi 3, MAX30001 ECG AFE
+	max30001_default: max30001_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
 				<NRF_PSEL(SPIM_SCK, 1, 8)>;
 		};
 	};
 
-	ppg_sleep: ppg_sleep {
+	max30001_sleep: max30001_sleep {
 		group1 {
 			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
 				<NRF_PSEL(SPIM_SCK, 1, 8)>;

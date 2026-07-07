@@ -463,21 +463,19 @@ int main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
   
-  usb_enable(usb_status_cb);
-  
 
   // Setup our Flash Filesystem
-  // setup_disk();
-  // k_sleep(K_SECONDS(1));
-  // #ifdef CONFIG_DEBUG  
-  // #if CONFIG_DISK_DRIVER_RAW_NAND
-  //   set_read_only(true);
-  // #endif
-  // #endif
+  setup_disk();
+  k_sleep(K_SECONDS(1));
+  #ifdef CONFIG_DEBUG
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
+  #endif
 
-  // #ifdef CONFIG_MSENSE_USB_SECURITY
-  //   security_lock = true;
-  // #endif
+  #ifdef CONFIG_MSENSE_USB_SECURITY
+    security_lock = true;
+  #endif
 
 
   k_sleep(K_SECONDS(2));
@@ -550,13 +548,12 @@ int main(void)
   
   //get_storage_percent_full();
   
-  
   // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
-  k_msleep(10*1000); // Wait 10 seconds for setup.
-  
+  usb_enable(usb_status_cb);
+
   while (1)
   {
     

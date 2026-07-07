@@ -148,6 +148,10 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	cdc_acm_uart0: cdc_acm_uart0 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
+
+	cdc_acm_uart1: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
 };
 
 &spi2 {

@@ -118,4 +118,8 @@ config LOG_LEVEL_PPG_COLLECTION
 	int "level at which data from ppg is printed in logs"
 	default 3
 
+config LOG_LEVEL_MAX30001
+	int "level at which data from MAX30001 is printed in logs"
+	default 3
+
 source "Kconfig.zephyr"

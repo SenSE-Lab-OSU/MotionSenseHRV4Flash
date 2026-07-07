@@ -20,12 +20,11 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
+#include "drivers/ecg/max30001.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
-
-
 
 
 LOG_MODULE_REGISTER(main);
@@ -511,6 +510,10 @@ int main(void)
   //ppg_sleep();
   //motion_sleep();
 
+  // ECG STUFF
+  max30001_probe(NULL);
+  // END ECG STUFF
+
   /*struct k_work_queue_config cfg = {
     .name = "my_custom_workq",
     .no_yield = false
@@ -554,7 +557,7 @@ int main(void)
   while (1)
   {
     
-    printk("%d %d\n", connectedFlag, collecting_data);
+    //printk("%d %d\n", connectedFlag, collecting_data);
 
     global_update++;
     if (global_update >= 100){

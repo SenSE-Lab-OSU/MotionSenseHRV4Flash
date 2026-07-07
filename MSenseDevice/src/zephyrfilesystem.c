@@ -480,18 +480,18 @@ int write_to_file(const void* data, size_t size){
 }
 
 
-
+int64_t file_system_timer;
 
 void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
 	LOG_INF("Processing packet %i", container->packet_num);
-	start_timer();
+	start_timer(&file_system_timer);
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
-	int64_t time_value = stop_timer();
+	int64_t time_value = stop_timer(&file_system_timer);
 	LOG_INF("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
@@ -947,14 +947,30 @@ DWORD get_fattime(void)
 
 int64_t start_time;
 
-void start_timer(){
-	start_time = k_uptime_get();
+void start_timer(int64_t* start_time_ref){
+	if (start_time_ref != NULL){
+		if (*start_time_ref != 0){
+			LOG_WRN("timer was executed again before it could finish!");
+		}
+		*start_time_ref = k_uptime_get();
+	}
+	else{
+		start_time = k_uptime_get();
+	}
 }
 
 
-int64_t stop_timer(){
-	int64_t length = k_uptime_get() - start_time;
-	start_time = 0;
-	LOG_INF("Timer Value: %lli ms", length);
+int64_t stop_timer(int64_t* start_time_ref){
+	int64_t length;
+	if (start_time_ref != NULL){
+		length = k_uptime_get() - *start_time_ref;
+		*start_time_ref = 0;
+		LOG_INF("Timer Value: %lli ms", length);
+	}
+	else{
+		length = k_uptime_get() - start_time;
+		start_time = 0;
+		LOG_INF("Timer Value: %lli ms", length);
+	}
 	return length;
 }

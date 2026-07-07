@@ -20,7 +20,7 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
-#include "drivers/ecg/max30001.h"
+#include "ecgStream.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -510,9 +510,11 @@ int main(void)
   //ppg_sleep();
   //motion_sleep();
 
-  // ECG STUFF
-  max30001_probe(NULL);
-  // END ECG STUFF
+  ret = ecg_stream_start();
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to start ECG stream: %d", ret);
+  }
 
   /*struct k_work_queue_config cfg = {
     .name = "my_custom_workq",
@@ -553,6 +555,7 @@ int main(void)
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
+  k_msleep(10*1000); // Wait 10 seconds for setup.
   
   while (1)
   {

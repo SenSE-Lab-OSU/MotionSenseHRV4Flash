@@ -63,9 +63,9 @@ uint64_t get_current_unix_time();
 
 void set_date_time_bt(uint64_t value);
 
-void start_timer();
+void start_timer(int64_t* start_time_ref);
 
-int64_t stop_timer();
+int64_t stop_timer(int64_t* start_time_ref);
 
 void enable_read_only(bool enable);
 

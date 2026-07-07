@@ -11,7 +11,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h> // screw you zephyr 
-#include "batteryMonitor.h"
+#include "batterymonitordt.h"
 #include "BLEService.h"
 
 int battery_level = 100;

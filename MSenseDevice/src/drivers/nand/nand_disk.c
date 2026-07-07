@@ -21,7 +21,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 4);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -326,6 +326,10 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	}
 	else{
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
+	// we fake that we wrote so the the USB mass system does not complain.
+	if (disabled_usb_write){
+		return 0;
+	}
 	return -1;
 	}
 }

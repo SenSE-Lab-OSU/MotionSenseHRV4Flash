@@ -1,4 +1,10 @@
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <zephyr/kernel.h>
+
 extern bool reset_lock;
 
 extern bool file_system_ready;
@@ -8,8 +14,8 @@ extern bool panic_single_thread;
 
 extern bool file_system_ready;
 
-enum sensor_type {ppg, 
-accelorometer, passthrough, customlog};
+enum sensor_type {ppg,
+accelorometer, ecg, passthrough, customlog};
 
 typedef struct memory_container {
 	const void* address;
@@ -81,5 +87,5 @@ extern uint64_t set_date_time;
 
 extern memory_container ppg_work_item;
 extern memory_container accel_work_item;
+extern memory_container ecg_work_item;
 extern memory_container log_work_item;
-

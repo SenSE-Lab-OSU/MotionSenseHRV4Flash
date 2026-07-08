@@ -6,6 +6,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/random/random.h>
 #include <time.h>
+#include <stdio.h>
 
 
 #include <stdlib.h>
@@ -57,6 +58,8 @@ struct k_work_q my_work_q;
 memory_container ppg_work_item;
 
 memory_container accel_work_item;
+
+memory_container ecg_work_item;
 
 memory_container log_work_item;
 
@@ -144,6 +147,13 @@ MotionSenseFile accel_file = {
 	.sensor_format = "3 int16 accel, 3 float32 quaternion, second avg float32 enmo, uint32 global_tick_512hz"
 };
 
+/* store_data checks one sample ahead; this flushes 8184-byte ECG chunks. */
+MotionSenseFile ecg_file = {
+	.write_size = 8196,
+	.sensor_string = "ecg",
+	.sensor_format = "12-byte MAX30001 ECG frames: A5 EC type flags seq_le raw24 crc8"
+};
+
 MotionSenseFile log_file = {
 	.write_size = 8192,
 	.sensor_string = "log",
@@ -170,6 +180,7 @@ const char* sensor_enum_to_string(enum sensor_type sensor) {
     switch (sensor) {
         case ppg:    return "ppg";
         case accelorometer:  return "acc";
+        case ecg: return "ecg";
         case customlog: return "log";
         default:           return "undefined";
     }
@@ -218,7 +229,7 @@ void create_test_file(int writes){
 	//ID = sys_rand32_get() % 90000;
 	ID = total_test_files;
 	
-	itoa(ID, IDString,  10);
+	snprintf(IDString, sizeof(IDString), "%d", ID);
 
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
@@ -315,6 +326,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
 	}
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
+	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
 	}
@@ -352,14 +366,13 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 
 		}
 		sprintf(IDString, "%llu", ID);
-		//itoa(ID, IDString,  10);
 		
 
 		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
 		strcat(MSenseFile->file_name, mp->mnt_point);
 		strcat(MSenseFile->file_name, "/");
 		if (patient_num != 0){
-			itoa(patient_num, patient_id, 10);
+			snprintf(patient_id, sizeof(patient_id), "%d", patient_num);
 			strcat(MSenseFile->file_name, patient_id);	
 		}
 		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
@@ -447,7 +460,6 @@ int write_to_file(const void* data, size_t size){
 
 		}
 		sprintf(IDString, "%d", ID);
-		//itoa(ID, IDString,  10);
 
 		
 
@@ -514,6 +526,9 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	else if (type == accelorometer){
 		work_item = &accel_work_item;
 	}
+	else if (type == ecg){
+		work_item = &ecg_work_item;
+	}
 	else if (type == customlog){
 		work_item = &log_work_item;
 	}
@@ -559,6 +574,9 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
@@ -614,6 +632,9 @@ void flush_data_buffer(enum sensor_type sensor){
 	}
 	else if (sensor == accelorometer){
 		MSenseFile = &accel_file;
+	}
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
@@ -681,6 +702,8 @@ int write_ble_uuid(char* uuid){
 
 		strcat(uuid, "\n accel format: ");
   		strcat(uuid, accel_file.sensor_format);
+		strcat(uuid, "\n ecg format: ");
+		strcat(uuid, ecg_file.sensor_format);
 		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
 		//res = f_expand(name_file.filep, 4096 * 4, 1);
 		res = fs_write(&name_file, uuid, strlen(uuid));
@@ -700,6 +723,7 @@ int close_all_files(){
 	
 	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
+	reset_sensor_file(&ecg_file);
 	reset_sensor_file(&log_file);
 	return 0;
 

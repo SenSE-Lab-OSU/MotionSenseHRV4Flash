@@ -88,7 +88,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 
 &button0 {
 	status = "okay";
-	gpios = <&gpio0 1 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+	gpios = <&gpio0 1 (GPIO_ACTIVE_LOW)>;
 	label = "User button";
 };
 
@@ -148,10 +148,6 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 
 &zephyr_udc0 {
 	cdc_acm_uart0: cdc_acm_uart0 {
-		compatible = "zephyr,cdc-acm-uart";
-	};
-
-	cdc_acm_uart1: cdc_acm_uart1 {
 		compatible = "zephyr,cdc-acm-uart";
 	};
 };

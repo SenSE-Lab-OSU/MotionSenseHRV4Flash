@@ -4,6 +4,7 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
 
@@ -538,6 +539,7 @@ uint16_t offset, uint8_t flags){
 
 //function from main
 void storage_clear_led();
+void blink_led(gpio_pin_t pin);
 
 
 
@@ -718,7 +720,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           //bt_enable(bt_ready);
           #ifndef CONFIG_USB_ALWAYS_ON
           if (!security_lock){
-          usb_enable(usb_status_cb);
+          usb_enable(NULL);
           }
           #endif
           

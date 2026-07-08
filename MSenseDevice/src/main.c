@@ -31,7 +31,7 @@
 #include <zephyr/bluetooth/hci.h>
 
 
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
@@ -562,14 +562,14 @@ static void filesystem_workqueue_init(void)
   filesystem_workqueue_started = true;
 }
 
-static void enter_ecg_collection_mode(void)
+void enter_ecg_collection_mode(void)
 {
   int ret;
 
   LOG_INF("Entering ECG collection mode");
   blink_collection_mode_pattern();
 
-  ret = set_usb_mass_storage_enabled(false);
+  //ret = set_usb_mass_storage_enabled(false);
   if (ret != 0) {
     LOG_WRN("USB disable returned %d", ret);
   }
@@ -584,7 +584,7 @@ static void enter_ecg_collection_mode(void)
     #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
     #endif
-    (void)set_usb_mass_storage_enabled(true);
+    //(void)set_usb_mass_storage_enabled(true);
     return;
   }
 
@@ -592,7 +592,7 @@ static void enter_ecg_collection_mode(void)
   collecting_data = true;
 }
 
-static void exit_ecg_collection_mode(void)
+void exit_ecg_collection_mode(void)
 {
   int ret;
 
@@ -733,6 +733,9 @@ int main(void)
   // Setup our Flash Filesystem
   setup_disk();
   filesystem_workqueue_init();
+
+  k_work_init(&my_motionData.work, motion_notify);
+
   k_sleep(K_SECONDS(1));
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
@@ -778,7 +781,7 @@ int main(void)
   //ppg_sleep();
   //motion_sleep();
 
-  // ble_init();
+  ble_init();
 
   //get_storage_percent_full();
   

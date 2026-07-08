@@ -466,6 +466,8 @@ void start_stop_device_collection(uint8_t val){
 
 }
 
+void exit_ecg_collection_mode(void);
+void enter_ecg_collection_mode(void);
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -482,10 +484,12 @@ uint16_t offset, uint8_t flags){
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
   host_wants_collection = val;
-  if (!(battery_low && val)){
-
-    start_stop_device_collection(val);
-    
+  
+  if (collecting_data && !host_wants_collection) {
+    exit_ecg_collection_mode();
+  } 
+  else if(!collecting_data && host_wants_collection) {
+    enter_ecg_collection_mode();
   }
   return len;
 }

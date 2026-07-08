@@ -90,7 +90,7 @@ int current_flash = 0;
 // TODO: put these in device tree
 const int die_per_flash = 2;
 
-const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
+const gpio_pin_t cs_pins[] = {18, 4};
 
 static int spi_nor_write_protection_set(const struct device *dev,
 					bool write_protect);

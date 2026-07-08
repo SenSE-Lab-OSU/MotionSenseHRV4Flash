@@ -15,6 +15,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
+#include "BLEService.h"
 
 LOG_MODULE_REGISTER(ecg_recorder, CONFIG_LOG_LEVEL_MAX30001);
 
@@ -41,6 +42,13 @@ static atomic_t ecg_record_requested;
 static atomic_t ecg_record_active;
 static bool ecg_intb_callback_added;
 static uint32_t ecg_sequence;
+uint32_t ecg_total_samples = 0;
+uint32_t ecg_last_update_samples = 0;
+
+float random_bar;
+uint8_t ecg_packet[ENMO_DATA_LEN] = {0};
+#define ECG_COUNTER (sizeof(random_bar))
+
 
 static void ecg_record_thread(void *arg1, void *arg2, void *arg3);
 
@@ -146,6 +154,8 @@ static void ecg_record_process_samples(const struct max30001_ecg_sample *samples
 	}
 }
 
+
+
 static void ecg_record_drain_fifo(void)
 {
 	int ret;
@@ -163,8 +173,22 @@ static void ecg_record_drain_fifo(void)
 		if (count == 0) {
 			return;
 		}
-
+		
+		
+		
 		ecg_record_process_samples(samples, count);
+
+		ecg_total_samples += count;
+		ecg_last_update_samples += count;
+		if (ecg_last_update_samples >= 1024){
+			LOG_INF("count: %d", ecg_total_samples);
+			
+			memcpy(&ecg_packet[ECG_COUNTER], &ecg_total_samples, sizeof(ecg_total_samples));
+			my_motionData.dataPacket = ecg_packet;
+      		my_motionData.packetLength = sizeof(ecg_packet);
+			ecg_last_update_samples = 0;
+      		k_work_submit(&my_motionData.work);
+		}
 
 		if (count < ARRAY_SIZE(samples) || samples[count - 1].eof) {
 			return;

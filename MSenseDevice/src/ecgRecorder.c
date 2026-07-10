@@ -183,7 +183,7 @@ static void ecg_record_drain_fifo(void)
 		if (ecg_last_update_samples >= 1024){
 			LOG_INF("count: %d", ecg_total_samples);
 			
-			memcpy(&ecg_packet[ECG_COUNTER], &ecg_total_samples, sizeof(ecg_total_samples));
+			memcpy(&ecg_packet[4], &ecg_total_samples, sizeof(ecg_total_samples));
 			my_motionData.dataPacket = ecg_packet;
       		my_motionData.packetLength = sizeof(ecg_packet);
 			ecg_last_update_samples = 0;

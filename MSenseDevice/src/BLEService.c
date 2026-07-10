@@ -878,8 +878,8 @@ void motion_notify(struct k_work *item){
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
-  uint8_t *dataPacket = the_device->dataPacket;
-  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
+  //uint8_t *dataPacket = the_device->dataPacket;
+  //memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
 

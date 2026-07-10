@@ -229,6 +229,7 @@ static int disk_nand_access_status(struct disk_info *disk)
 static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	//k_sleep(K_MSEC(100));
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
 	const struct device *dev = disk->dev;	

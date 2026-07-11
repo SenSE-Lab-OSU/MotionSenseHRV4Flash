@@ -20,6 +20,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys_clock.h>
 #include <zephyr/pm/device.h>
+#include <zephyr/settings/settings.h>
 
 #include "spi_nand.h"
 #include "jesd216.h"
@@ -79,6 +80,7 @@ int current_erases = 0;
 
 int ECC_corrections = 0;
 int ECC_err = 0;
+
 
 // die select for each flash
 int current_die[4] = {0};
@@ -219,6 +221,15 @@ bool is_page_in_block(uint32_t page_number, uint32_t block_number){
 	uint32_t first_page = convert_block_to_page(0, block_number);
 	uint32_t difference = (page_number - first_page);
 	return difference >= 0 && difference < 64;
+}
+
+// inverse of convert_page_to_address: takes a die-local page address and, using the
+// currently selected flash and die, returns the global sector number across all 4 flashes.
+uint32_t convert_address_to_sector(off_t address){
+	// total number of sectors per die.
+	const int die_size = 131072;
+	int selected_die_num = (current_flash * die_per_flash) + current_die[current_flash];
+	return address + (die_size * selected_die_num);
 }
 
 
@@ -558,85 +569,171 @@ int spi_unlock_memory(const struct device* dev){
 
 // static bad block detection which attempts to figure out whether there were bad blocks set by the manufacturer via a bad block marking.
 int detect_manufacturer_bad_blocks(const struct device* dev){
-	int page_addr = 0;
+	const struct spi_flash_config *cfg = dev->config;
 	int bad_blocks = 0;
-	uint8_t dest;
-	off_t error_address = 4096;
-	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
-	for (int x = 0; x < total_device_size; x++){
-	page_addr = convert_block_to_singledie_address(x);
-	acquire_device(dev);
-	current_reads++;
-	//LOG_DBG("reading bytes at address %d", page_addr);
-	nrfx_err_t res = 0;
+	// bad-block mark is the first spare-area byte (byte 4096) of the first page of each block
+	const off_t mark_column = 4096;
+	int blocks_per_die = (dev_die_size(dev) / dev_page_size(dev)) / 64;
+	for (int flash = 0; flash < cfg->num_flashes; flash++)
+	{
+		set_flash(dev, flash);
+		LOG_INF("checking bb flash %d", flash);
+		for (int die = 0; die < die_per_flash; die++)
+		{
+			set_die(dev, die);
 
+			// the factory mark is written without valid ECC and the spare area is not
+			// reliably readable while on-die ECC is enabled, so disable ECC for the scan
+			uint8_t saved_config = get_features(dev, REGISTER_CONFIGURATION);
+			set_features(dev, REGISTER_CONFIGURATION, saved_config & ~0x10);
 
-	__ASSERT(data != NULL, "null destination");
+			for (int x = 0; x < blocks_per_die; x++)
+			{
+				off_t page_addr = convert_block_to_singledie_address(x);
+				acquire_device(dev);
+				current_reads++;
+				// LOG_DBG("reading bytes at address %d", page_addr);
+				nrfx_err_t res = 0;
+				uint8_t dest = 0xFF;
 
-	uint8_t addr_buf[] = {
-		page_addr >> 16,
-		page_addr >> 8,
-		page_addr,
-	};
-	
-	uint8_t buffer_address[] = {
-		error_address >> 16,
-		error_address >> 8,
-		error_address
-	};
+				uint8_t addr_buf[] = {
+					page_addr >> 16,
+					page_addr >> 8,
+					page_addr,
+				};
 
-	
-	spi_send_request pread_cinstr_cfg = {
-		.opcode = SPI_NAND_PAGE_READ,
-		.addr = addr_buf,
-		.addr_length = 3,
-	};
+				// READ FROM CACHE column field is 3 dummy bits + 13-bit column address,
+				// followed by 1 dummy byte
+				uint8_t buffer_address[] = {
+					(mark_column >> 8) & 0xFF,
+					mark_column & 0xFF,
+					0x00,
+				};
 
+				spi_send_request pread_cinstr_cfg = {
+					.opcode = SPI_NAND_PAGE_READ,
+					.addr = addr_buf,
+					.addr_length = 3,
+				};
 
-	spi_send_request cread_cinstr_cfg = {
-		.opcode = SPI_NOR_CMD_READ,
-		.addr = buffer_address,
-		.addr_length = 3,
-		.data = &dest,
-		.data_length = 1
-	};
+				spi_send_request cread_cinstr_cfg = {
+					.opcode = SPI_NOR_CMD_READ,
+					.addr = buffer_address,
+					.addr_length = 3,
+					.data = &dest,
+					.data_length = 1};
 
-	res = spi_nand_access(dev, &pread_cinstr_cfg);
-	if (res != 0) {
-		LOG_WRN("read transfer err: %x", res);
-		continue;
+				res = spi_nand_access(dev, &pread_cinstr_cfg);
+				if (res != 0)
+				{
+					LOG_WRN("read transfer err: %x", res);
+					release_device(dev);
+					continue;
+				}
+				spi_flash_wait_until_ready(dev);
+
+				res = spi_nand_access(dev, &cread_cinstr_cfg);
+				if (res != 0)
+				{
+					LOG_WRN("buff transfer err: %x", res);
+					release_device(dev);
+					continue;
+				}
+				spi_flash_wait_until_ready(dev);
+
+				release_device(dev);
+				// LOG_DBG("bad block value: %i", dest);
+				if (dest != 255)
+				{
+					bad_blocks++;
+					uint32_t actual_sector = convert_address_to_sector(page_addr);
+					register_bad_sector(actual_sector);
+					LOG_WRN("bad block mark %02x at flash %d die %d block %d", dest, flash, die, x);
+				}
+			}
+
+			set_features(dev, REGISTER_CONFIGURATION, saved_config);
+		}
+		set_die(dev, 0);
 	}
-	spi_flash_wait_until_ready(dev);
+	set_flash(dev, 0);
 
-	res = spi_nand_access(dev, &cread_cinstr_cfg);
-	if (res != 0) {
-		LOG_WRN("buff transfer err: %x", res);
-		continue;
-	}
-	spi_flash_wait_until_ready(dev);
-
-	uint8_t status = spi_rdsr(dev);
-	if (status != 0){
-	LOG_WRN("read with stat %i", status);
-	}
-	release_device(dev);
-	//LOG_DBG("bad block value: %i", dest);
-	if (dest != 255){
-		bad_blocks++;
-	}
-	}
 	LOG_INF("tot bad block: %d", bad_blocks);
-	if (bad_blocks > 0){
+	if (bad_blocks > 0)
+	{
 		LOG_WRN("bad block count > 0");
 	}
 	return bad_blocks;
 }
 
+// dynamic bad block detection for chips whose factory bad block marks have been erased.
+// Destructive: for every block it erases, writes a test pattern, reads it back, and
+// flags the block if the erase or program reports a failure (E_Fail/P_Fail) or the
+// readback returns uncorrectable ECC or mismatched data. Only run this on a flash
+// with no data on it (e.g. right after a full chip erase). The block is erased again
+// afterwards so the flash is left empty.
+static uint8_t dyn_bb_pattern[4096];
+static uint8_t dyn_bb_readback[4096];
+
+int dynamic_detect_bad_blocks(const struct device* dev){
+	int bad_blocks = 0;
+	int total_blocks = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
+
+	memset(dyn_bb_pattern, 0xA5, sizeof(dyn_bb_pattern));
+
+	LOG_INF("dynamic bad block scan start, %d blocks", total_blocks);
+	for (int block = 0; block < total_blocks; block++){
+		uint32_t first_page = convert_block_to_page(0, block);
+		// selects the right flash and die, and returns the die-local page address
+		off_t addr = convert_page_to_address(dev, first_page);
+		bool block_bad = false;
+
+		int status = spi_nand_block_erase(dev, addr);
+		if (status != 0){
+			LOG_WRN("dyn scan: erase fail stat %d block %d", status, block);
+			block_bad = true;
+		}
+
+		if (!block_bad){
+			status = spi_nand_page_write(dev, addr, dyn_bb_pattern, sizeof(dyn_bb_pattern));
+			if (status != 0){
+				LOG_WRN("dyn scan: program fail stat %d block %d", status, block);
+				block_bad = true;
+			}
+		}
+
+		if (!block_bad){
+			memset(dyn_bb_readback, 0, sizeof(dyn_bb_readback));
+			int ret = spi_nand_page_read(dev, addr, dyn_bb_readback);
+			if (ret == FLASH_TOO_MANY_ECC_ERROR){
+				LOG_WRN("dyn scan: uncorrectable ECC block %d", block);
+				block_bad = true;
+			}
+			else if (ret != 0 || memcmp(dyn_bb_pattern, dyn_bb_readback, sizeof(dyn_bb_pattern)) != 0){
+				LOG_WRN("dyn scan: readback mismatch block %d", block);
+				block_bad = true;
+			}
+		}
+
+		// leave the block erased so the filesystem still sees it as free space
+		spi_nand_block_erase(dev, addr);
+
+		if (block_bad){
+			bad_blocks++;
+			register_bad_sector(first_page);
+		}
+	}
+
+	set_die(dev, 0);
+	set_flash(dev, 0);
+	LOG_INF("dynamic bad block scan done, %d bad blocks", bad_blocks);
+	return bad_blocks;
+}
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest){
-	
+
 	uint8_t current_config = get_features(dev, REGISTER_CONFIGURATION);
-	uint8_t current_config_mask = current_config | 0x5; 
+	uint8_t current_config_mask = current_config | 0x5;
 	uint8_t code = current_config_mask & 0x3;
 	int ret = set_features(dev, REGISTER_CONFIGURATION, code);
 
@@ -1039,6 +1136,58 @@ static int spi_nor_pm_control(const struct device *dev, enum pm_device_action ac
 
 #endif /* CONFIG_PM_DEVICE */
 
+// persisted through the settings subsystem so the manufacturer bad-block scan
+// only ever runs on the very first boot of a device
+bool bad_block_scan_done;
+
+static int nand_settings_set(const char *name, size_t len,
+			     settings_read_cb read_cb, void *cb_arg)
+{
+	const char *next;
+
+	if (settings_name_steq(name, "bbscan_done", &next) && !next) {
+		if (len != sizeof(bad_block_scan_done)) {
+			return -EINVAL;
+		}
+		int rc = read_cb(cb_arg, &bad_block_scan_done, sizeof(bad_block_scan_done));
+		return (rc >= 0) ? 0 : rc;
+	}
+
+	return -ENOENT;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(spi_nand, "main", NULL, nand_settings_set, NULL, NULL);
+
+// runs the manufacturer bad-block scan once per device lifetime, remembering
+// completion in the settings subsystem (NVS on internal flash)
+static void run_first_boot_bad_block_scan(const struct device *dev)
+{
+	int rc = settings_subsys_init();
+	if (rc == 0) {
+		rc = settings_load_subtree("main");
+	}
+	if (rc != 0) {
+		LOG_WRN("settings unavailable (%d), skipping bad block scan", rc);
+		return;
+	}
+
+	if (bad_block_scan_done) {
+		LOG_INF("manufacturer bad block scan already done, skipping");
+		print_bad_sect_info(); 
+		return;
+	}
+
+	LOG_INF("first boot: scanning for manufacturer bad blocks");
+	detect_manufacturer_bad_blocks(dev);
+
+	bad_block_scan_done = true;
+	rc = settings_save_one("main/bbscan_done", &bad_block_scan_done,
+			       sizeof(bad_block_scan_done));
+	if (rc != 0) {
+		LOG_WRN("failed to persist bad block scan flag: %d", rc);
+	}
+}
+
 /**
  * @brief Initialize and configure the flash
  *
@@ -1063,10 +1212,15 @@ int spi_init(const struct device *dev)
 	for (int i = 1; i < cfg->num_flashes; i++) {
 		set_flash(dev, i);
 		ret = spi_configure(dev, cfg);
-		
+
 	}
 
-	set_flash(dev, 0); 
+	run_first_boot_bad_block_scan(dev);
+
+	set_flash(dev, 0);
+
+	
+
 	return ret;
 }
 

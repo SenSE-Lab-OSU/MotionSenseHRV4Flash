@@ -103,6 +103,7 @@ void print_bad_sect_info()
 
 // eventually we should just change this to blocks.
 int register_bad_sector(uint32_t sector_num){
+	if (!bad_block_scan_done){
     if (use_blocks){
         sector_num = convert_page_to_block(sector_num);
         sector_num = convert_block_to_page(0, sector_num);
@@ -116,6 +117,7 @@ int register_bad_sector(uint32_t sector_num){
 	}
 	else{
 		LOG_ERR("Bad sectors hit max allowable bad limit");
+	}
 	}
 	return total_bad_sectors;
 }

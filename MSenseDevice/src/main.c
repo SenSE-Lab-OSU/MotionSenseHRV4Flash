@@ -562,6 +562,23 @@ static void filesystem_workqueue_init(void)
   filesystem_workqueue_started = true;
 }
 
+/**
+ * @brief Switch the device from USB mass-storage mode into ECG collection
+ *        mode.
+ *
+ * Invoked by the button handler (short press while idle) and exposed to the
+ * BLE service so a connected host can start a recording remotely. It blinks
+ * the collection-mode LED pattern, makes the NAND filesystem writable
+ * (recording needs write access, and the disk is kept read-only while it is
+ * exposed to a USB host), and starts the ECG recorder thread via
+ * ecg_recorder_start().
+ *
+ * On success the global collecting_data / host_wants_collection flags are
+ * set so the rest of the firmware (button logic, BLE status) knows a
+ * recording is in progress. If the recorder fails to start, the filesystem
+ * is returned to read-only and the mode change is abandoned, leaving the
+ * device in its previous state.
+ */
 void enter_ecg_collection_mode(void)
 {
   int ret;
@@ -592,6 +609,24 @@ void enter_ecg_collection_mode(void)
   collecting_data = true;
 }
 
+/**
+ * @brief Switch the device from ECG collection mode back to USB mass-storage
+ *        mode.
+ *
+ * The counterpart to enter_ecg_collection_mode(), invoked on a short button
+ * press during recording or remotely over BLE. It clears the collection
+ * flags, stops the recorder (ecg_recorder_stop() blocks until the final
+ * samples are on their way to storage), then makes the recorded data safe
+ * and visible to a PC: the ECG write buffer is flushed, the filesystem work
+ * queue is drained and unplugged, all files are closed, the NAND disk is set
+ * back to read-only, and finally the USB mass-storage interface is
+ * re-enabled.
+ *
+ * If the recorder does not confirm shutdown in time, the collection flags
+ * are restored and the function bails out without touching the filesystem —
+ * the device stays in collection mode rather than risking a USB host and
+ * the recorder writing the disk at the same time.
+ */
 void exit_ecg_collection_mode(void)
 {
   int ret;

@@ -1214,8 +1214,10 @@ int spi_init(const struct device *dev)
 		ret = spi_configure(dev, cfg);
 
 	}
-
+	// we need the settings subsystem to check and save whether bad block collection
+	if (IS_ENABLED(CONFIG_SETTINGS)){
 	run_first_boot_bad_block_scan(dev);
+	}
 
 	set_flash(dev, 0);
 

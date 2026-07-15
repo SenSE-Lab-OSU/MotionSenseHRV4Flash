@@ -32,12 +32,16 @@ enum sd_status {
 
 // File System Controls
 // on write, checks whether the a certain page is already written to. 
-bool CheckDuplicateAccess = false;
-bool VerifyWrites = false;
+bool CheckDuplicateAccess = true;
+bool VerifyWrites = true;
 
+int duplicate_sector_writes = 0;
+int verify_fails = 0;
 
 const int file_table_sector_num = 180;
 
+
+uint32_t update_counter = 0;
 
 bool read_only = false;
 
@@ -73,6 +77,8 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 			#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 			register_bad_sector(sector_num);
 			#endif
+			duplicate_sector_writes++;
+			//print_page_hex(check_buffer, 4096, false);
 			return -1;
 			
 		}
@@ -226,12 +232,16 @@ static int disk_nand_access_status(struct disk_info *disk)
 
 }
 
-static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
+int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
 	const struct device *dev = disk->dev;	
+	update_counter++;
+	if (update_counter % 5000 == 1000){
+		print_flash_status_info();
+	}
 
 	off_t addr;
 	int ret = 0;
@@ -250,7 +260,7 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	if (ret != 0){
 		LOG_ERR("ret: %d", ret);
 	}
-	return ret; 
+	return 0; 
 }
 
 uint8_t read_back_buffer[4096];
@@ -275,48 +285,46 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 
 		for (int x = 0; x < count; x++)
 		{
-			LOG_DBG("performing disk write at sector %i", sector + x);
-			if (sector + x < file_table_sector_num)
+			int sector_num = get_sector_offset(x + sector);
+			LOG_INF("performing disk write at sector %i", sector_num);
+			if (sector_num < file_table_sector_num)
 			{
 
-				file_table_access(&buf[x * 4096], sector + x, true);
+				file_table_access(&buf[x * 4096], sector_num, true);
 				continue;
 			}
 			else
 			{
-				int sector_num = x + sector;
+				
 				if (CheckDuplicateAccess)
 				{
-					for (int y = 0; y < 1000; y++)
+					int error = check_duplicate_sector_write(disk, sector_num);
+					if (error == -1)
 					{
-						sector_num = get_sector_offset(x + sector);
-
-						int error = check_duplicate_sector_write(disk, sector_num);
-						if (error == -1)
-						{
-							continue;
-						}
-						break;
+						continue;
 					}
+					
 				}
 
 				addr = convert_page_to_address(dev, sector_num);
 				ret = spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
 				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
-
-				if (VerifyWrites)
+			}
+			if (VerifyWrites)
+			{
+				//ret = spi_nand_page_read(dev, addr, read_back_buffer);
+				disk_nand_access_read(disk, read_back_buffer, sector_num, 1);
+				int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
+				if (equal != 0)
 				{
-					ret = spi_nand_page_read(dev, addr, read_back_buffer);
-					int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
-					if (!equal)
-					{
-						LOG_WRN("sect %d yield bad readback", sector_num);
-#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-						register_bad_sector(sector_num);
-#endif
-					}
+					verify_fails++;
+					LOG_ERR("sect %d yield bad readback (%d), tot fails: %d", sector_num, equal, verify_fails);
+					#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+					register_bad_sector(sector_num);
+					#endif
 				}
 			}
+			
 		}
 		if (ret != 0)
 		{
@@ -333,6 +341,11 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 	return -1;
 	}
 }
+
+void print_flash_status_info(){
+	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err);
+}
+
 
 static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf)
 {

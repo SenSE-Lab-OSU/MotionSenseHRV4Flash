@@ -35,7 +35,7 @@
 static const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(0);
 
 
-LOG_MODULE_REGISTER(user_bluetooth);
+LOG_MODULE_REGISTER(user_bluetooth, 3);
 
 // define our status registers
 bool connectedFlag = false;
@@ -659,20 +659,18 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       (void *)conn, len);
   
     
-    if (len != 1){
-      LOG_WRN("invalid packet length: %i", len);
-    }
     
     if (offset != 0) {
       LOG_INF("Write: Incorrect data offset");
       return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
   
-    uint8_t val = *((uint8_t *)buff);
+    int val = 0;
+    memcpy(&val, buff, len);
     LOG_INF("entered value: %i", val);
     if (!collecting_data){
       if (val == 0){
-        LOG_INF("Turning on auto brightness");
+        LOG_INF("Turning off auto brightness");
         use_fixed_ppg_brightness = false;
       }
       else if (val > 0 && val < 121){
@@ -722,9 +720,12 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           }
           #endif
           
-          //NVIC_SystemReset();
 
         }
+        if (val >= 1000){
+          print_out_page(val - 1000);
+        }
+
       }  
       return 0;
       

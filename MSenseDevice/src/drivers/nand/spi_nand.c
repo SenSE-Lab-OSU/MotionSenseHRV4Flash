@@ -80,6 +80,7 @@ int current_erases = 0;
 int ECC_corrections = 0;
 int ECC_err = 0;
 
+
 // die select for each flash
 int current_die[4] = {0};
 
@@ -372,7 +373,7 @@ int set_die(const struct device* dev, int die_select){
 		LOG_DBG("flash 1 die: %d. 2 die: %d. 3 die: %d, 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
 	}
 	else{
-		LOG_WRN("error die setting");
+		LOG_WRN("error die setting %d", ret);
 	}
 	return ret;
 
@@ -422,14 +423,14 @@ int set_features(const struct device* dev, uint8_t register_select, uint8_t data
 		.data_length = 1
 	};
 
-	int res = spi_nand_access(dev, &write_features_request);
+	int res = spi_nand_access(dev, &write_features_request); 
 	if (res == 0){
 		uint8_t readback = get_features(dev, register_select);
 	if (readback == data){
 		return 0;
 	}
 	else{
-		return NRFX_ERROR_NOT_SUPPORTED;
+		return -2;
 	}
 	}
 	else {
@@ -1098,14 +1099,18 @@ static const struct flash_parameters* flash_nor_get_parameters(const struct devi
 
 void print_page_hex(uint8_t* data_buf, int size, bool shorten){
 	// can easily modify this to support other types like char or int
-	if (shorten && size > 50){
-		size = 50;
+	if (shorten && size > 250){
+		size = 250;
 	}
 	printk("data: ");
 	for (int i = 0; i < size; i ++){
 		printk("%02x ", data_buf[i]);
-		if (i % 10 == 9) {
+		if (i % 19 == 18) {
 			printk("\n");
+		}
+		// just to clear the buffer
+		if (i % 300 == 299) {
+			k_sleep(K_MSEC(400));
 		}
 	}
 	printk("\n end \n");

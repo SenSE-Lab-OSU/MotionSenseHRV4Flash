@@ -249,7 +249,7 @@ extern int current_reads;
 extern int current_erases;
 
 extern int ECC_corrections;
-
+extern int ECC_err;
 
 void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 

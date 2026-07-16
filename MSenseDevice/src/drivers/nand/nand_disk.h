@@ -9,6 +9,8 @@ void set_read_only(bool enable);
 
 bool get_read_only();
 
+void print_flash_status_info();
+
 int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count);
 

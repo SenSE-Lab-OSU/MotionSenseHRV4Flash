@@ -15,6 +15,7 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
+#include <zephyr/sys/crc.h>
 #include "bad_page.h"
 #include "spi_nand.h"
 #include "nand_disk.h"
@@ -38,7 +39,17 @@ bool VerifyWrites = true;
 int duplicate_sector_writes = 0;
 int verify_fails = 0;
 
-const int file_table_sector_num = 180;
+int nor_fails = 0;
+
+#define FILE_TABLE_SECTOR_COUNT 180
+const int file_table_sector_num = FILE_TABLE_SECTOR_COUNT;
+
+/* CRC32 of the expected contents of each file table sector, updated on every write and
+ * seeded on the first read after boot. RAM only, so it cannot catch corruption that
+ * happened while powered off - it detects torn/failed NOR writes within a session. */
+static uint32_t file_table_crcs[FILE_TABLE_SECTOR_COUNT];
+static bool file_table_crc_valid[FILE_TABLE_SECTOR_COUNT];
+int file_table_crc_fails = 0;
 
 
 uint32_t update_counter = 0;
@@ -118,30 +129,13 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	// the stored crcs no longer describe the (now blank) sectors
+	memset(file_table_crc_valid, 0, sizeof(file_table_crc_valid));
 	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
 
 
 
-char nor_buffer[256];
-static int flash_nor_adjustment_write(const struct device* dev, off_t address, char* buf, size_t size){
-	int ret;
-	
-	int memory_corrections = 0;
-	int cmp;
-	off_t computed_address;
-	for (int nor_page = 0; nor_page <= 4096; nor_page += 256){
-		computed_address = address + nor_page;
-		ret = flash_read(dev, computed_address, nor_buffer, 256);
-		void* adjusted_buf = &buf[nor_page];
-		cmp = memcmp(adjusted_buf, nor_buffer, 256);
-
-		if (cmp != 0) {
-			ret = flash_erase(dev, computed_address, 256);
-			ret = flash_write(dev, computed_address, adjusted_buf, 256);
-		}
-	}
-}
 
 
 static int file_table_access(void* buf, int sector_num, bool write){
@@ -153,18 +147,46 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
 
 	//sector cannot be greater than the allocated file table segment size
-	if (sector_num > file_table_sector_num){
+	if (sector_num >= file_table_sector_num){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
 		return -1;
 	}
 
 	if (write){
+		// remember what this sector is supposed to contain so reads can be checked against it
+		file_table_crcs[sector_num] = crc32_ieee(buf, 4096);
+		file_table_crc_valid[sector_num] = true;
 
 		ret = flash_erase(soc_flash, address, 4096);
-		ret = flash_write(soc_flash, address, buf, 4096);	
+		if (ret != 0){
+			nor_fails++;
+			LOG_ERR("nor flash erase failure! tot %d", nor_fails);
+			
+		}
+		ret = flash_write(soc_flash, address, buf, 4096);
+		if (ret != 0){
+			nor_fails++;
+			LOG_ERR("nor flash write failure! tot: %d", nor_fails);
+		}
 	}
 	else {
 		ret = flash_read(soc_flash, address, buf, 4096);
+		if (ret == 0){
+			uint32_t crc = crc32_ieee(buf, 4096);
+			if (!file_table_crc_valid[sector_num]){
+				// first access since boot, seed with the current contents
+				file_table_crcs[sector_num] = crc;
+				file_table_crc_valid[sector_num] = true;
+			}
+			else if (crc != file_table_crcs[sector_num]){
+				file_table_crc_fails++;
+				LOG_ERR("file table sector %d crc mismatch, tot fails: %d", sector_num, file_table_crc_fails);
+			}
+		}
+		else{
+			nor_fails++;
+			LOG_ERR("nor failed to read! tot err: %d", nor_fails);
+		}
 	}
 	return ret;
 }
@@ -251,7 +273,6 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		if (sector+x < file_table_sector_num)
 		{
 			ret = file_table_access(&buf[x*4096], sector+x, false);
-			continue;
 		}
 		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
 	}
@@ -291,7 +312,6 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			{
 
 				file_table_access(&buf[x * 4096], sector_num, true);
-				continue;
 			}
 			else
 			{
@@ -343,7 +363,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 }
 
 void print_flash_status_info(){
-	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err);
+	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d, tot file table crc fails %d, tot nor fails %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err, file_table_crc_fails, nor_fails);
 }
 
 

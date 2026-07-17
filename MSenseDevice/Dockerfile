@@ -76,50 +76,16 @@ RUN pip3 install --no-cache-dir \
     -r /workdir/nrf/scripts/requirements.txt \
     -r /workdir/bootloader/mcuboot/scripts/requirements.txt
 
-# Apply SDK patches equivalent to msense_ncs_v2.5.3.patch using Python
-# (string replacement is robust across SDK versions; patch context lines
-# may not match exactly between v2.5.3 and v2.9.3).
+# Apply SDK patches via git apply in each sub-repo.
+# Each patch file is scoped to one git repo so git apply can verify context
+# and record the change in that repo's index.
+COPY patches/ /tmp/patches/
 
-# Patch 1: FatFS ffconf.h
-#   FF_USE_EXPAND 0 -> 1  (enable f_expand function)
-#   FF_FS_NORTC   0 -> 1  (disable RTC dependency, uses compile-time constants)
-RUN python3 - <<'EOF'
-import pathlib, sys
+# modules/fs/fatfs repo: enable f_expand, disable RTC timestamp
+RUN git -C /workdir/modules/fs/fatfs apply /tmp/patches/0001-fatfs-config.patch
 
-matches = list(pathlib.Path('/workdir').rglob('ffconf.h'))
-if not matches:
-    sys.exit('ERROR: ffconf.h not found in /workdir')
-
-for p in matches:
-    text = p.read_text()
-    original = text
-    text = text.replace('#define FF_USE_EXPAND\t0', '#define FF_USE_EXPAND\t1')
-    text = text.replace('#define FF_FS_NORTC\t\t0', '#define FF_FS_NORTC\t\t1')
-    if text == original:
-        sys.exit(f'ERROR: expected substitutions not found in {p}')
-    p.write_text(text)
-    print(f'Patched {p}')
-EOF
-
-# Patch 2: USB MSC msc.c
-#   BLOCK_SIZE 512 -> 4096  (match NAND flash erase block size)
-RUN python3 - <<'EOF'
-import pathlib, sys
-
-matches = [p for p in pathlib.Path('/workdir').rglob('msc.c')
-           if 'usb' in str(p) and 'class' in str(p)]
-if not matches:
-    sys.exit('ERROR: USB msc.c not found in /workdir')
-
-for p in matches:
-    text = p.read_text()
-    original = text
-    text = text.replace('#define BLOCK_SIZE\t512', '#define BLOCK_SIZE\t4096')
-    if text == original:
-        sys.exit(f'ERROR: expected substitution not found in {p}')
-    p.write_text(text)
-    print(f'Patched {p}')
-EOF
+# zephyr repo: USB MSC block size 512->4096, zephyr_fatfs_config FF_FS_NORTC 1->0
+RUN git -C /workdir/zephyr apply /tmp/patches/0002-zephyr-config.patch
 
 ENV ZEPHYR_BASE=/workdir/zephyr
 

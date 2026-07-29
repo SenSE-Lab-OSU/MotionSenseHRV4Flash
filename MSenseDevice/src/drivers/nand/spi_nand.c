@@ -848,7 +848,7 @@ int spi_nand_chip_erase(const struct device* device) {
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
-			LOG_WRN("err chip erase: %i", status);
+			LOG_WRN("err block erase %d: %i", current_block, status);
 			continue;
 		}
 	}
@@ -888,6 +888,7 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 		k_sleep(K_MSEC(500));
 	}
 	set_flash(dev, 0);
+	LOG_INF("erasing file table (nor)");
 	int ret = erase_file_table();
 	if (ret != 0){
 		LOG_ERR("failed to erase file table");

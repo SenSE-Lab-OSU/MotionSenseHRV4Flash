@@ -695,11 +695,11 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             set_read_only(false);
           #endif
 
-          
+          storage_clear_led();
           if (val == 150){
-            storage_clear_led();
+            
             create_test_files(500);
-            blink_led(31);
+            
           }
           else{
             LOG_INF("100 opt");
@@ -708,7 +708,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             //k_work_submit_to_queue(&my_work_q, &work);
             create_test_files(100);
           }
-          
+          blink_led(31);
           reset_lock = false;
           #if CONFIG_DISK_DRIVER_RAW_NAND
           set_read_only(true);

@@ -22,7 +22,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 3);
+LOG_MODULE_REGISTER(nand_disk, 2);
 
 enum sd_status {
 	SD_UNINIT,
@@ -147,7 +147,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
 
 	//sector cannot be greater than the allocated file table segment size
-	if (sector_num >= file_table_sector_num){
+	if (sector_num > file_table_sector_num){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
 		return -1;
 	}
@@ -274,7 +274,9 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		{
 			ret = file_table_access(&buf[x*4096], sector+x, false);
 		}
-		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
+		else {
+			ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
+		}
 	}
 	
 	//lol

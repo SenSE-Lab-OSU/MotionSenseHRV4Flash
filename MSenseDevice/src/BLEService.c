@@ -352,16 +352,12 @@ void connected(struct bt_conn* conn, uint8_t err){
     start_stop_device_collection(true);
     #endif
     
-    
-    
   }
 }
 
 void disconnected(struct bt_conn *conn, uint8_t reason){
   // Stop timer and do all the cleanup
   printk("Disconnected (reason %u)\n", reason);
-  
-  
   connectedFlag=false;
 
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -681,7 +677,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
-        if ((val == 130 || val == 150) && !collecting_data){
+        if ((val == 130 || val == 150 || val == 151) && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
           reset_lock = true;
@@ -701,8 +697,11 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             create_test_files(500);
             
           }
+          else if (val == 151) {
+            create_test_file(512*450);
+          }
           else{
-            LOG_INF("100 opt");
+            LOG_INF("100 fil opt");
             //struct k_work work;
             //k_work_init(&work, create_test_files_through_file_workqueue);
             //k_work_submit_to_queue(&my_work_q, &work);

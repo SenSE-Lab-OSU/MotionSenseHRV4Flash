@@ -201,7 +201,7 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 	int die = selected_die_num % 2;
 
 	set_flash(dev, flash);
-	set_die(dev, die);
+	int die_err = set_die(dev, die);
 
 	return page - (die_size * selected_die_num);
 }
@@ -526,6 +526,9 @@ uint8_t spi_rdsr(const struct device *dev)
 	if (status > 3){
 	LOG_WRN("status register: %d", status);
 	}
+	if (status == 255){
+		LOG_ERR("err bad register reading");
+	}
 	
 	return status;
 }
@@ -710,7 +713,7 @@ out:
 	LOG_DBG("finished read! with status %i", status);
 	// get the ECC status
 	uint8_t ECC_status = reg_status >> 4;
-	if (ECC_status != 0){
+	if (ECC_status != 0 && reg_status != 255){
 		if (ECC_status == 2){
 			ECC_err++;
 			LOG_ERR("ECC err too high, bad block");

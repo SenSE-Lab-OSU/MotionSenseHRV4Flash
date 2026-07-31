@@ -5,6 +5,8 @@
 
 #include <zephyr/kernel.h>
 
+#define RECORDING_FILE_BYTES (4U * 1024U * 1024U)
+
 extern bool reset_lock;
 
 extern bool file_system_ready;
@@ -15,7 +17,7 @@ extern bool panic_single_thread;
 extern bool file_system_ready;
 
 enum sensor_type {ppg,
-accelorometer, ecg, passthrough, customlog};
+ecg, passthrough, customlog};
 
 typedef struct memory_container {
 	const void* address;
@@ -56,6 +58,16 @@ void store_data(const void* data, size_t size, enum sensor_type sensor);
 
 void flush_data_buffer(enum sensor_type sensor);
 
+void filesystem_set_collection_id(uint64_t collection_id);
+void filesystem_clear_collection_id(void);
+int filesystem_make_recording_path(char *path, size_t path_size,
+				   const char *stream_prefix,
+				   uint64_t collection_id);
+int filesystem_make_recording_chunk_path(char *path, size_t path_size,
+					 const char *stream_prefix,
+					 uint64_t collection_id,
+					 uint32_t chunk_index);
+
 int get_storage_percent_full();
 
 extern uint8_t storage_percent_full;
@@ -86,6 +98,5 @@ extern int patient_num;
 extern uint64_t set_date_time;
 
 extern memory_container ppg_work_item;
-extern memory_container accel_work_item;
 extern memory_container ecg_work_item;
 extern memory_container log_work_item;

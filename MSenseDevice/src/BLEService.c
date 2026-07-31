@@ -698,6 +698,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             
           }
           else if (val == 151) {
+            LOG_INF("1 fil opt");
             create_test_file(512*450);
           }
           else{

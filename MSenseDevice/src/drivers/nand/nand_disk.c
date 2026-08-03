@@ -22,7 +22,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 2);
+LOG_MODULE_REGISTER(nand_disk, 4);
 
 enum sd_status {
 	SD_UNINIT,
@@ -33,8 +33,8 @@ enum sd_status {
 
 // File System Controls
 // on write, checks whether the a certain page is already written to. 
-bool CheckDuplicateAccess = true;
-bool VerifyWrites = true;
+bool CheckDuplicateAccess = false;
+bool VerifyWrites = false;
 
 int duplicate_sector_writes = 0;
 int verify_fails = 0;
@@ -260,11 +260,11 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
 	const struct device *dev = disk->dev;	
-	update_counter++;
-	if (update_counter % 5000 == 1000){
+	
+	if (update_counter % 500 == 0){
 		print_flash_status_info();
 	}
-
+	update_counter++;
 	off_t addr;
 	int ret = 0;
 
@@ -291,7 +291,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 								  uint32_t sector, uint32_t count)
 {
 	const char *name = k_thread_name_get(k_current_get());
-	LOG_DBG("thread: %s", name);
+	//LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
 	bool disabled_usb_write = (strcmp(name, "usb_mass") == 0) && !IS_ENABLED(CONFIG_USB_WRITABLE);
 	if (!read_only && !disabled_usb_write)

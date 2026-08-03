@@ -789,7 +789,6 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	uint8_t status = spi_rdsr(dev);
 	write_disable(dev);
 	release_device(dev);
-	
 	LOG_DBG("write completed! with status %i", status);
 	if (status != 0){
 		LOG_WRN("page write returned status %d", status);

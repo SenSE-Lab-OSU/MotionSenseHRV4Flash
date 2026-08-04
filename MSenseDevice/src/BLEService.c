@@ -270,18 +270,19 @@ void rtc_handler(nrfx_rtc_int_type_t event_type){
   if (!collecting_data) { return; }
   if (event_type != NRFX_RTC_INT_TICK) { return; }
 
-  // submit work to read gyro, acc, magnetometer and orientation
-  my_motionSensor.pktCounter = global_counter;
-  my_motionSensor.gyro_first_read = gyro_first_read;
-  work_queue_result = k_work_submit(&my_motionSensor.work);
-  if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
-
+  // Submit PPG work. Do this first because its more regular. The IMU goes longer when it integrates.
   if(ppg_read == 0){
     my_ppgSensor.pktCounter = global_counter;
     my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
     work_queue_result = k_work_submit(&my_ppgSensor.work);
     if (work_queue_result != 1) { LOG_ERR("PPG work queue was not submitted: %i", work_queue_result); }
   }
+
+  // submit work to read gyro, acc, magnetometer and orientation
+  my_motionSensor.pktCounter = global_counter;
+  my_motionSensor.gyro_first_read = gyro_first_read;
+  work_queue_result = k_work_submit(&my_motionSensor.work);
+  if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
 
   // ppgConfig.numCounts is derived from the RTC cadence.
   ppg_read = (ppg_read+1) % ppgConfig.numCounts;

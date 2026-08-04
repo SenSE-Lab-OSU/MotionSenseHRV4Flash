@@ -135,7 +135,7 @@ typedef struct MotionSenseFile {
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 global_tick_512hz"
+	.sensor_format = "uint24_le ir1, uint24_le ir2, uint24_le g1, uint24_le g2, uint32_le global_tick_512hz"
 };
 
 MotionSenseFile accel_file = {

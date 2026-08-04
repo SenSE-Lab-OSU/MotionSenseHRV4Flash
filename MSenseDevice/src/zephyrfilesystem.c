@@ -397,7 +397,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
+		LOG_DBG("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -486,13 +486,13 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	LOG_INF("Processing packet %i", container->packet_num);
+	LOG_DBG("Processing packet %i", container->packet_num);
 	start_timer(&file_system_timer);
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer(&file_system_timer);
-	LOG_INF("write timer: %lli", time_value);
+	LOG_DBG("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -540,7 +540,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
 		
 	}
-	LOG_INF("ret value for %i: %i", type, ret);
+	LOG_DBG("ret value for %i: %i", type, ret);
 	}
 	else{
 		LOG_ERR("work item attempted schedule while still running for type: %i", type);
@@ -592,7 +592,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 			MSenseFile->first_sample_init = false;
 		}
 		if (!panic_single_thread){
-		LOG_INF("Submitting Write!");
+		LOG_DBG("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		}
 		else {
@@ -637,7 +637,7 @@ void flush_data_buffer(enum sensor_type sensor){
 				MSenseFile->first_sample_init = false;
 			}
 			if (!panic_single_thread){
-			LOG_INF("Submitting Write!");
+			LOG_DBG("Submitting Write!");
 			submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 			}
 			else {
@@ -965,12 +965,12 @@ int64_t stop_timer(int64_t* start_time_ref){
 	if (start_time_ref != NULL){
 		length = k_uptime_get() - *start_time_ref;
 		*start_time_ref = 0;
-		LOG_INF("Timer Value: %lli ms", length);
+		LOG_DBG("Timer Value: %lli ms", length);
 	}
 	else{
 		length = k_uptime_get() - start_time;
 		start_time = 0;
-		LOG_INF("Timer Value: %lli ms", length);
+		LOG_DBG("Timer Value: %lli ms", length);
 	}
 	return length;
 }

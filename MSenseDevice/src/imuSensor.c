@@ -292,7 +292,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       enmo /= 32;
       currentAccData.ENMO = enmo;
       // floats are cast to double in print calls
-      LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
+      LOG_DBG("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
       LOG_DBG("Enmo: %f", (double)enmo*1000);
       //currentAccData.time = get_current_unix_time();
 
@@ -318,7 +318,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
+      LOG_DBG("ENMO ble update: %f", (double)currentAccData.ENMO);
       // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
       }

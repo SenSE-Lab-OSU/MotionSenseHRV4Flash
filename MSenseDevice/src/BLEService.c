@@ -868,7 +868,7 @@ void motion_notify(struct k_work *item){
   struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
   
   uint8_t packetLength = the_device->packetLength;
-  printk("%i", packetLength);
+  //printk("%i", packetLength);
   ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);

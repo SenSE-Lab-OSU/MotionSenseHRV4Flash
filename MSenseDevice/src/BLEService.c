@@ -149,6 +149,8 @@ int rtc0_collection_counter_start(void)
 	}
 
 	config.prescaler = RTC0_COLLECTION_COUNTER_PRESCALER;
+	/* Keep the nrfx peripheral priority and Zephyr vector entry in sync. */
+	config.interrupt_priority = IRQ_PRIO_LOWEST;
 	err = nrfx_rtc_init(&rtc0_collection_counter, &config,
 			    rtc0_collection_counter_handler);
 	if (err != NRFX_SUCCESS) {
@@ -164,6 +166,13 @@ int rtc0_collection_counter_start(void)
 	atomic_set(&rtc0_collection_notify_ticks, 0);
 	nrfx_rtc_overflow_enable(&rtc0_collection_counter, true);
 	nrfx_rtc_enable(&rtc0_collection_counter);
+	/*
+	 * nrfx_rtc_init() enables the NVIC line but does not populate Zephyr's
+	 * vector table. Without this connection, the first compare interrupt is
+	 * handled as a spurious IRQ and resets the application.
+	 */
+	IRQ_CONNECT(RTC0_IRQn, IRQ_PRIO_LOWEST, nrfx_rtc_0_irq_handler, NULL, 0);
+	irq_enable(RTC0_IRQn);
 	atomic_set(&rtc0_collection_counter_started, 1);
 	LOG_INF("RTC0 collection counter started at %u Hz",
 		RTC0_COLLECTION_COUNTER_HZ);

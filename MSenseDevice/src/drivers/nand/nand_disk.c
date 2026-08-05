@@ -22,7 +22,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 4);
+LOG_MODULE_REGISTER(nand_disk, 2);
 
 enum sd_status {
 	SD_UNINIT,
@@ -55,6 +55,13 @@ int file_table_crc_fails = 0;
 uint32_t update_counter = 0;
 
 bool read_only = false;
+
+/* Serializes all disk read/write access so only one thread drives the shared
+ * SPI bus (NOR file table + NAND data) at a time. Must be a mutex, not a plain
+ * semaphore: disk_nand_access_write re-enters disk_nand_access_read on the same
+ * thread (verify readback + duplicate-write check), and a recursive mutex allows
+ * that while still blocking other threads. A binary semaphore would deadlock. */
+K_MUTEX_DEFINE(disk_access_mutex);
 
 
 #define FILE_TABLE_NAND_PARTITION	slot0_partition
@@ -141,11 +148,12 @@ int erase_file_table() {
 static int file_table_access(void* buf, int sector_num, bool write){
 	
 	int ret;
+	LOG_WRN("accessing file table, sect %d", sector_num);
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	struct flash_pages_info* page_info_ptr;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
-
+	k_sleep(K_MSEC(100));
 	//sector cannot be greater than the allocated file table segment size
 	if (sector_num > file_table_sector_num){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
@@ -188,6 +196,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 			LOG_ERR("nor failed to read! tot err: %d", nor_fails);
 		}
 	}
+	k_sleep(K_MSEC(100));
 	return ret;
 }
 
@@ -204,6 +213,10 @@ bool get_read_only(){
 	return read_only;
 }
 
+
+
+
+
 static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
@@ -212,6 +225,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 	if (sucess != 0){
 		LOG_WRN("disk_nand_init failed %d", sucess);
 	}
+	
 	
 	return 0;
 }
@@ -257,10 +271,12 @@ static int disk_nand_access_status(struct disk_info *disk)
 int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
-	const struct device *dev = disk->dev;	
-	
+	const struct device *dev = disk->dev;
+
 	if (update_counter % 500 == 0){
 		print_flash_status_info();
 	}
@@ -283,13 +299,16 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	if (ret != 0){
 		LOG_ERR("ret: %d", ret);
 	}
-	return 0; 
+	k_mutex_unlock(&disk_access_mutex);
+	return 0;
 }
 
 uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 								  uint32_t sector, uint32_t count)
 {
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
+	int result;
 	const char *name = k_thread_name_get(k_current_get());
 	//LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
@@ -352,16 +371,15 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		{
 			LOG_ERR("ret %d", ret);
 		}
-		return ret;
+		result = ret;
 	}
 	else{
 	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
 	// we fake that we wrote so the the USB mass system does not complain.
-	if (disabled_usb_write){
-		return 0;
+	result = disabled_usb_write ? 0 : -1;
 	}
-	return -1;
-	}
+	k_mutex_unlock(&disk_access_mutex);
+	return result;
 }
 
 void print_flash_status_info(){

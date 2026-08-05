@@ -15,6 +15,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+datasheets/
+nathan_ignore/
+.codex/
+
 # C extensions
 *.so
 

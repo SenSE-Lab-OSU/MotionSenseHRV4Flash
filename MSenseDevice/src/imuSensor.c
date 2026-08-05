@@ -237,7 +237,7 @@ static void prepare_gyros(float* quaternionResult){
   current_gyro_data.quaternion_4_val = quaternionResult[3];
 }
 
-float enmo_store[32];
+float enmo_store[IMU_FIXED_OUTPUT_HZ];
 // our global variables needed for enmo calculation
 #define enmo_samples_size 600
 float second_enmo_arr[enmo_samples_size] = {0.0};
@@ -278,22 +278,22 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
     if(enmo < 0 ) enmo=0;
-    // when we send the enmo, we send as an average of 30
+    // when we send the enmo, we send as an second average
     enmo_store[counterAcc] = enmo;
     counterAcc++;
-    if (counterAcc >= 32){
+    if (counterAcc >= IMU_FIXED_OUTPUT_HZ){
       
       counterAcc = 0;
-      //calculate the enmo as an average of 30 samples
+      //calculate the enmo as an average of the output samples accumulated for 1 sec
       enmo = 0;
-      for (int x = 0; x <= 31; x++){
+      for (int x = 0; x < IMU_FIXED_OUTPUT_HZ; x++){
           enmo += enmo_store[x];
       }
-      enmo /= 32;
+      enmo /= IMU_FIXED_OUTPUT_HZ;
       currentAccData.ENMO = enmo;
       // floats are cast to double in print calls
-      LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
-      LOG_DBG("Enmo: %f", (double)enmo*1000);
+      LOG_INF("%d, %d, %d", (int)(accelX*1000), (int)(accelY*1000), (int)(accelZ*1000));
+      LOG_DBG("Enmo: %d", (int)(enmo*1000));
       //currentAccData.time = get_current_unix_time();
 
       update_enmo_arr[enmo_sample_counter % enmo_update_rate] = enmo;
@@ -318,7 +318,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
+      LOG_INF("ENMO ble update: %d", (int)(currentAccData.ENMO*1000));
       // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
       }

@@ -22,7 +22,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 2);
+LOG_MODULE_REGISTER(nand_disk, 3);
 
 enum sd_status {
 	SD_UNINIT,
@@ -148,12 +148,11 @@ int erase_file_table() {
 static int file_table_access(void* buf, int sector_num, bool write){
 	
 	int ret;
-	LOG_WRN("accessing file table, sect %d", sector_num);
+	LOG_DBG("accessing file table, sect %d", sector_num);
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	struct flash_pages_info* page_info_ptr;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
-	k_sleep(K_MSEC(100));
 	//sector cannot be greater than the allocated file table segment size
 	if (sector_num > file_table_sector_num){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
@@ -196,7 +195,6 @@ static int file_table_access(void* buf, int sector_num, bool write){
 			LOG_ERR("nor failed to read! tot err: %d", nor_fails);
 		}
 	}
-	k_sleep(K_MSEC(100));
 	return ret;
 }
 
@@ -277,7 +275,7 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
 	const struct device *dev = disk->dev;
 
-	if (update_counter % 500 == 0){
+	if ((update_counter % 500) == 0){
 		print_flash_status_info();
 	}
 	update_counter++;
@@ -328,7 +326,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		for (int x = 0; x < count; x++)
 		{
 			int sector_num = get_sector_offset(x + sector);
-			LOG_INF("performing disk write at sector %i", sector_num);
+			LOG_DBG("performing disk write at sector %i", sector_num);
 			if (sector_num < file_table_sector_num)
 			{
 
@@ -389,7 +387,7 @@ void print_flash_status_info(){
 
 static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf)
 {
-	LOG_INF("Ac ioctl with cmd %d", cmd);
+	LOG_DBG("Ac ioctl with cmd %d", cmd);
 	const struct device *dev = disk->dev;
 
     switch (cmd) {

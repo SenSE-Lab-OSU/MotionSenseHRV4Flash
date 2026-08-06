@@ -111,7 +111,7 @@ static inline const struct jesd216_erase_type* dev_erase_types(const struct devi
 /* Get the size of the flash device.  Data for runtime, constant for
 * minimal and devicetree.
 */
-inline uint32_t dev_flash_size(const struct device *dev)
+uint32_t dev_flash_size(const struct device *dev)
 {
 
 	const struct spi_flash_config* cfg = dev->config;
@@ -120,7 +120,7 @@ inline uint32_t dev_flash_size(const struct device *dev)
 
 }
 
-inline int dev_die_size(const struct device* dev){
+static inline int dev_die_size(const struct device* dev){
 	const struct spi_flash_config* cfg = dev->config;
 	return dev_flash_size(dev) / (cfg->num_flashes*die_per_flash);
 }
@@ -128,7 +128,7 @@ inline int dev_die_size(const struct device* dev){
 /* Get the flash device page size.  Constant for minimal, data for
 * runtime and devicetree.
 */
-inline uint16_t dev_page_size(const struct device *dev)
+uint16_t dev_page_size(const struct device *dev)
 {
 	return 4096;
 }
@@ -1282,4 +1282,3 @@ static int spi_nand_erase_template(const struct device *dev, off_t addr, size_t 
 
 	return ret;
 }
-

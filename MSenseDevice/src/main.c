@@ -559,7 +559,7 @@ int main(void)
   while (1)
   {
     
-    printk("%d %d\n", connectedFlag, collecting_data);
+    //printk("%d %d\n", connectedFlag, collecting_data);
 
     global_update++;
     if (global_update >= 100){

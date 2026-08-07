@@ -182,7 +182,7 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 
 
 uint32_t convert_block_to_page(uint32_t page, uint32_t block){
-	return page + (block * 64);
+	return page + (block * NAND_PAGES_PER_ERASE_BLOCK);
 }
 
 // The pages representing a block are from block - 65.
@@ -208,17 +208,17 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 // this is not the actual address for 4 flash, 
 off_t convert_block_to_singledie_address(uint32_t block){
 	//werid fix because of noticed offsets, perhaps there is another issue we are unaware of.
-	return (block * 64);
+	return (block * NAND_PAGES_PER_ERASE_BLOCK);
 }
 
 uint32_t convert_page_to_block(uint32_t page_number){
-	return (page_number / 64);
+	return (page_number / NAND_PAGES_PER_ERASE_BLOCK);
 }
 
 bool is_page_in_block(uint32_t page_number, uint32_t block_number){
 	uint32_t first_page = convert_block_to_page(0, block_number);
 	uint32_t difference = (page_number - first_page);
-	return difference >= 0 && difference < 64;
+	return difference >= 0 && difference < NAND_PAGES_PER_ERASE_BLOCK;
 }
 
 
@@ -562,7 +562,8 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	int bad_blocks = 0;
 	uint8_t dest;
 	off_t error_address = 4096;
-	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
+	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) /
+				NAND_PAGES_PER_ERASE_BLOCK;
 	for (int x = 0; x < total_device_size; x++){
 	page_addr = convert_block_to_singledie_address(x);
 	acquire_device(dev);
@@ -840,7 +841,7 @@ int spi_nand_chip_erase(const struct device* device) {
 	int page_size = dev_page_size(device);
 	//Divide by page size to get the total pages, then by pages per block to get block size
 	int block_count = (size / page_size);
-	block_count /= 64;
+	block_count /= NAND_PAGES_PER_ERASE_BLOCK;
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
 	for (int current_block = 0; current_block <= block_count; current_block++){

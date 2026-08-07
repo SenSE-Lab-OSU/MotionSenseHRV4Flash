@@ -12,6 +12,7 @@
 
 #include <stdlib.h>
 #include "BLEService.h"
+#include "msense_git_metadata.h"
 #include "zephyrfilesystem.h"
 
 
@@ -46,6 +47,7 @@ bool security_lock;
 bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
+#define UUID_CONTENTS_MAX_SIZE 640U
 
 //#undef GET_FATTIME
 //#define GET_FATTIME() (DWORD)get_current_unix_time()
@@ -660,7 +662,7 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
 	char uuid_name[32];
-	char uuid_contents[512];
+	char uuid_contents[UUID_CONTENTS_MAX_SIZE];
 	int rc;
 	int written;
 	ssize_t bytes_written;
@@ -687,10 +689,12 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
 			   "%s\nName: %s\nDevice ID: %s\nVersion: %s"
+			   "\nGit Commit: %s\nGit Tree: %s"
 			   "\nppg format: %s\naccel format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
 			   ble_address, ble_name, device_id_hex, CONFIG_BT_DIS_MODEL,
+			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
 			   ppg_file.sensor_format, accel_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;

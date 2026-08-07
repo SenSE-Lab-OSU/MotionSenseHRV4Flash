@@ -415,18 +415,13 @@ void battery_maintenance()
       battery_low = true;
       LOG_WRN("battery low, turning off file logs and data collection.");
       LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15 percent)");
-      if (!collecting_data){
-        reset_log_file();
-      }
-    }
-    
+    }   
   }
   else if (battery_level > 15){
     if (battery_low){
     LOG_INF("resuming log after battery improved");
     }
     battery_low = false;
-    
   } 
 
   if (collecting_data || host_wants_collection){

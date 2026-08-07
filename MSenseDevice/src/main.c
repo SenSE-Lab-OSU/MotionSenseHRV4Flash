@@ -20,10 +20,13 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
+#include "device_identity.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <string.h>
 
 
 
@@ -123,9 +126,6 @@ const struct device *i2c_dev;
 
 
 
-#define DEVICE_NAME CONFIG_BT_DEVICE_NAME
-#define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
-
 #define DIS_FW_REV_STR CONFIG_BT_DIS_FW_REV_STR
 #define DIS_FW_REV_STR_LEN (sizeof(DIS_FW_REV_STR))
 
@@ -143,14 +143,39 @@ static K_SEM_DEFINE(ble_init_ok, 0, 1);
 
 uint32_t global_counter;
 
-static const struct bt_data ad[] = {
-    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
+#define AD_FIELD_OVERHEAD 2U
+#define AD_FLAGS_ENCODED_LEN (AD_FIELD_OVERHEAD + 1U)
+#define AD_SERVICE_DATA_LEN (BT_UUID_SIZE_128 + MSENSE_DEVICE_ID_LEN)
+#define AD_SERVICE_DATA_ENCODED_LEN (AD_FIELD_OVERHEAD + AD_SERVICE_DATA_LEN)
+#define SCAN_RESPONSE_NAME_ENCODED_LEN (AD_FIELD_OVERHEAD + MSENSE_BLE_NAME_LEN)
+
+static uint8_t advertising_service_data[AD_SERVICE_DATA_LEN] = {
+    CONTROL_SERVICE_UUID,
 };
 
-static const struct bt_data sd[] = {
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL, CONTROL_SERVICE_UUID),
+static struct bt_data ad[] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA(BT_DATA_SVC_DATA128, advertising_service_data,
+            sizeof(advertising_service_data)),
 };
+
+static struct bt_data sd[] = {
+    {
+        .type = BT_DATA_NAME_COMPLETE,
+        .data = NULL,
+        .data_len = 0U,
+    },
+};
+
+BUILD_ASSERT(MSENSE_DEVICE_ID_LEN == 8U, "Device ID must be 64 bits");
+BUILD_ASSERT(MSENSE_BLE_NAME_LEN == 15U, "BLE name length changed unexpectedly");
+BUILD_ASSERT(sizeof(advertising_service_data) == 24U,
+             "Service data must contain UUID and device ID");
+BUILD_ASSERT(AD_FLAGS_ENCODED_LEN + AD_SERVICE_DATA_ENCODED_LEN <=
+             BT_GAP_ADV_MAX_ADV_DATA_LEN,
+             "Primary advertising data exceeds the legacy limit");
+BUILD_ASSERT(SCAN_RESPONSE_NAME_ENCODED_LEN <= BT_GAP_ADV_MAX_ADV_DATA_LEN,
+             "Scan response name exceeds the legacy limit");
 
 // Shell Commands for entering in the terminal, in case a bluetooth command is not avalible.
 SHELL_CMD_REGISTER(reset, NULL, "Resets Device", NVIC_SystemReset);
@@ -180,23 +205,20 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
-void write_uuid_file(){
+static void write_uuid_file(void)
+{
   bt_addr_le_t address = {0};
   size_t count = 1;
-  char addr_str[800]; 
-  //bt_le_oob_get_local()
+  char addr_str[BT_ADDR_LE_STR_LEN];
+  int result;
+
   bt_id_get(&address, &count);
   bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
-  printk("advertising with address: %s \n", addr_str);
-  strcat(addr_str, "\n Name:");
-  strcat(addr_str, CONFIG_BT_DEVICE_NAME);
-  strcat(addr_str, "\n Version: ");
-  strcat(addr_str, CONFIG_BT_DIS_MODEL);
-  
-  
-  int result = write_ble_uuid(addr_str);
-  if (result > 0){
-    
+
+  result = write_ble_uuid(addr_str, bt_get_name(),
+                          msense_device_identity_hex());
+  if (result < 0) {
+    LOG_ERR("Unable to write uuid.txt: %d", result);
   }
 }
 
@@ -244,9 +266,16 @@ static void bt_ready(int err)
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
 
-
-  if (err)
+  err = bt_set_name(msense_device_identity_name());
+  if (err) {
+    LOG_ERR("Unable to set generated BLE name: %d", err);
     return;
+  }
+
+  memcpy(&advertising_service_data[BT_UUID_SIZE_128],
+         msense_device_identity_bytes(), MSENSE_DEVICE_ID_LEN);
+  sd[0].data = msense_device_identity_name();
+  sd[0].data_len = MSENSE_BLE_NAME_LEN;
 
   // Start advertising
   const struct bt_le_adv_param v = {
@@ -455,9 +484,15 @@ void storage_clear_led(){
 
 int main(void)
 {
+	int identity_err;
 
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
+
+	identity_err = msense_device_identity_init();
+	if (identity_err) {
+		LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
+	}
   
   
   
@@ -541,7 +576,11 @@ int main(void)
   k_thread_name_set(&my_work_q.thread, "file_sys");
   const char *name = k_thread_name_get(&my_work_q.thread);
   LOG_INF("file workqueue thead: %s", name);
-  ble_init();
+  if (identity_err == 0) {
+    ble_init();
+  } else {
+    LOG_ERR("BLE advertising disabled because device identity is unavailable");
+  }
   
   get_storage_percent_full();
   

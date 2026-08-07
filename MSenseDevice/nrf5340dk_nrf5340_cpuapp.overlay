@@ -163,7 +163,8 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-twim";
 	status = "okay";
 
-	clock-frequency = <I2C_BITRATE_FAST>;
+	/* The bq27441-G1 requires 1-byte writes above 100 kHz. */
+	clock-frequency = <I2C_BITRATE_STANDARD>;
 
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
@@ -174,8 +175,10 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		reg = <0x55>;
 		design-voltage = <3700>;
 		design-capacity = <300>;
-		taper-current = <2>;
+		/* Above the bq25060's 25.2 mA worst-case termination threshold with a 5.9-kOhm ISET resistor. */
+		taper-current = <30>;
 		terminate-voltage = <3000>;
+		chemistry-id = <0x0128>; /* bq27441-G1A, LiCoO2, 4.2-V maximum charge */
 	};
 };
 /*

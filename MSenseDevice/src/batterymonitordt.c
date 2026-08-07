@@ -101,6 +101,13 @@ void dt_update_battery(const struct device *dev, bool extra_debug)
 
 	
 
+	status = sensor_sample_fetch_chan(dev, SENSOR_CHAN_GAUGE_MAX_LOAD_CURRENT);
+	if (status < 0)
+	{
+		printk("Unable to fetch Max Load Current\n");
+		return;
+	}
+
 	status = sensor_channel_get(dev, SENSOR_CHAN_GAUGE_MAX_LOAD_CURRENT, &current_max_load);
 	if (status < 0)
 	{
@@ -207,7 +214,7 @@ void dt_update_battery(const struct device *dev, bool extra_debug)
 			return;
 		}
 
-		bq274xx_show_values("Avg Power in Watt", avg_power);
+		printk("Average power: %d mW\n", avg_power.val1);
 
 		status = sensor_sample_fetch_chan(dev,
 										  SENSOR_CHAN_GAUGE_FULL_CHARGE_CAPACITY);
@@ -226,8 +233,7 @@ void dt_update_battery(const struct device *dev, bool extra_debug)
 			return;
 		}
 
-		printk("Full charge capacity: %d.%06dAh\n",
-			   full_charge_capacity.val1, full_charge_capacity.val2);
+		printk("Full charge capacity: %d mAh\n", full_charge_capacity.val1);
 
 		status = sensor_sample_fetch_chan(dev,
 										  SENSOR_CHAN_GAUGE_REMAINING_CHARGE_CAPACITY);
@@ -246,9 +252,8 @@ void dt_update_battery(const struct device *dev, bool extra_debug)
 			return;
 		}
 
-		printk("Remaining charge capacity: %d.%06dAh\n",
-			   remaining_charge_capacity.val1,
-			   remaining_charge_capacity.val2);
+		printk("Remaining charge capacity: %d mAh\n",
+			   remaining_charge_capacity.val1);
 
 		status = sensor_sample_fetch_chan(dev, SENSOR_CHAN_GAUGE_TEMP);
 		if (status < 0)

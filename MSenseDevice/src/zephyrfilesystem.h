@@ -68,6 +68,8 @@ void start_timer(int64_t* start_time_ref);
 
 int64_t stop_timer(int64_t* start_time_ref);
 
+void print_out_page(int page_num);
+
 void enable_read_only(bool enable);
 
 const char* sensor_enum_to_string(enum sensor_type sensor);

@@ -927,7 +927,23 @@ int test_desk_driver(){
 	print_page_hex(read_buf, sizeof(read_buf), true);
 	return 0;
 }
-
+uint8_t test_read_buf[4096];
+void print_out_page(int page_num){
+	
+	// can also just change this to disk_read()
+	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
+	if (page_num > 1500){
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 2, 1);
+	}
+	
+	//(filesystem_device2, page_num, test_read_buf);
+	//LOG_INF("with")
+	//spi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	print_page_hex(test_read_buf, sizeof(test_read_buf), false);
+}
 
 
 int read_storage_percent_full(){

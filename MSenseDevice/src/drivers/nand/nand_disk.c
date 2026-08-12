@@ -374,9 +374,9 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		result = ret;
 	}
 	else{
-	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
-	// we fake that we wrote so the the USB mass system does not complain.
-	result = disabled_usb_write ? 0 : -1;
+	LOG_DBG("fs wr req sect %lu num %lu, but dev read only", sector, count);
+	
+	result = disabled_usb_write ? -2 : -1;
 	}
 	k_mutex_unlock(&disk_access_mutex);
 	return result;

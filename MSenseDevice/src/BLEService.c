@@ -35,7 +35,7 @@
 static const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(0);
 
 
-LOG_MODULE_REGISTER(user_bluetooth);
+LOG_MODULE_REGISTER(user_bluetooth, 3);
 
 // define our status registers
 bool connectedFlag = false;
@@ -353,16 +353,12 @@ void connected(struct bt_conn* conn, uint8_t err){
     start_stop_device_collection(true);
     #endif
     
-    
-    
   }
 }
 
 void disconnected(struct bt_conn *conn, uint8_t reason){
   // Stop timer and do all the cleanup
   printk("Disconnected (reason %u)\n", reason);
-  
-  
   connectedFlag=false;
 
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -660,20 +656,18 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       (void *)conn, len);
   
     
-    if (len != 1){
-      LOG_WRN("invalid packet length: %i", len);
-    }
     
     if (offset != 0) {
       LOG_INF("Write: Incorrect data offset");
       return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
     }
   
-    uint8_t val = *((uint8_t *)buff);
+    int val = 0;
+    memcpy(&val, buff, len);
     LOG_INF("entered value: %i", val);
     if (!collecting_data){
       if (val == 0){
-        LOG_INF("Turning on auto brightness");
+        LOG_INF("Turning off auto brightness");
         use_fixed_ppg_brightness = false;
       }
       else if (val > 0 && val < 121){
@@ -684,7 +678,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
       }
       else if (val >= 122){
         // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
-        if ((val == 130 || val == 150) && !collecting_data){
+        if ((val == 130 || val == 150 || val == 151) && !collecting_data){
 
           bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
           reset_lock = true;
@@ -698,20 +692,24 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
             set_read_only(false);
           #endif
 
-          
+          storage_clear_led();
           if (val == 150){
-            storage_clear_led();
+            
             create_test_files(500);
-            blink_led(31);
+            
+          }
+          else if (val == 151) {
+            LOG_INF("1 fil opt");
+            create_test_file(512*450);
           }
           else{
-            LOG_INF("100 opt");
+            LOG_INF("100 fil opt");
             //struct k_work work;
             //k_work_init(&work, create_test_files_through_file_workqueue);
             //k_work_submit_to_queue(&my_work_q, &work);
             create_test_files(100);
           }
-          
+          blink_led(31);
           reset_lock = false;
           #if CONFIG_DISK_DRIVER_RAW_NAND
           set_read_only(true);
@@ -723,9 +721,12 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           }
           #endif
           
-          //NVIC_SystemReset();
 
         }
+        if (val >= 1000){
+          print_out_page(val - 1000);
+        }
+
       }  
       return 0;
       

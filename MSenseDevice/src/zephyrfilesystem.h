@@ -1,3 +1,5 @@
+#ifndef ZEPHYR_FILESYSTEM_H_
+#define ZEPHYR_FILESYSTEM_H_
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -100,3 +102,5 @@ extern uint64_t set_date_time;
 extern memory_container ppg_work_item;
 extern memory_container ecg_work_item;
 extern memory_container log_work_item;
+
+#endif /* ZEPHYR_FILESYSTEM_H_ */

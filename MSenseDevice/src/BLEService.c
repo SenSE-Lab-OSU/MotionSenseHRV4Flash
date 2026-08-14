@@ -24,6 +24,7 @@
 #include <hal/nrf_rtc.h>
 #include <nrfx_rtc.h>
 #include "BLEService.h"
+#include "imuFsyncTiming.h"
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
@@ -42,6 +43,7 @@ LOG_MODULE_REGISTER(user_bluetooth);
 #define RTC0_COLLECTION_COUNTER_WRAP (RTC0_COLLECTION_COUNTER_MASK + 1U)
 #define RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS (3U * RTC0_COLLECTION_COUNTER_HZ)
 #define RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL 0U
+#define RTC0_COLLECTION_FSYNC_COMPARE_CHANNEL 1U
 
 BUILD_ASSERT((32768U % RTC0_COLLECTION_COUNTER_HZ) == 0U,
 	     "RTC0 collection counter frequency must divide LFCLK");
@@ -111,6 +113,12 @@ static void rtc0_collection_counter_handler(nrfx_rtc_int_type_t event_type)
 
 	if (event_type == NRFX_RTC_INT_OVERFLOW) {
 		rtc0_collection_counter_epoch += RTC0_COLLECTION_COUNTER_WRAP;
+		return;
+	}
+
+	if (event_type ==
+	    (nrfx_rtc_int_type_t)RTC0_COLLECTION_FSYNC_COMPARE_CHANNEL) {
+		imu_fsync_timing_rtc_compare_isr();
 		return;
 	}
 

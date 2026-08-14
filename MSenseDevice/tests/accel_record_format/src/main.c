@@ -37,10 +37,10 @@ ZTEST(accel_record_format, test_header_is_byte_exact_and_valid)
 	uint8_t header[ACCEL_RECORD_FORMAT_BLOCK_BYTES];
 
 	accel_record_format_build_header(header);
-	zassert_mem_equal(header, "ACF2", 4U, "bad header magic");
-	zassert_equal(header[4], 2U, "bad format version LSB");
+	zassert_mem_equal(header, "ACF3", 4U, "bad header magic");
+	zassert_equal(header[4], 3U, "bad format version LSB");
 	zassert_equal(header[5], 0U, "bad format version MSB");
-	zassert_equal(header[6], 1U, "bad sample format LSB");
+	zassert_equal(header[6], 2U, "bad sample format LSB");
 	zassert_equal(header[7], 0U, "bad sample format MSB");
 	zassert_equal(get_u32_le(&header[8]), 1125U, "bad ODR numerator");
 	zassert_equal(get_u32_le(&header[12]), 2U, "bad ODR denominator");
@@ -50,7 +50,13 @@ ZTEST(accel_record_format, test_header_is_byte_exact_and_valid)
 	zassert_equal(get_u32_le(&header[20]),
 		      crc_with_zeroed_field(header, sizeof(header), 20U),
 		      "bad header CRC");
-	zassert_equal(header[24], 0U, "reserved header bytes must be zero");
+	zassert_equal(get_u32_le(&header[24]), 512U, "bad anchor clock rate");
+	zassert_equal(get_u32_le(&header[28]), 32U, "bad FSYNC edge interval");
+	zassert_equal(header[32], 0U, "bad FSYNC axis");
+	zassert_equal(header[33], 0U, "bad FSYNC bit");
+	zassert_equal(header[34], 1U, "bad timestamp algorithm");
+	zassert_equal(header[35], 32U, "bad timestamp window");
+	zassert_equal(header[36], 0U, "reserved header bytes must be zero");
 	zassert_equal(header[sizeof(header) - 1U], 0U,
 		      "reserved header bytes must be zero");
 }

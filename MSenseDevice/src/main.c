@@ -19,6 +19,7 @@
 #include "batterymonitordt.h"
 #include "ppgSensor.h"
 #include "accelRecorder.h"
+#include "imuFsyncTiming.h"
 #include "icm20948_accel.h"
 #include "common.h"
 #include "BLEService.h"
@@ -554,6 +555,8 @@ void enter_ecg_collection_mode(void)
   int ret = 0;
   uint64_t session_id;
   bool usb_was_enabled;
+  bool icm_started = false;
+  bool fsync_started = false;
 
   k_mutex_lock(&collection_mode_lock, K_FOREVER);
   if (collecting_data) {
@@ -609,6 +612,14 @@ void enter_ecg_collection_mode(void)
     LOG_ERR("Failed to start ICM-20948 accelerometer: %d", ret);
     goto start_accel_failed;
   }
+  icm_started = true;
+
+  ret = imu_fsync_timing_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start IMU FSYNC timing: %d", ret);
+    goto start_accel_failed;
+  }
+  fsync_started = true;
 
   ret = rtc0_collection_notification_start();
   if (ret != 0) {
@@ -621,7 +632,13 @@ void enter_ecg_collection_mode(void)
   k_mutex_unlock(&collection_mode_lock);
   return;
 
-start_accel_failed:
+ start_accel_failed:
+  if (fsync_started) {
+    imu_fsync_timing_stop();
+  }
+  if (icm_started) {
+    (void)icm20948_accel_stop();
+  }
   (void)icm20948_accel_set_fifo_consumer(NULL, NULL);
   (void)accel_recorder_abort();
 start_ecg_failed:
@@ -661,6 +678,7 @@ start_failed:
 void exit_ecg_collection_mode(void)
 {
   int ret;
+  uint32_t fsync_edge_count;
 
   k_mutex_lock(&collection_mode_lock, K_FOREVER);
   if (!collecting_data) {
@@ -674,10 +692,30 @@ void exit_ecg_collection_mode(void)
   host_wants_collection = false;
   collecting_data = false;
 
+  /*
+   * A very short recording may not yet have enough transitions to estimate
+   * the IMU period. Keep the stream alive until the second hardware marker
+   * edge, then leave more than one worst-case sample period for it to enter
+   * the FIFO before the final drain.
+   */
+  while (imu_fsync_timing_edge_count_get() < 2U) {
+    fsync_edge_count = imu_fsync_timing_edge_count_get();
+    ret = imu_fsync_timing_wait_for_edge_after(fsync_edge_count,
+                                                K_MSEC(500));
+    if (ret != 0) {
+      LOG_WRN("Timed out waiting for IMU FSYNC startup edges: %d", ret);
+      break;
+    }
+  }
+  if (imu_fsync_timing_edge_count_get() >= 2U) {
+    k_sleep(K_MSEC(4));
+  }
+
   ret = icm20948_accel_stop();
   if (ret != 0) {
     LOG_WRN("ICM-20948 accelerometer stop returned %d", ret);
   }
+  imu_fsync_timing_stop();
   ret = icm20948_accel_set_fifo_consumer(NULL, NULL);
   if (ret != 0) {
     LOG_WRN("ICM-20948 FIFO consumer clear returned %d", ret);
@@ -851,6 +889,11 @@ int main(void)
   if (ret != 0)
   {
     LOG_ERR("ICM-20948 accelerometer initialization failed: %d", ret);
+  }
+  ret = imu_fsync_timing_init();
+  if (ret != 0)
+  {
+    LOG_ERR("IMU FSYNC timing initialization failed: %d", ret);
   }
   accel_recorder_set_fault_handler(accel_record_fault_handler, NULL);
   ret = button0_init();

@@ -5,7 +5,7 @@
 
 #define MSENSE_DEVICE_ID_LEN 8U
 #define MSENSE_DEVICE_ID_HEX_LEN 16U
-#define MSENSE_BLE_NAME_LEN 15U
+#define MSENSE_BLE_NAME_LEN 16U
 
 int msense_device_identity_init(void);
 

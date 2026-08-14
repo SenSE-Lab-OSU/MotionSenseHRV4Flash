@@ -168,7 +168,7 @@ static struct bt_data sd[] = {
 };
 
 BUILD_ASSERT(MSENSE_DEVICE_ID_LEN == 8U, "Device ID must be 64 bits");
-BUILD_ASSERT(MSENSE_BLE_NAME_LEN == 15U, "BLE name length changed unexpectedly");
+BUILD_ASSERT(MSENSE_BLE_NAME_LEN == 16U, "BLE name length changed unexpectedly");
 BUILD_ASSERT(sizeof(advertising_service_data) == 24U,
              "Service data must contain UUID and device ID");
 BUILD_ASSERT(AD_FLAGS_ENCODED_LEN + AD_SERVICE_DATA_ENCODED_LEN <=

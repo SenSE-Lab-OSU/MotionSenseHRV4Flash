@@ -244,7 +244,7 @@ struct spi_nor_data {
 
 };
 
-extern bool bad_block_scan_done;
+/* bad_block_scan_done and the rest of the bad block state now live in bad_page.h */
 
 extern int current_writes;
 extern int current_reads;

@@ -17,10 +17,14 @@ menuconfig DISK_DRIVER_RAW_NAND
 
 menuconfig RAW_NAND_BAD_SECTOR_SAVING
     bool
-    prompt "Allows bad pages to be registered in a memory array stored on the nor flash."
+    prompt "Allows bad pages to be registered in a memory array persisted through the settings subsystem."
     default n
+    select SETTINGS
     help
        Not currently enabled since our Custom Sense FTL does not support block reallocation.
+       The table lives in the settings subsystem (NVS on internal flash), so the
+       settings_storage partition has to be large enough to hold the table in a
+       single NVS entry. See bad_sector_detect_limit in bad_page.c.
 
 config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
 	bool "allows the file system to be set as read only during runtime (via set_read_only)"

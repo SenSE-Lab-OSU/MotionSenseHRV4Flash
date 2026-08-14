@@ -20,7 +20,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys_clock.h>
 #include <zephyr/pm/device.h>
-#include <zephyr/settings/settings.h>
 
 #include "spi_nand.h"
 #include "jesd216.h"
@@ -1136,58 +1135,6 @@ static int spi_nor_pm_control(const struct device *dev, enum pm_device_action ac
 
 #endif /* CONFIG_PM_DEVICE */
 
-// persisted through the settings subsystem so the manufacturer bad-block scan
-// only ever runs on the very first boot of a device
-bool bad_block_scan_done;
-
-static int nand_settings_set(const char *name, size_t len,
-			     settings_read_cb read_cb, void *cb_arg)
-{
-	const char *next;
-
-	if (settings_name_steq(name, "bbscan_done", &next) && !next) {
-		if (len != sizeof(bad_block_scan_done)) {
-			return -EINVAL;
-		}
-		int rc = read_cb(cb_arg, &bad_block_scan_done, sizeof(bad_block_scan_done));
-		return (rc >= 0) ? 0 : rc;
-	}
-
-	return -ENOENT;
-}
-
-SETTINGS_STATIC_HANDLER_DEFINE(spi_nand, "main", NULL, nand_settings_set, NULL, NULL);
-
-// runs the manufacturer bad-block scan once per device lifetime, remembering
-// completion in the settings subsystem (NVS on internal flash)
-static void run_first_boot_bad_block_scan(const struct device *dev)
-{
-	int rc = settings_subsys_init();
-	if (rc == 0) {
-		rc = settings_load_subtree("main");
-	}
-	if (rc != 0) {
-		LOG_WRN("settings unavailable (%d), skipping bad block scan", rc);
-		return;
-	}
-
-	if (bad_block_scan_done) {
-		LOG_INF("manufacturer bad block scan already done, skipping");
-		print_bad_sect_info(); 
-		return;
-	}
-
-	LOG_INF("first boot: scanning for manufacturer bad blocks");
-	detect_manufacturer_bad_blocks(dev);
-
-	bad_block_scan_done = true;
-	rc = settings_save_one("main/bbscan_done", &bad_block_scan_done,
-			       sizeof(bad_block_scan_done));
-	if (rc != 0) {
-		LOG_WRN("failed to persist bad block scan flag: %d", rc);
-	}
-}
-
 /**
  * @brief Initialize and configure the flash
  *
@@ -1214,9 +1161,10 @@ int spi_init(const struct device *dev)
 		ret = spi_configure(dev, cfg);
 
 	}
-	// we need the settings subsystem to check and save whether bad block collection
+	// restores the bad sector table and runs the one-time manufacturer bad block
+	// scan; both are persisted through the settings subsystem
 	if (IS_ENABLED(CONFIG_SETTINGS)){
-	run_first_boot_bad_block_scan(dev);
+	bad_sector_storage_init(dev);
 	}
 
 	set_flash(dev, 0);

@@ -191,11 +191,9 @@ static int disk_nand_access_init(struct disk_info *disk)
 
 static int disk_acess_init2(struct disk_info *disk){
 
-	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-	//load_bad_sectors_arr();
-	#endif
+	// the bad sector table is loaded by bad_sector_storage_init() from spi_init()
 	return 0;
-} 
+}
 
 static int disk_nand_access_status(struct disk_info *disk)
 {

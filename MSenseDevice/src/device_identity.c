@@ -20,7 +20,7 @@ static char device_name[MSENSE_BLE_NAME_LEN + 1U];
 static bool identity_initialized;
 
 BUILD_ASSERT(MSENSE_BLE_NAME_PREFIX_LEN + 5U == MSENSE_BLE_NAME_LEN,
-             "BLE name prefix and suffix lengths must match");
+             "BLE name prefix and suffix must each match their lengths");
 
 static bool device_id_is_invalid(const uint8_t *id)
 {

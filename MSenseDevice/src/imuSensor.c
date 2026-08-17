@@ -249,10 +249,14 @@ uint32_t last_activated_trigger_counter = 0;
 
 // need to implement a read for this
 uint8_t enmo_threshold_packet[9] = {0};
-#define ENMO_UPDATE_RATE 2
+
+// BLE report window: average raw per-sample ENMO over this many accel
+// samples and notify every window. 32Hz isn't evenly divisible by 10Hz,
+// so 3 samples (~10.67Hz) is the closest achievable report rate.
+#define ENMO_REPORT_WINDOW_SAMPLES 3
 float n_second_enmo = 0;
-const int enmo_update_rate = ENMO_UPDATE_RATE;
-float update_enmo_arr[ENMO_UPDATE_RATE] = {0.0};
+float enmo_report_window[ENMO_REPORT_WINDOW_SAMPLES] = {0.0};
+uint32_t enmo_report_window_counter = 0;
 
 #define ENMO_PACKET_ENMO_OFFSET 0U
 #define ENMO_PACKET_COUNTER_OFFSET (sizeof(n_second_enmo))
@@ -278,11 +282,37 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
     if(enmo < 0 ) enmo=0;
+
+    // Fast BLE report window: average the raw per-sample ENMO and notify
+    // every ENMO_REPORT_WINDOW_SAMPLES samples, independent of the 1-second
+    // activity-threshold bucket below.
+    enmo_report_window[enmo_report_window_counter] = enmo;
+    enmo_report_window_counter++;
+    if (enmo_report_window_counter >= ENMO_REPORT_WINDOW_SAMPLES){
+      enmo_report_window_counter = 0;
+
+      n_second_enmo = 0;
+      for (int x = 0; x < ENMO_REPORT_WINDOW_SAMPLES; x++){
+        n_second_enmo += enmo_report_window[x];
+      }
+      n_second_enmo /= ENMO_REPORT_WINDOW_SAMPLES;
+
+      memcpy(&enmo_packet[ENMO_PACKET_ENMO_OFFSET], &n_second_enmo,
+        sizeof(n_second_enmo));
+      memcpy(&enmo_packet[ENMO_PACKET_COUNTER_OFFSET], &global_counter,
+        sizeof(global_counter));
+      my_motionData.dataPacket = enmo_packet;
+      my_motionData.packetLength = sizeof(enmo_packet);
+      LOG_INF("ENMO ble update: %d", (int)(n_second_enmo*1000));
+      // Submit our data to the bluetooth work thread.
+      k_work_submit(&my_motionData.work);
+    }
+
     // when we send the enmo, we send as an second average
     enmo_store[counterAcc] = enmo;
     counterAcc++;
     if (counterAcc >= IMU_FIXED_OUTPUT_HZ){
-      
+
       counterAcc = 0;
       //calculate the enmo as an average of the output samples accumulated for 1 sec
       enmo = 0;
@@ -296,32 +326,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       LOG_DBG("Enmo: %d", (int)(enmo*1000));
       //currentAccData.time = get_current_unix_time();
 
-      update_enmo_arr[enmo_sample_counter % enmo_update_rate] = enmo;
       // this function will increment enmo_sample_counter
       enmo_threshold_evaluation(enmo);
-      
-
-      int enmo_modulo = enmo_sample_counter % enmo_update_rate; 
-
-      if (enmo_modulo == 0){
-      
-      // compute the n second summary (n is defined as enmo_update_rate)
-      n_second_enmo = 0;
-      for (int x = 0; x < enmo_update_rate; x++){
-        n_second_enmo += update_enmo_arr[x];
-      }
-      n_second_enmo /= enmo_update_rate;
-
-      memcpy(&enmo_packet[ENMO_PACKET_ENMO_OFFSET], &n_second_enmo,
-        sizeof(n_second_enmo));
-      memcpy(&enmo_packet[ENMO_PACKET_COUNTER_OFFSET], &global_counter,
-        sizeof(global_counter));
-      my_motionData.dataPacket = enmo_packet;
-      my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %d", (int)(currentAccData.ENMO*1000));
-      // Submit our data to the bluetooth work thread.
-      k_work_submit(&my_motionData.work);
-      }
     }
 
 

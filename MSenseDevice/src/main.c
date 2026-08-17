@@ -940,7 +940,7 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      //battery_maintenance();
+      battery_maintenance();
       //get_current_unix_time();
       LOG_INF("filesystem work queue active: %d", filesystem_workqueue_started);
     }

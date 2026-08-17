@@ -175,7 +175,8 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-twim";
 	status = "okay";
 
-	clock-frequency = <I2C_BITRATE_FAST>;
+	/* The BQ27441 requires 1-byte writes above 100 kHz; this driver uses multi-byte writes. */
+	clock-frequency = <I2C_BITRATE_STANDARD>;
 
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
@@ -185,8 +186,9 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		compatible = "ti,bq274xx";
 		reg = <0x55>;
 		design-voltage = <3700>;
-		design-capacity = <300>;
-		taper-current = <2>;
+		design-capacity = <200>;
+		/* Above the BQ21040's approximately 6.6-8 mA charge-complete threshold. */
+		taper-current = <9>;
 		terminate-voltage = <3000>;
 	};
 };

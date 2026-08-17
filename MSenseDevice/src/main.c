@@ -946,6 +946,11 @@ int main(void)
     security_lock = true;
   #endif
 
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to enable USB mass storage: %d", ret);
+  }
 
   k_sleep(K_SECONDS(2));
   
@@ -1001,12 +1006,6 @@ int main(void)
   
   collecting_data = false;
   host_wants_collection = false;
-
-  ret = set_usb_mass_storage_enabled(true);
-  if (ret != 0)
-  {
-    LOG_ERR("Failed to enable USB mass storage: %d", ret);
-  }
 
   while (1)
   {

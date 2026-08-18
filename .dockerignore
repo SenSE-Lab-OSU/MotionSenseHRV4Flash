@@ -1,0 +1,7 @@
+.git
+.vscode
+build/
+out/
+MSenseDevice/
+DataExtraction/
+*.DS_Store

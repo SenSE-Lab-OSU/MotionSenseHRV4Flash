@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Thin wrapper that runs a command inside the nRF Connect SDK toolchain
+# environment (the same toolchain the nRF Connect for VS Code extension
+# and `nrfutil toolchain-manager launch` use: pinned CMake/Ninja/Python/
+# GNU Arm Embedded GCC/west, with PATH & friends already configured).
+set -euo pipefail
+exec nrfutil toolchain-manager launch --ncs-version "${NCS_VERSION}" -- "$@"

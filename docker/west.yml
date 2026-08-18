@@ -1,0 +1,72 @@
+manifest:
+  remotes:
+    - name: nrfconnect
+      url-base: https://github.com/nrfconnect
+    - name: sense-lab
+      url-base: https://github.com/SenSE-Lab-OSU
+
+  projects:
+    # Pulls in the standard nRF Connect SDK manifest (sdk-nrf) pinned to
+    # v2.9.3. Its own west.yml in turn imports zephyr, nrfxlib, mcuboot,
+    # trusted-firmware-m, and all the other NCS modules.
+    - name: nrf
+      remote: nrfconnect
+      repo-path: sdk-nrf
+      revision: v2.9.3
+      import: true
+
+    # Override the "zephyr" project pulled in transitively by sdk-nrf's
+    # manifest with the SenSE Lab custom fork/branch. West gives projects
+    # defined directly in the top-level (this) manifest precedence over
+    # same-named projects brought in via `import:`, so this swaps zephyr
+    # out cleanly without needing to touch sdk-nrf's own west.yml.
+    - name: zephyr
+      remote: sense-lab
+      repo-path: SenSE-sdk-zephyr
+      revision: SenSE-ncs2.9.3
+      # Required so west picks up zephyr's extension commands (build,
+      # flash, zephyr-export, ...) -- dropped otherwise since this entry
+      # replaces (rather than extends) sdk-nrf's own "zephyr" project,
+      # which normally carries this field.
+      west-commands: scripts/west-commands.yml
+      # Also copied from sdk-nrf's own "zephyr" project entry: NCS pulls
+      # this specific allowlist of projects out of zephyr's own nested
+      # west.yml (HALs, cmsis, fatfs, etc.) -- without it, modules like
+      # nrfxlib fail to configure because their "hal_nordic" dependency
+      # was never fetched.
+      import:
+        name-allowlist:
+          - TraceRecorderSource
+          - canopennode
+          - chre
+          - cmsis
+          - cmsis-dsp
+          - cmsis-nn
+          - edtt
+          - fatfs
+          - hal_nordic
+          - hal_st # required for ST sensors (unrelated to STM32 MCUs)
+          - hal_wurthelektronik
+          - hostap
+          - liblc3
+          - libmetal
+          - littlefs
+          - loramac-node
+          - lvgl
+          - lz4
+          - mipi-sys-t
+          - nanopb
+          - net-tools
+          - nrf_hw_models
+          - nrf_wifi
+          - open-amp
+          - picolibc
+          - segger
+          - tinycrypt
+          - tf-m-tests
+          - uoscore-uedhoc
+          - zcbor
+          - zscilib
+
+  self:
+    path: manifest-repo

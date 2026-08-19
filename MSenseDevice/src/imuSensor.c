@@ -27,6 +27,12 @@ uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
 struct bleDataPacket my_motionData;
 
+// Real-time accel + quaternion stream packet: accelX,Y,Z (int16 x3) +
+// quaternion q0,q1,q2 (float32 x3, q3 reconstructable since q3 >= 0 is
+// enforced) + packet counter (uint16).
+uint8_t imuStreamPkt[ACC_GYRO_DATA_LEN];
+BUILD_ASSERT(ACC_GYRO_DATA_LEN == 20, "IMU stream packet layout assumes a 20 byte characteristic");
+
 
 struct accel_config accelConfig = {
   .isEnabled = true, 
@@ -253,7 +259,7 @@ uint8_t enmo_threshold_packet[9] = {0};
 // BLE report window: average raw per-sample ENMO over this many accel
 // samples and notify every window. 32Hz isn't evenly divisible by 10Hz,
 // so 3 samples (~10.67Hz) is the closest achievable report rate.
-#define ENMO_REPORT_WINDOW_SAMPLES 3
+#define ENMO_REPORT_WINDOW_SAMPLES 1
 float n_second_enmo = 0;
 float enmo_report_window[ENMO_REPORT_WINDOW_SAMPLES] = {0.0};
 uint32_t enmo_report_window_counter = 0;
@@ -493,6 +499,19 @@ void motion_data_timeout_handler(struct k_work *item)
     memcpy(&accel_and_gyro[11], &global_tick_512hz, sizeof(global_tick_512hz));
 
     store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
+
+    // Real-time accel + quaternion BLE stream (independent of file storage
+    // and of the legacy ACC_GYRO_TX/ENMO paths below).
+    memcpy(&imuStreamPkt[0], &dataReadAccX, sizeof(dataReadAccX));
+    memcpy(&imuStreamPkt[2], &dataReadAccY, sizeof(dataReadAccY));
+    memcpy(&imuStreamPkt[4], &dataReadAccZ, sizeof(dataReadAccZ));
+    memcpy(&imuStreamPkt[6], float_cast_arr[0].floatcast, sizeof(float_cast_arr[0].floatcast));
+    memcpy(&imuStreamPkt[10], float_cast_arr[1].floatcast, sizeof(float_cast_arr[1].floatcast));
+    memcpy(&imuStreamPkt[14], float_cast_arr[2].floatcast, sizeof(float_cast_arr[2].floatcast));
+    uint16_t imu_stream_counter = (uint16_t)global_counter;
+    memcpy(&imuStreamPkt[18], &imu_stream_counter, sizeof(imu_stream_counter));
+    imu_stream_send(imuStreamPkt, sizeof(imuStreamPkt));
+
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 
     // this function seperately fills blePktMotion with the desired size

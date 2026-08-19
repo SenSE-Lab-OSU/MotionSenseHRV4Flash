@@ -352,7 +352,13 @@ void connected(struct bt_conn* conn, uint8_t err){
     #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
     start_stop_device_collection(true);
     #endif
-    
+    // blink proceedure to indicate connected status
+    blink_led(30);
+    k_sleep(K_MSEC(100));
+    blink_led(30);
+    k_sleep(K_MSEC(100));
+    blink_led(30);
+
   }
 }
 

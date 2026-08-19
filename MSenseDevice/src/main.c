@@ -604,6 +604,7 @@ int main(void)
       battery_maintenance();
       get_current_unix_time();
       LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
+      LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
     }
 
     if (!connectedFlag){

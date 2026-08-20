@@ -25,8 +25,6 @@
 LOG_MODULE_REGISTER(esb_prx, CONFIG_ESB_PRX_APP_LOG_LEVEL);
 
 static struct esb_payload rx_payload;
-static struct esb_payload tx_payload = ESB_CREATE_PAYLOAD(0,
-	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17);
 
 static void leds_update(uint8_t value)
 {
@@ -157,7 +155,8 @@ int esb_initialize(void)
 
 	struct esb_config config = ESB_DEFAULT_CONFIG;
 
-	config.protocol = ESB_PROTOCOL_ESB_DPL;
+	config.protocol = ESB_PROTOCOL_ESB;
+	config.payload_length = 8;
 	config.bitrate = ESB_BITRATE_2MBPS;
 	config.mode = ESB_MODE_PRX;
 	config.event_handler = event_handler;
@@ -213,12 +212,6 @@ int main(void)
 	}
 
 	LOG_INF("Initialization complete");
-
-	err = esb_write_payload(&tx_payload);
-	if (err) {
-		LOG_ERR("Write payload, err %d", err);
-		return 0;
-	}
 
 	LOG_INF("Setting up for packet receiption");
 

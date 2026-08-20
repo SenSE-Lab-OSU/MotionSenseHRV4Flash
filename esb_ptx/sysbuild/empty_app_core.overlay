@@ -1,0 +1,51 @@
+/*
+ * Devicetree overlay template for the empty_app_core sysbuild image.
+ *
+ * This image builds for nrf5340dk/nrf5340/cpuapp. Add only application-core
+ * overrides here; all other settings inherit from the nRF5340 DK board
+ * Devicetree.
+ */
+
+&{/buttons} {
+	status = "disabled";
+};
+
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&vregh {
+	status = "disabled";
+};
+
+&qspi {
+	status = "disabled";
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&mx25r64 {
+	status = "disabled";
+};
+
+&spi4 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
+
+&adc {
+	status = "disabled";
+};

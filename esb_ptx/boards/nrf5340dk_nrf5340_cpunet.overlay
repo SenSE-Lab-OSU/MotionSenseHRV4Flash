@@ -1,0 +1,39 @@
+/*
+ * Board-specific Devicetree overlay template for nrf5340dk/nrf5340/cpunet.
+ *
+ * The build system discovers this file automatically for that board target.
+ * Add only project-specific node overrides; all other settings inherit from
+ * the nRF5340 DK board Devicetree.
+ */
+
+&{/buttons} {
+	status = "disabled";
+};
+
+&led0 {
+	gpios = <&gpio0 30 0>;
+	label = "Red LED";
+};
+
+&led1 {
+	gpios = <&gpio0 31 0>;
+	label = "Green LED";
+};
+
+&led2 {
+	gpios = <&gpio1 11 0>;
+	label = "Orange LED";
+};
+
+&led3 {
+	gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;
+	label = "NC LED";
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&rtc0 {
+	status = "okay";
+};

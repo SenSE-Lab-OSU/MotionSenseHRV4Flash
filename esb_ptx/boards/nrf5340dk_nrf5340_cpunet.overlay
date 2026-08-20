@@ -37,3 +37,12 @@
 &rtc0 {
 	status = "okay";
 };
+
+&gpio1 {
+	five_v_en: five_v_en {
+		gpio-hog;
+		gpios = <15 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "5V_EN";
+	};
+};

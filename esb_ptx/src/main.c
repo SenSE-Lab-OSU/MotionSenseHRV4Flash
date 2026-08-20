@@ -3,52 +3,100 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
+
+#include <errno.h>
+
+#include <zephyr/device.h>
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
+
+#include <dk_buttons_and_leds.h>
+#include <esb.h>
+#include <hal/nrf_rtc.h>
+
 #if defined(NRF54L15_XXAA)
 #include <hal/nrf_clock.h>
 #endif /* defined(NRF54L15_XXAA) */
-#include <zephyr/drivers/gpio.h>
-#include <zephyr/irq.h>
-#include <zephyr/logging/log.h>
-#include <nrf.h>
-#include <esb.h>
-#include <zephyr/device.h>
-#include <zephyr/devicetree.h>
-#include <zephyr/kernel.h>
-#include <zephyr/types.h>
-#include <dk_buttons_and_leds.h>
+
 #if defined(CONFIG_CLOCK_CONTROL_NRF2)
 #include <hal/nrf_lrcconf.h>
-#endif
+#endif /* defined(CONFIG_CLOCK_CONTROL_NRF2) */
 
 LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 
-static bool ready = true;
+#define ESB_PTX_PAYLOAD_LENGTH		8U
+#define RTC0_TICKS_PER_SECOND		NRF_RTC_INPUT_FREQ
+#define ORANGE_LED_DUTY_CYCLE_PERCENT	5U
+#define ORANGE_LED_PERIOD_TICKS	RTC0_TICKS_PER_SECOND
+#define ORANGE_LED_ON_TICKS							       \
+	((ORANGE_LED_PERIOD_TICKS * ORANGE_LED_DUTY_CYCLE_PERCENT + 50U) / 100U)
+#define ORANGE_LED_OFF_TICKS		(ORANGE_LED_PERIOD_TICKS - ORANGE_LED_ON_TICKS)
+#define ESB_PTX_TX_INTERVAL_TICKS						       \
+	DIV_ROUND_UP((uint64_t)CONFIG_ESB_PTX_TX_INTERVAL_MS * RTC0_TICKS_PER_SECOND, \
+		     MSEC_PER_SEC)
+
+BUILD_ASSERT(ORANGE_LED_ON_TICKS > 0U);
+BUILD_ASSERT(ORANGE_LED_OFF_TICKS > 0U);
+BUILD_ASSERT(ESB_PTX_TX_INTERVAL_TICKS > 0U);
+BUILD_ASSERT(ESB_PTX_TX_INTERVAL_TICKS < (NRF_RTC_COUNTER_MAX / 2U));
+
+static atomic_t tx_ready;
+static atomic_t packet_counter;
 static struct esb_payload tx_payload = ESB_CREATE_PAYLOAD(0,
-	0x01, 0x00, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08);
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
 
-#define _RADIO_SHORTS_COMMON                                                   \
-	(RADIO_SHORTS_READY_START_Msk | RADIO_SHORTS_END_DISABLE_Msk |         \
-	 RADIO_SHORTS_ADDRESS_RSSISTART_Msk |                                  \
-	 RADIO_SHORTS_DISABLED_RSSISTOP_Msk)
-
-void event_handler(struct esb_evt const *event)
+static uint32_t rtc0_counter_get(void)
 {
-	ready = true;
+	return nrf_rtc_counter_get(NRF_RTC0);
+}
 
+static uint32_t rtc0_ticks_elapsed(uint32_t start_ticks, uint32_t end_ticks)
+{
+	return (end_ticks - start_ticks) & NRF_RTC_COUNTER_MAX;
+}
+
+static bool rtc0_interval_elapsed(uint32_t start_ticks, uint32_t interval_ticks,
+				  uint32_t now_ticks)
+{
+	return rtc0_ticks_elapsed(start_ticks, now_ticks) >= interval_ticks;
+}
+
+static void rtc0_timebase_start(void)
+{
+	/*
+	 * This ESB configuration uses MPSL FEM-only support, so it does not
+	 * initialize MPSL or use RTC0. The network-core system clock uses RTC1.
+	 */
+	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_STOP);
+	nrf_rtc_prescaler_set(NRF_RTC0, 0);
+	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_CLEAR);
+	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_START);
+}
+
+static void event_handler(const struct esb_evt *event)
+{
 	switch (event->evt_id) {
 	case ESB_EVENT_TX_SUCCESS:
-		LOG_DBG("TX SUCCESS EVENT");
+		atomic_inc(&packet_counter);
+		atomic_set(&tx_ready, 1);
 		break;
+
 	case ESB_EVENT_TX_FAILED:
-		LOG_DBG("TX FAILED EVENT");
+		atomic_set(&tx_ready, 1);
+		break;
+
+	default:
 		break;
 	}
 }
 
 #if defined(CONFIG_CLOCK_CONTROL_NRF)
-int clocks_start(void)
+
+static int clocks_start(void)
 {
 	int err;
 	int res;
@@ -57,7 +105,7 @@ int clocks_start(void)
 
 	clk_mgr = z_nrf_clock_control_get_onoff(CLOCK_CONTROL_NRF_SUBSYS_HF);
 	if (!clk_mgr) {
-		LOG_ERR("Unable to get the Clock manager");
+		LOG_ERR("Unable to get the clock manager");
 		return -ENXIO;
 	}
 
@@ -65,14 +113,14 @@ int clocks_start(void)
 
 	err = onoff_request(clk_mgr, &clk_cli);
 	if (err < 0) {
-		LOG_ERR("Clock request failed: %d", err);
+		LOG_ERR("HF clock request failed: %d", err);
 		return err;
 	}
 
 	do {
 		err = sys_notify_fetch_result(&clk_cli.notify, &res);
 		if (!err && res) {
-			LOG_ERR("Clock could not be started: %d", res);
+			LOG_ERR("HF clock could not start: %d", res);
 			return res;
 		}
 	} while (err);
@@ -82,13 +130,12 @@ int clocks_start(void)
 	nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_PLLSTART);
 #endif /* defined(NRF54L15_XXAA) */
 
-	LOG_DBG("HF clock started");
 	return 0;
 }
 
 #elif defined(CONFIG_CLOCK_CONTROL_NRF2)
 
-int clocks_start(void)
+static int clocks_start(void)
 {
 	int err;
 	int res;
@@ -96,17 +143,15 @@ int clocks_start(void)
 		DEVICE_DT_GET_OR_NULL(DT_CLOCKS_CTLR(DT_NODELABEL(radio)));
 	struct onoff_client radio_cli;
 
-	/** Keep radio domain powered all the time to reduce latency. */
 	nrf_lrcconf_poweron_force_set(NRF_LRCCONF010, NRF_LRCCONF_POWER_DOMAIN_1, true);
 
 	sys_notify_init_spinwait(&radio_cli.notify);
 
 	err = nrf_clock_control_request(radio_clk_dev, NULL, &radio_cli);
-
 	do {
 		err = sys_notify_fetch_result(&radio_cli.notify, &res);
 		if (!err && res) {
-			LOG_ERR("Clock could not be started: %d", res);
+			LOG_ERR("Radio clock could not start: %d", res);
 			return res;
 		}
 	} while (err == -EAGAIN);
@@ -116,28 +161,25 @@ int clocks_start(void)
 	nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_PLLSTART);
 #endif /* defined(NRF54L15_XXAA) */
 
-	LOG_DBG("HF clock started");
 	return 0;
 }
 
 #else
-BUILD_ASSERT(false, "No Clock Control driver");
+BUILD_ASSERT(false, "No clock control driver");
 #endif /* defined(CONFIG_CLOCK_CONTROL_NRF2) */
 
-int esb_initialize(void)
+static int esb_initialize(void)
 {
 	int err;
-	/* These are arbitrary default addresses. In end user products
-	 * different addresses should be used for each set of devices.
-	 */
 	uint8_t base_addr_0[4] = {0xE7, 0xE7, 0xE7, 0xE7};
 	uint8_t base_addr_1[4] = {0xC2, 0xC2, 0xC2, 0xC2};
-	uint8_t addr_prefix[8] = {0xE7, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8};
-
+	uint8_t addr_prefix[8] = {0xE7, 0xC2, 0xC3, 0xC4,
+				  0xC5, 0xC6, 0xC7, 0xC8};
 	struct esb_config config = ESB_DEFAULT_CONFIG;
 
-	config.protocol = ESB_PROTOCOL_ESB;
-	config.payload_length = 8;
+	/* DPL is required by ESB for per-packet no-ACK transmissions. */
+	config.protocol = ESB_PROTOCOL_ESB_DPL;
+	config.payload_length = ESB_PTX_PAYLOAD_LENGTH;
 	config.retransmit_delay = 600;
 	config.bitrate = ESB_BITRATE_2MBPS;
 	config.event_handler = event_handler;
@@ -148,7 +190,6 @@ int esb_initialize(void)
 	}
 
 	err = esb_init(&config);
-
 	if (err) {
 		return err;
 	}
@@ -163,30 +204,27 @@ int esb_initialize(void)
 		return err;
 	}
 
-	err = esb_set_prefixes(addr_prefix, ARRAY_SIZE(addr_prefix));
-	if (err) {
-		return err;
-	}
-
-	return 0;
+	return esb_set_prefixes(addr_prefix, ARRAY_SIZE(addr_prefix));
 }
 
-static void leds_update(uint8_t value)
+static int packet_send(uint32_t rtc0_ticks)
 {
-	uint32_t leds_mask =
-		(!(value % 8 > 0 && value % 8 <= 4) ? DK_LED1_MSK : 0) |
-		(!(value % 8 > 1 && value % 8 <= 5) ? DK_LED2_MSK : 0) |
-		(!(value % 8 > 2 && value % 8 <= 6) ? DK_LED3_MSK : 0) |
-		(!(value % 8 > 3) ? DK_LED4_MSK : 0);
+	uint32_t count = (uint32_t)atomic_get(&packet_counter);
 
-	dk_set_leds(leds_mask);
+	/* Payload fields: RTC0 counter followed by packet counter, both little-endian. */
+	sys_put_le32(rtc0_ticks, &tx_payload.data[0]);
+	sys_put_le32(count, &tx_payload.data[sizeof(rtc0_ticks)]);
+	tx_payload.noack = true;
+
+	return esb_write_payload(&tx_payload);
 }
 
 int main(void)
 {
+	bool orange_led_on = true;
+	uint32_t last_led_state_change_ticks;
+	uint32_t last_tx_ticks;
 	int err;
-
-	LOG_INF("Enhanced ShockBurst ptx sample");
 
 	err = clocks_start();
 	if (err) {
@@ -195,32 +233,58 @@ int main(void)
 
 	err = dk_leds_init();
 	if (err) {
-		LOG_ERR("LEDs initialization failed, err %d", err);
+		LOG_ERR("LED initialization failed: %d", err);
 		return 0;
 	}
 
 	err = esb_initialize();
 	if (err) {
-		LOG_ERR("ESB initialization failed, err %d", err);
+		LOG_ERR("ESB initialization failed: %d", err);
 		return 0;
 	}
 
-	LOG_INF("Initialization complete");
-	LOG_INF("Sending test packet");
+	rtc0_timebase_start();
 
-	tx_payload.noack = false;
+	atomic_set(&tx_ready, 1);
+	atomic_set(&packet_counter, 0);
+	last_led_state_change_ticks = rtc0_counter_get();
+	last_tx_ticks = last_led_state_change_ticks;
+	err = dk_set_led(DK_LED3, orange_led_on);
+	if (err) {
+		LOG_ERR("Orange LED initialization failed: %d", err);
+		return 0;
+	}
+
+	LOG_INF("RTC0 timebase is %u Hz; ESB interval is %u ms",
+		RTC0_TICKS_PER_SECOND, CONFIG_ESB_PTX_TX_INTERVAL_MS);
+
 	while (1) {
-		if (ready) {
-			ready = false;
-			esb_flush_tx();
-			leds_update(tx_payload.data[1]);
+		uint32_t now_ticks = rtc0_counter_get();
+		uint32_t led_interval_ticks = orange_led_on ? ORANGE_LED_ON_TICKS :
+			ORANGE_LED_OFF_TICKS;
 
-			err = esb_write_payload(&tx_payload);
+		if (rtc0_interval_elapsed(last_led_state_change_ticks, led_interval_ticks,
+					 now_ticks)) {
+			last_led_state_change_ticks = now_ticks;
+			orange_led_on = !orange_led_on;
+			err = dk_set_led(DK_LED3, orange_led_on);
 			if (err) {
-				LOG_ERR("Payload write failed, err %d", err);
+				LOG_ERR("Orange LED update failed: %d", err);
 			}
-			tx_payload.data[1]++;
 		}
-		k_sleep(K_MSEC(100));
+
+		if (rtc0_interval_elapsed(last_tx_ticks, ESB_PTX_TX_INTERVAL_TICKS,
+					 now_ticks)) {
+			last_tx_ticks = now_ticks;
+			if (atomic_cas(&tx_ready, 1, 0)) {
+				err = packet_send(now_ticks);
+				if (err) {
+					atomic_set(&tx_ready, 1);
+					LOG_ERR("ESB payload write failed: %d", err);
+				}
+			}
+		}
+
+		k_sleep(K_MSEC(1));
 	}
 }

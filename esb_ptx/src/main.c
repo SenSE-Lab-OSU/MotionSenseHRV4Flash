@@ -7,7 +7,6 @@
 #include <errno.h>
 
 #include <zephyr/device.h>
-#include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
@@ -18,14 +17,6 @@
 #include <dk_buttons_and_leds.h>
 #include <esb.h>
 #include <hal/nrf_rtc.h>
-
-#if defined(NRF54L15_XXAA)
-#include <hal/nrf_clock.h>
-#endif /* defined(NRF54L15_XXAA) */
-
-#if defined(CONFIG_CLOCK_CONTROL_NRF2)
-#include <hal/nrf_lrcconf.h>
-#endif /* defined(CONFIG_CLOCK_CONTROL_NRF2) */
 
 LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 
@@ -361,6 +352,6 @@ int main(void)
 		}
 
 		//k_sleep(packet_strobe_active ? K_TICKS(1) : K_MSEC(1));
-		k_sleep(K_TICKS(32));
+		k_sleep(K_TICKS(1));
 	}
 }

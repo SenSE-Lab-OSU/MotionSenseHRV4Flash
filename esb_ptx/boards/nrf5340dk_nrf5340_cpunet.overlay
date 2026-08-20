@@ -46,3 +46,12 @@
 		line-name = "5V_EN";
 	};
 };
+
+&gpio0 {
+	packet_strobe: packet_strobe {
+		gpio-hog;
+		gpios = <22 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "ESB_PACKET_STROBE";
+	};
+};

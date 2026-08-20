@@ -8,13 +8,22 @@ source "Kconfig.zephyr"
 
 menu "Enhanced ShockBurst: Transmitter"
 
-config ESB_PTX_TX_INTERVAL_MS
-	int "ESB transmit interval in milliseconds"
-	range 1 60000
-	default 500
+config ESB_PTX_TX_RATE_HZ
+	int "ESB transmit rate in hertz"
+	range 1 1024
+	default 2
 	help
-	  The interval between transmission attempts. RTC0 is the timebase for
-	  this interval; this setting is converted to 32.768 kHz RTC0 ticks.
+	  Packets are transmitted on RTC0 counter values that are divisible by
+	  the interval derived from this rate. Use a power-of-two value that
+	  divides the 1.024 kHz RTC0 timebase.
+
+config ESB_PTX_PACKET_STROBE_PULSE_TICKS
+	int "Packet strobe pulse width in RTC0 ticks"
+	range 1 8388606
+	default 32
+	help
+	  The duration that P0.22 remains logically high after an ESB payload is
+	  queued. RTC0 runs at 1.024 kHz, so 32 ticks is 31.25 ms.
 
 config ESB_PTX_APP_LOG_LEVEL
 	int "Log level for the ESB PTX sample"

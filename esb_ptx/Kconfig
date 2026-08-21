@@ -8,14 +8,14 @@ source "Kconfig.zephyr"
 
 menu "Enhanced ShockBurst: Transmitter"
 
-config ESB_PTX_TX_RATE_HZ
-	int "ESB transmit rate in hertz"
-	range 1 1024
-	default 2
+config ESB_PTX_RTC0_TICK_RATE_HZ
+	int "RTC0 tick rate in hertz"
+	range 8 32768
+	default 8
 	help
-	  Packets are transmitted on RTC0 counter values that are divisible by
-	  the interval derived from this rate. Use a power-of-two value that
-	  divides the 1.024 kHz RTC0 timebase.
+	  Sets RTC0's counter and TICK interrupt rate. The value must divide
+	  the 32.768 kHz LFCLK exactly. The RTC0 prescaler limits this rate to
+	  8 Hz or greater.
 
 config ESB_PTX_APP_LOG_LEVEL
 	int "Log level for the ESB PTX sample"

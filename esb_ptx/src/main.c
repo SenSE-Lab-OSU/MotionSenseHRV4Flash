@@ -9,6 +9,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
@@ -25,13 +26,15 @@
 LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 
 #define ESB_PTX_PAYLOAD_LENGTH		8U
-#define RTC0_TIMEBASE_HZ		1024U
-#define RTC0_PRESCALER		NRF_RTC_FREQ_TO_PRESCALER(RTC0_TIMEBASE_HZ)
+#define RTC0_TICK_RATE_HZ		CONFIG_ESB_PTX_RTC0_TICK_RATE_HZ
+#define RTC0_PRESCALER		NRF_RTC_FREQ_TO_PRESCALER(RTC0_TICK_RATE_HZ)
 #define ORANGE_LED_DUTY_CYCLE_PERCENT	5U
-#define ORANGE_LED_PERIOD_TICKS	RTC0_TIMEBASE_HZ
-#define ORANGE_LED_ON_TICKS							       \
-	((ORANGE_LED_PERIOD_TICKS * ORANGE_LED_DUTY_CYCLE_PERCENT + 50U) / 100U)
-#define ORANGE_LED_OFF_TICKS		(ORANGE_LED_PERIOD_TICKS - ORANGE_LED_ON_TICKS)
+#define ORANGE_LED_PERIOD_MS		1000U
+#define ORANGE_LED_ON_MS		\
+	((ORANGE_LED_PERIOD_MS * ORANGE_LED_DUTY_CYCLE_PERCENT) / 100U)
+#define ORANGE_LED_OFF_MS		(ORANGE_LED_PERIOD_MS - ORANGE_LED_ON_MS)
+#define RTC0_NODE			DT_NODELABEL(rtc0)
+#define RTC0_TX_IRQ_PRIORITY		DT_IRQ(RTC0_NODE, priority)
 #define PACKET_STROBE_NODE		DT_NODELABEL(packet_strobe)
 #define PACKET_STROBE_PORT_NODE		DT_PARENT(PACKET_STROBE_NODE)
 #define PACKET_STROBE_GPIOTE_INST	\
@@ -39,14 +42,17 @@ LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 #define PACKET_STROBE_PSEL		\
 	NRF_GPIO_PIN_MAP(DT_PROP(PACKET_STROBE_PORT_NODE, port), \
 			 DT_GPIO_HOG_PIN_BY_IDX(PACKET_STROBE_NODE, 0))
-#define ESB_PTX_TX_TICKS_PER_PACKET	(RTC0_TIMEBASE_HZ / CONFIG_ESB_PTX_TX_RATE_HZ)
+#define TX_INTERRUPT_MARKER_NODE	DT_NODELABEL(future_output)
+#define TX_INTERRUPT_MARKER_PORT_NODE	DT_PARENT(TX_INTERRUPT_MARKER_NODE)
+#define TX_INTERRUPT_MARKER_PSEL	\
+	NRF_GPIO_PIN_MAP(DT_PROP(TX_INTERRUPT_MARKER_PORT_NODE, port), \
+			 DT_GPIO_HOG_PIN_BY_IDX(TX_INTERRUPT_MARKER_NODE, 0))
 
-BUILD_ASSERT((NRF_RTC_INPUT_FREQ % RTC0_TIMEBASE_HZ) == 0U);
-BUILD_ASSERT(ORANGE_LED_ON_TICKS > 0U);
-BUILD_ASSERT(ORANGE_LED_OFF_TICKS > 0U);
-BUILD_ASSERT(CONFIG_ESB_PTX_TX_RATE_HZ <= RTC0_TIMEBASE_HZ);
-BUILD_ASSERT((CONFIG_ESB_PTX_TX_RATE_HZ & (CONFIG_ESB_PTX_TX_RATE_HZ - 1U)) == 0U);
-BUILD_ASSERT((RTC0_TIMEBASE_HZ % CONFIG_ESB_PTX_TX_RATE_HZ) == 0U);
+BUILD_ASSERT((NRF_RTC_INPUT_FREQ % RTC0_TICK_RATE_HZ) == 0U);
+BUILD_ASSERT(ORANGE_LED_ON_MS > 0U);
+BUILD_ASSERT(ORANGE_LED_OFF_MS > 0U);
+BUILD_ASSERT(RTC0_TX_IRQ_PRIORITY >= CONFIG_ESB_EVENT_IRQ_PRIORITY,
+	     "RTC0 interrupt priority must not preempt ESB events");
 BUILD_ASSERT(IS_ENABLED(_CONCAT(CONFIG_, _CONCAT(NRFX_GPIOTE,
 						 PACKET_STROBE_GPIOTE_INST))),
 	     "The packet strobe GPIOTE instance must be enabled");
@@ -63,22 +69,6 @@ static uint32_t rtc0_counter_get(void)
 	return nrf_rtc_counter_get(NRF_RTC0);
 }
 
-static uint32_t rtc0_ticks_elapsed(uint32_t start_ticks, uint32_t end_ticks)
-{
-	return (end_ticks - start_ticks) & NRF_RTC_COUNTER_MAX;
-}
-
-static bool rtc0_interval_elapsed(uint32_t start_ticks, uint32_t interval_ticks,
-				  uint32_t now_ticks)
-{
-	return rtc0_ticks_elapsed(start_ticks, now_ticks) >= interval_ticks;
-}
-
-static bool esb_tx_slot_is_current(uint32_t rtc0_ticks)
-{
-	return (rtc0_ticks % ESB_PTX_TX_TICKS_PER_PACKET) == 0U;
-}
-
 static void rtc0_timebase_start(void)
 {
 	/*
@@ -88,6 +78,9 @@ static void rtc0_timebase_start(void)
 	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_STOP);
 	nrf_rtc_prescaler_set(NRF_RTC0, RTC0_PRESCALER);
 	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_CLEAR);
+	nrf_rtc_event_clear(NRF_RTC0, NRF_RTC_EVENT_TICK);
+	nrf_rtc_event_enable(NRF_RTC0, NRF_RTC_INT_TICK_MASK);
+	nrf_rtc_int_enable(NRF_RTC0, NRF_RTC_INT_TICK_MASK);
 	nrf_rtc_task_trigger(NRF_RTC0, NRF_RTC_TASK_START);
 }
 
@@ -303,11 +296,46 @@ static int packet_send(uint32_t rtc0_ticks)
 	return 0;
 }
 
+ISR_DIRECT_DECLARE(rtc0_tx_irq_handler)
+{
+	//uint32_t rtc0_ticks;
+	int err;
+
+	nrf_gpio_pin_set(TX_INTERRUPT_MARKER_PSEL);
+
+	if (!nrf_rtc_event_check(NRF_RTC0, NRF_RTC_EVENT_TICK)) {
+		return 0;
+	}
+
+	nrf_rtc_event_clear(NRF_RTC0, NRF_RTC_EVENT_TICK);
+	//rtc0_ticks = rtc0_counter_get();
+
+	if (!atomic_cas(&tx_ready, 1, 0)) {
+		return 0;
+	}
+
+	//nrf_gpio_pin_set(TX_INTERRUPT_MARKER_PSEL);
+	//err = packet_send(rtc0_ticks);
+	packet_send(88);
+	nrf_gpio_pin_clear(TX_INTERRUPT_MARKER_PSEL);
+	if (err) {
+		atomic_set(&tx_ready, 1);
+	}
+
+	return 0;
+}
+
+static void rtc0_tx_irq_initialize(void)
+{
+	IRQ_DIRECT_CONNECT(DT_IRQN(RTC0_NODE), RTC0_TX_IRQ_PRIORITY,
+			   rtc0_tx_irq_handler, 0);
+	irq_enable(DT_IRQN(RTC0_NODE));
+}
+
 int main(void)
 {
 	bool orange_led_on = true;
-	uint32_t last_led_state_change_ticks;
-	uint32_t last_tx_rtc0_counter = NRF_RTC_COUNTER_MAX + 1U;
+	int64_t next_led_state_change_ms;
 	int err;
 
 	err = clocks_start();
@@ -327,7 +355,6 @@ int main(void)
 		return 0;
 	}
 
-	rtc0_timebase_start();
 	err = packet_strobe_initialize();
 	if (err) {
 		return 0;
@@ -335,41 +362,31 @@ int main(void)
 
 	atomic_set(&tx_ready, 1);
 	atomic_set(&packet_counter, 0);
-	last_led_state_change_ticks = rtc0_counter_get();
 	err = dk_set_led(DK_LED3, orange_led_on);
 	if (err) {
 		LOG_ERR("Orange LED initialization failed: %d", err);
 		return 0;
 	}
 
-	LOG_INF("RTC0 timebase is %u Hz; ESB rate is %u Hz",
-		RTC0_TIMEBASE_HZ, CONFIG_ESB_PTX_TX_RATE_HZ);
+	rtc0_tx_irq_initialize();
+	rtc0_timebase_start();
+	next_led_state_change_ms = k_uptime_get() + ORANGE_LED_ON_MS;
+
+	LOG_INF("RTC0 TICK rate is %u Hz", RTC0_TICK_RATE_HZ);
 
 	while (1) {
-		uint32_t now_ticks = rtc0_counter_get();
-		uint32_t led_interval_ticks = orange_led_on ? ORANGE_LED_ON_TICKS :
-			ORANGE_LED_OFF_TICKS;
+		int64_t now_ms = k_uptime_get();
 
-		if (rtc0_interval_elapsed(last_led_state_change_ticks, led_interval_ticks,
-					 now_ticks)) {
-			last_led_state_change_ticks = now_ticks;
+		if (now_ms >= next_led_state_change_ms) {
 			orange_led_on = !orange_led_on;
+			next_led_state_change_ms += orange_led_on ? ORANGE_LED_ON_MS :
+				ORANGE_LED_OFF_MS;
 			err = dk_set_led(DK_LED3, orange_led_on);
 			if (err) {
 				LOG_ERR("Orange LED update failed: %d", err);
 			}
 		}
 
-		if (esb_tx_slot_is_current(now_ticks) &&
-		    now_ticks != last_tx_rtc0_counter && atomic_cas(&tx_ready, 1, 0)) {
-			last_tx_rtc0_counter = now_ticks;
-			err = packet_send(now_ticks);
-			if (err) {
-				atomic_set(&tx_ready, 1);
-				LOG_ERR("ESB payload write failed: %d", err);
-			}
-		}
-
-		k_sleep(K_TICKS(1));
+		k_msleep(10);
 	}
 }

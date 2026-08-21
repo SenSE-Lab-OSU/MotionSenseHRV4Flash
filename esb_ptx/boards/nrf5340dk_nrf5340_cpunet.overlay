@@ -36,6 +36,8 @@
 
 &rtc0 {
 	status = "okay";
+	/* Keep below ESB's priority-1 radio interrupt. */
+	interrupts = <17 2>;
 };
 
 &gpio1 {
@@ -48,6 +50,13 @@
 };
 
 &gpio0 {
+	future_output: future_output {
+		gpio-hog;
+		gpios = <20 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "FUTURE_OUTPUT";
+	};
+
 	packet_strobe: packet_strobe {
 		gpio-hog;
 		gpios = <22 GPIO_ACTIVE_HIGH>;

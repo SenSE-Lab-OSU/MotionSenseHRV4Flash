@@ -19,12 +19,12 @@
 LOG_MODULE_REGISTER(esb_prx, CONFIG_ESB_PRX_APP_LOG_LEVEL);
 
 #define ESB_PAYLOAD_LENGTH	8U
-#define RX_PULSE_PIN		10U
+#define RX_PULSE_PIN		14U
 #define RX_PULSE_DURATION	K_MSEC(1)
 #define LED1_TOGGLE_PACKET_COUNT	8U
-#define LED1_NODE		DT_ALIAS(led1)
+#define LED1_NODE		DT_ALIAS(led0)
 
-static const struct device *const rx_pulse_gpio = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+static const struct device *const rx_pulse_gpio = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
 static struct esb_payload rx_payload;
 static uint8_t received_packets_since_led1_toggle;
@@ -37,7 +37,7 @@ static void rx_pulse_off_handler(struct k_work *work)
 
 	err = gpio_pin_set(rx_pulse_gpio, RX_PULSE_PIN, 0);
 	if (err) {
-		LOG_ERR("P0.10 set low failed: %d", err);
+		LOG_ERR("P1.14 set low failed: %d", err);
 	}
 }
 
@@ -46,7 +46,7 @@ static K_WORK_DELAYABLE_DEFINE(rx_pulse_off_work, rx_pulse_off_handler);
 static int rx_pulse_initialize(void)
 {
 	if (!device_is_ready(rx_pulse_gpio)) {
-		LOG_ERR("P0.10 GPIO is not ready");
+		LOG_ERR("P1.14 GPIO is not ready");
 		return -ENODEV;
 	}
 
@@ -178,7 +178,7 @@ int main(void)
 
 	err = rx_pulse_initialize();
 	if (err) {
-		LOG_ERR("P0.10 initialization failed: %d", err);
+		LOG_ERR("P1.14 initialization failed: %d", err);
 		return 0;
 	}
 

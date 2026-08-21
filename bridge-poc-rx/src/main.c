@@ -11,37 +11,47 @@
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
 #include <esb.h>
+#include <hal/nrf_dppi.h>
+#include <hal/nrf_gpio.h>
+#include <hal/nrf_gpiote.h>
+#include <hal/nrf_ppib.h>
+#include <hal/nrf_radio.h>
+#include <nrfx_gpiote.h>
 
 LOG_MODULE_REGISTER(esb_prx, CONFIG_ESB_PRX_APP_LOG_LEVEL);
 
 #define ESB_PAYLOAD_LENGTH	8U
 #define RX_PULSE_PIN		14U
-#define RX_PULSE_DURATION	K_MSEC(1)
 #define LED1_TOGGLE_PACKET_COUNT	8U
 #define LED1_NODE		DT_ALIAS(led0)
+#define RX_PULSE_PORT_NODE	DT_NODELABEL(gpio1)
+#define RX_PULSE_RADIO_DPPI_CHANNEL	7U
+#define RX_PULSE_PERI_DPPI_CHANNEL	1U
+#define RX_PULSE_PPIB_CHANNEL	1U
+#define RX_PULSE_GPIOTE_INST	\
+	DT_PROP(DT_PHANDLE(RX_PULSE_PORT_NODE, gpiote_instance), instance)
+#define RX_PULSE_PSEL		\
+	NRF_GPIO_PIN_MAP(DT_PROP(RX_PULSE_PORT_NODE, port), RX_PULSE_PIN)
+
+BUILD_ASSERT(IS_ENABLED(_CONCAT(CONFIG_, _CONCAT(NRFX_GPIOTE,
+						 RX_PULSE_GPIOTE_INST))),
+	     "The P1.14 GPIOTE instance must be enabled");
 
 static const struct device *const rx_pulse_gpio = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
+static const nrfx_gpiote_t rx_pulse_gpiote =
+	NRFX_GPIOTE_INSTANCE(RX_PULSE_GPIOTE_INST);
 static struct esb_payload rx_payload;
 static uint8_t received_packets_since_led1_toggle;
 
-static void rx_pulse_off_handler(struct k_work *work)
+static void rx_pulse_end(void)
 {
-	int err;
-
-	ARG_UNUSED(work);
-
-	err = gpio_pin_set(rx_pulse_gpio, RX_PULSE_PIN, 0);
-	if (err) {
-		LOG_ERR("P1.14 set low failed: %d", err);
-	}
+	/* Use GPIOTE's CLR task to release the same task-controlled output. */
+	nrfx_gpiote_clr_task_trigger(&rx_pulse_gpiote, RX_PULSE_PSEL);
 }
-
-static K_WORK_DELAYABLE_DEFINE(rx_pulse_off_work, rx_pulse_off_handler);
 
 static int rx_pulse_initialize(void)
 {
@@ -53,6 +63,64 @@ static int rx_pulse_initialize(void)
 	return gpio_pin_configure(rx_pulse_gpio, RX_PULSE_PIN, GPIO_OUTPUT_INACTIVE);
 }
 
+static int rx_pulse_hardware_trigger_initialize(void)
+{
+	const nrfx_gpiote_output_config_t output_config =
+	NRFX_GPIOTE_DEFAULT_OUTPUT_CONFIG;
+	nrfx_gpiote_task_config_t task_config;
+	uint8_t gpiote_channel;
+	nrfx_err_t nrfx_err;
+
+	if (!nrfx_gpiote_init_check(&rx_pulse_gpiote)) {
+		nrfx_err = nrfx_gpiote_init(&rx_pulse_gpiote, 0);
+		if (nrfx_err != NRFX_SUCCESS) {
+			LOG_ERR("P1.14 GPIOTE initialization failed: 0x%08x", nrfx_err);
+			return -EIO;
+		}
+	}
+
+	nrfx_err = nrfx_gpiote_channel_alloc(&rx_pulse_gpiote, &gpiote_channel);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("P1.14 GPIOTE channel allocation failed: 0x%08x", nrfx_err);
+		return -ENOMEM;
+	}
+
+	task_config.task_ch = gpiote_channel;
+	task_config.polarity = NRF_GPIOTE_POLARITY_LOTOHI;
+	task_config.init_val = NRF_GPIOTE_INITIAL_VALUE_LOW;
+	nrfx_err = nrfx_gpiote_output_configure(&rx_pulse_gpiote, RX_PULSE_PSEL,
+						   &output_config, &task_config);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("P1.14 GPIOTE configuration failed: 0x%08x", nrfx_err);
+		return -EIO;
+	}
+
+	nrfx_gpiote_out_task_enable(&rx_pulse_gpiote, RX_PULSE_PSEL);
+
+	/*
+	 * RADIO is in the RADIO domain, while GPIOTE20 (for GPIO1) is in the
+	 * PERI domain. PPIB11 and PPIB21 form the hardware bridge between them.
+	 * These channels avoid ESB's fixed RADIO DPPI channels 0 through 6 and
+	 * MPSL's reserved channel 0 in each peripheral.
+	 */
+	nrf_radio_publish_set(NRF_RADIO, NRF_RADIO_EVENT_CRCOK,
+			      RX_PULSE_RADIO_DPPI_CHANNEL);
+	nrf_ppib_subscribe_set(NRF_PPIB11,
+			       nrf_ppib_send_task_get(RX_PULSE_PPIB_CHANNEL),
+			       RX_PULSE_RADIO_DPPI_CHANNEL);
+	nrf_ppib_publish_set(NRF_PPIB21,
+			     nrf_ppib_receive_event_get(RX_PULSE_PPIB_CHANNEL),
+			     RX_PULSE_PERI_DPPI_CHANNEL);
+	nrf_gpiote_subscribe_set(
+		rx_pulse_gpiote.p_reg,
+		nrfx_gpiote_set_task_get(&rx_pulse_gpiote, RX_PULSE_PSEL),
+		RX_PULSE_PERI_DPPI_CHANNEL);
+	nrf_dppi_channels_enable(NRF_DPPIC10, BIT(RX_PULSE_RADIO_DPPI_CHANNEL));
+	nrf_dppi_channels_enable(NRF_DPPIC20, BIT(RX_PULSE_PERI_DPPI_CHANNEL));
+
+	return 0;
+}
+
 static int led1_initialize(void)
 {
 	if (!gpio_is_ready_dt(&led1)) {
@@ -61,18 +129,6 @@ static int led1_initialize(void)
 	}
 
 	return gpio_pin_configure_dt(&led1, GPIO_OUTPUT_INACTIVE);
-}
-
-static void rx_pulse_start(void)
-{
-	int err;
-
-	err = gpio_pin_set(rx_pulse_gpio, RX_PULSE_PIN, 1);
-	if (err) {
-		return;
-	}
-
-	(void)k_work_reschedule(&rx_pulse_off_work, RX_PULSE_DURATION);
 }
 
 static void led1_toggle_after_eight_packets(void)
@@ -97,8 +153,10 @@ static void event_handler(const struct esb_evt *event)
 		return;
 	}
 
+	/* CRCOK raised P1.14 in hardware; end it when ESB delivers the packet. */
+	rx_pulse_end();
+
 	while (esb_read_rx_payload(&rx_payload) == 0) {
-		rx_pulse_start();
 		led1_toggle_after_eight_packets();
 	}
 }
@@ -196,6 +254,12 @@ int main(void)
 	err = esb_initialize();
 	if (err) {
 		LOG_ERR("ESB initialization failed: %d", err);
+		return 0;
+	}
+
+	err = rx_pulse_hardware_trigger_initialize();
+	if (err) {
+		LOG_ERR("P1.14 hardware marker initialization failed: %d", err);
 		return 0;
 	}
 

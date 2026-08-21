@@ -1,0 +1,8 @@
+/*
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
+
+&grtc {
+	/* Keep the Zephyr system timer from preempting ESB event processing. */
+	interrupts = <228 2>, <229 1>;
+};

@@ -387,6 +387,6 @@ int main(void)
 			}
 		}
 
-		k_msleep(10);
+		k_msleep(25);
 	}
 }

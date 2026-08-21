@@ -40,6 +40,11 @@
 	interrupts = <17 2>;
 };
 
+&rtc1 {
+	/* Zephyr system clock: do not preempt the RTC0 TX ISR. */
+	interrupts = <22 3>;
+};
+
 &gpio1 {
 	five_v_en: five_v_en {
 		gpio-hog;

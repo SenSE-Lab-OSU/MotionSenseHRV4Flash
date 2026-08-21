@@ -24,7 +24,7 @@
 LOG_MODULE_REGISTER(esb_prx, CONFIG_ESB_PRX_APP_LOG_LEVEL);
 
 #define ESB_PAYLOAD_LENGTH	8U
-#define RX_PULSE_PIN		14U
+#define RX_PULSE_PIN		12U
 #define LED1_TOGGLE_PACKET_COUNT	8U
 #define LED1_NODE		DT_ALIAS(led0)
 #define RX_PULSE_PORT_NODE	DT_NODELABEL(gpio1)
@@ -38,7 +38,7 @@ LOG_MODULE_REGISTER(esb_prx, CONFIG_ESB_PRX_APP_LOG_LEVEL);
 
 BUILD_ASSERT(IS_ENABLED(_CONCAT(CONFIG_, _CONCAT(NRFX_GPIOTE,
 						 RX_PULSE_GPIOTE_INST))),
-	     "The P1.14 GPIOTE instance must be enabled");
+	     "The P1.12 GPIOTE instance must be enabled");
 
 static const struct device *const rx_pulse_gpio = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 static const struct gpio_dt_spec led1 = GPIO_DT_SPEC_GET(LED1_NODE, gpios);
@@ -56,7 +56,7 @@ static void rx_pulse_end(void)
 static int rx_pulse_initialize(void)
 {
 	if (!device_is_ready(rx_pulse_gpio)) {
-		LOG_ERR("P1.14 GPIO is not ready");
+		LOG_ERR("P1.12 GPIO is not ready");
 		return -ENODEV;
 	}
 
@@ -74,14 +74,14 @@ static int rx_pulse_hardware_trigger_initialize(void)
 	if (!nrfx_gpiote_init_check(&rx_pulse_gpiote)) {
 		nrfx_err = nrfx_gpiote_init(&rx_pulse_gpiote, 0);
 		if (nrfx_err != NRFX_SUCCESS) {
-			LOG_ERR("P1.14 GPIOTE initialization failed: 0x%08x", nrfx_err);
+			LOG_ERR("P1.12 GPIOTE initialization failed: 0x%08x", nrfx_err);
 			return -EIO;
 		}
 	}
 
 	nrfx_err = nrfx_gpiote_channel_alloc(&rx_pulse_gpiote, &gpiote_channel);
 	if (nrfx_err != NRFX_SUCCESS) {
-		LOG_ERR("P1.14 GPIOTE channel allocation failed: 0x%08x", nrfx_err);
+		LOG_ERR("P1.12 GPIOTE channel allocation failed: 0x%08x", nrfx_err);
 		return -ENOMEM;
 	}
 
@@ -91,7 +91,7 @@ static int rx_pulse_hardware_trigger_initialize(void)
 	nrfx_err = nrfx_gpiote_output_configure(&rx_pulse_gpiote, RX_PULSE_PSEL,
 						   &output_config, &task_config);
 	if (nrfx_err != NRFX_SUCCESS) {
-		LOG_ERR("P1.14 GPIOTE configuration failed: 0x%08x", nrfx_err);
+		LOG_ERR("P1.12 GPIOTE configuration failed: 0x%08x", nrfx_err);
 		return -EIO;
 	}
 
@@ -153,7 +153,7 @@ static void event_handler(const struct esb_evt *event)
 		return;
 	}
 
-	/* CRCOK raised P1.14 in hardware; end it when ESB delivers the packet. */
+	/* CRCOK raised P1.12 in hardware; end it when ESB delivers the packet. */
 	rx_pulse_end();
 
 	while (esb_read_rx_payload(&rx_payload) == 0) {
@@ -236,7 +236,7 @@ int main(void)
 
 	err = rx_pulse_initialize();
 	if (err) {
-		LOG_ERR("P1.14 initialization failed: %d", err);
+		LOG_ERR("P1.12 initialization failed: %d", err);
 		return 0;
 	}
 
@@ -259,7 +259,7 @@ int main(void)
 
 	err = rx_pulse_hardware_trigger_initialize();
 	if (err) {
-		LOG_ERR("P1.14 hardware marker initialization failed: %d", err);
+		LOG_ERR("P1.12 hardware marker initialization failed: %d", err);
 		return 0;
 	}
 

@@ -52,6 +52,6 @@
 		gpio-hog;
 		gpios = <22 GPIO_ACTIVE_HIGH>;
 		output-low;
-		line-name = "ESB_PACKET_STROBE";
+		line-name = "ESB_RADIO_MARKER";
 	};
 };

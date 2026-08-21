@@ -16,7 +16,11 @@
 
 #include <dk_buttons_and_leds.h>
 #include <esb.h>
+#include <hal/nrf_gpio.h>
+#include <hal/nrf_radio.h>
 #include <hal/nrf_rtc.h>
+#include <helpers/nrfx_gppi.h>
+#include <nrfx_gpiote.h>
 
 LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 
@@ -29,27 +33,30 @@ LOG_MODULE_REGISTER(esb_ptx, CONFIG_ESB_PTX_APP_LOG_LEVEL);
 	((ORANGE_LED_PERIOD_TICKS * ORANGE_LED_DUTY_CYCLE_PERCENT + 50U) / 100U)
 #define ORANGE_LED_OFF_TICKS		(ORANGE_LED_PERIOD_TICKS - ORANGE_LED_ON_TICKS)
 #define PACKET_STROBE_NODE		DT_NODELABEL(packet_strobe)
-#define PACKET_STROBE_PIN		DT_GPIO_HOG_PIN_BY_IDX(PACKET_STROBE_NODE, 0)
-#define PACKET_STROBE_FLAGS		DT_GPIO_HOG_FLAGS_BY_IDX(PACKET_STROBE_NODE, 0)
+#define PACKET_STROBE_PORT_NODE		DT_PARENT(PACKET_STROBE_NODE)
+#define PACKET_STROBE_GPIOTE_INST	\
+	DT_PROP(DT_PHANDLE(PACKET_STROBE_PORT_NODE, gpiote_instance), instance)
+#define PACKET_STROBE_PSEL		\
+	NRF_GPIO_PIN_MAP(DT_PROP(PACKET_STROBE_PORT_NODE, port), \
+			 DT_GPIO_HOG_PIN_BY_IDX(PACKET_STROBE_NODE, 0))
 #define ESB_PTX_TX_TICKS_PER_PACKET	(RTC0_TIMEBASE_HZ / CONFIG_ESB_PTX_TX_RATE_HZ)
 
 BUILD_ASSERT((NRF_RTC_INPUT_FREQ % RTC0_TIMEBASE_HZ) == 0U);
 BUILD_ASSERT(ORANGE_LED_ON_TICKS > 0U);
 BUILD_ASSERT(ORANGE_LED_OFF_TICKS > 0U);
-BUILD_ASSERT(CONFIG_ESB_PTX_PACKET_STROBE_PULSE_TICKS > 0U);
-BUILD_ASSERT(CONFIG_ESB_PTX_PACKET_STROBE_PULSE_TICKS < (NRF_RTC_COUNTER_MAX / 2U));
 BUILD_ASSERT(CONFIG_ESB_PTX_TX_RATE_HZ <= RTC0_TIMEBASE_HZ);
 BUILD_ASSERT((CONFIG_ESB_PTX_TX_RATE_HZ & (CONFIG_ESB_PTX_TX_RATE_HZ - 1U)) == 0U);
 BUILD_ASSERT((RTC0_TIMEBASE_HZ % CONFIG_ESB_PTX_TX_RATE_HZ) == 0U);
+BUILD_ASSERT(IS_ENABLED(_CONCAT(CONFIG_, _CONCAT(NRFX_GPIOTE,
+						 PACKET_STROBE_GPIOTE_INST))),
+	     "The packet strobe GPIOTE instance must be enabled");
 
 static atomic_t tx_ready;
 static atomic_t packet_counter;
-static const struct device *const packet_strobe_port =
-	DEVICE_DT_GET(DT_PARENT(PACKET_STROBE_NODE));
+static const nrfx_gpiote_t packet_strobe_gpiote =
+	NRFX_GPIOTE_INSTANCE(PACKET_STROBE_GPIOTE_INST);
 static struct esb_payload tx_payload = ESB_CREATE_PAYLOAD(0,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
-static bool packet_strobe_active;
-static uint32_t packet_strobe_start_ticks;
 
 static uint32_t rtc0_counter_get(void)
 {
@@ -86,51 +93,66 @@ static void rtc0_timebase_start(void)
 
 static int packet_strobe_initialize(void)
 {
-	int err;
+	const nrfx_gpiote_output_config_t output_config =
+		NRFX_GPIOTE_DEFAULT_OUTPUT_CONFIG;
+	nrfx_gpiote_task_config_t task_config;
+	uint8_t gpiote_channel;
+	uint8_t ready_dppi_channel;
+	uint8_t end_dppi_channel;
+	nrfx_err_t nrfx_err;
 
-	if (!device_is_ready(packet_strobe_port)) {
-		LOG_ERR("Packet strobe GPIO is not ready");
-		return -ENODEV;
+	if (!nrfx_gpiote_init_check(&packet_strobe_gpiote)) {
+		nrfx_err = nrfx_gpiote_init(&packet_strobe_gpiote, 0);
+		if (nrfx_err != NRFX_SUCCESS) {
+			LOG_ERR("Packet strobe GPIOTE initialization failed: 0x%08x", nrfx_err);
+			return -EIO;
+		}
 	}
 
-	err = gpio_pin_configure(packet_strobe_port, PACKET_STROBE_PIN,
-				 GPIO_OUTPUT_INACTIVE | PACKET_STROBE_FLAGS);
-	if (err) {
-		LOG_ERR("Packet strobe GPIO configuration failed: %d", err);
+	nrfx_err = nrfx_gpiote_channel_alloc(&packet_strobe_gpiote, &gpiote_channel);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("Packet strobe GPIOTE channel allocation failed: 0x%08x",
+			nrfx_err);
+		return -ENOMEM;
 	}
 
-	return err;
-}
-
-static void packet_strobe_start(void)
-{
-	int err;
-
-	err = gpio_pin_set(packet_strobe_port, PACKET_STROBE_PIN, 1);
-	if (err) {
-		LOG_ERR("Packet strobe set high failed: %d", err);
-		return;
+	task_config.task_ch = gpiote_channel;
+	task_config.polarity = NRF_GPIOTE_POLARITY_TOGGLE;
+	task_config.init_val = NRF_GPIOTE_INITIAL_VALUE_LOW;
+	nrfx_err = nrfx_gpiote_output_configure(&packet_strobe_gpiote,
+						   PACKET_STROBE_PSEL, &output_config, &task_config);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("Packet strobe GPIOTE configuration failed: 0x%08x", nrfx_err);
+		return -EIO;
 	}
 
-	packet_strobe_start_ticks = rtc0_counter_get();
-	packet_strobe_active = true;
-}
-
-static void packet_strobe_update(uint32_t now_ticks)
-{
-	int err;
-
-	if (!packet_strobe_active ||
-	    !rtc0_interval_elapsed(packet_strobe_start_ticks,
-				  CONFIG_ESB_PTX_PACKET_STROBE_PULSE_TICKS, now_ticks)) {
-		return;
+	nrfx_err = nrfx_gppi_channel_alloc(&ready_dppi_channel);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("Packet strobe READY DPPI channel allocation failed: 0x%08x",
+			nrfx_err);
+		return -ENOMEM;
 	}
 
-	err = gpio_pin_set(packet_strobe_port, PACKET_STROBE_PIN, 0);
-	packet_strobe_active = false;
-	if (err) {
-		LOG_ERR("Packet strobe set low failed: %d", err);
+	nrfx_err = nrfx_gppi_channel_alloc(&end_dppi_channel);
+	if (nrfx_err != NRFX_SUCCESS) {
+		LOG_ERR("Packet strobe END DPPI channel allocation failed: 0x%08x",
+			nrfx_err);
+		return -ENOMEM;
 	}
+
+	nrfx_gpiote_out_task_enable(&packet_strobe_gpiote, PACKET_STROBE_PSEL);
+	/* ESB's READY_START shortcut starts the packet at the READY event. */
+	nrfx_gppi_channel_endpoints_setup(
+		ready_dppi_channel,
+		nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_READY),
+		nrfx_gpiote_set_task_address_get(&packet_strobe_gpiote, PACKET_STROBE_PSEL));
+	nrfx_gppi_channel_endpoints_setup(
+		end_dppi_channel,
+		nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_END),
+		nrfx_gpiote_clr_task_address_get(&packet_strobe_gpiote, PACKET_STROBE_PSEL));
+	nrfx_gppi_channels_enable(BIT(ready_dppi_channel) | BIT(end_dppi_channel));
+
+	return 0;
 }
 
 static void event_handler(const struct esb_evt *event)
@@ -278,7 +300,6 @@ static int packet_send(uint32_t rtc0_ticks)
 		return err;
 	}
 
-	packet_strobe_start();
 	return 0;
 }
 
@@ -329,8 +350,6 @@ int main(void)
 		uint32_t led_interval_ticks = orange_led_on ? ORANGE_LED_ON_TICKS :
 			ORANGE_LED_OFF_TICKS;
 
-		packet_strobe_update(now_ticks);
-
 		if (rtc0_interval_elapsed(last_led_state_change_ticks, led_interval_ticks,
 					 now_ticks)) {
 			last_led_state_change_ticks = now_ticks;
@@ -351,7 +370,6 @@ int main(void)
 			}
 		}
 
-		//k_sleep(packet_strobe_active ? K_TICKS(1) : K_MSEC(1));
 		k_sleep(K_TICKS(1));
 	}
 }

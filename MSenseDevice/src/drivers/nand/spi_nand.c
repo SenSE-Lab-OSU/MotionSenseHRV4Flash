@@ -865,7 +865,7 @@ int spi_nand_chip_erase(const struct device* device) {
 	block_count /= 64;
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
-	for (int current_block = 0; current_block <= block_count; current_block++){
+	for (int current_block = 0; current_block < block_count; current_block++){
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){

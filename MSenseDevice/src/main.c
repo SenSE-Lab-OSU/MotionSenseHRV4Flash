@@ -17,6 +17,8 @@
 #include <nrfx_uarte.h>
 #include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/printk-hooks.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
 #include "ppgSensor.h"
@@ -76,6 +78,9 @@ const struct device* gpio1_device;
 static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
 static struct gpio_callback button0_callback;
 static bool usb_enabled;
+static bool usb_uart_log_backend_was_active;
+static bool usb_console_suppressed;
+static printk_hook_fn_t usb_console_printk_hook;
 static bool filesystem_workqueue_started;
 static bool button0_pressed;
 static int64_t button0_pressed_time_ms;
@@ -226,12 +231,77 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
+/*
+ * The console and UART log backend are both routed through the USB CDC ACM
+ * device.  Collection mode disables that device to remove the NAND disk from
+ * the USB host, so leave neither path trying to transmit while it is down.
+ * RTT and the custom filesystem log backend are separate log backends and
+ * remain active.
+ */
+static int usb_console_discard_char(int c)
+{
+  return c;
+}
+
+static void suspend_usb_console_and_log_backend(void)
+{
+#if CONFIG_LOG_BACKEND_UART
+  const struct log_backend *backend;
+
+  backend = log_backend_get_by_name("log_backend_uart");
+  if (backend == NULL) {
+    LOG_WRN("USB UART log backend was not found");
+  } else {
+    usb_uart_log_backend_was_active = log_backend_is_active(backend);
+    if (usb_uart_log_backend_was_active) {
+      log_backend_disable(backend);
+    }
+  }
+#endif
+
+#if CONFIG_UART_CONSOLE
+  if (!usb_console_suppressed) {
+    usb_console_printk_hook = __printk_get_hook();
+    __printk_hook_install(usb_console_discard_char);
+    usb_console_suppressed = true;
+  }
+#endif
+}
+
+static void resume_usb_console_and_log_backend(void)
+{
+#if CONFIG_UART_CONSOLE
+  if (usb_console_suppressed) {
+    __printk_hook_install(usb_console_printk_hook);
+    usb_console_suppressed = false;
+  }
+#endif
+
+#if CONFIG_LOG_BACKEND_UART
+  if (usb_uart_log_backend_was_active) {
+    const struct log_backend *backend;
+
+    backend = log_backend_get_by_name("log_backend_uart");
+    if (backend == NULL) {
+      LOG_WRN("USB UART log backend was not found");
+    } else {
+      log_backend_enable(backend, backend->cb->ctx, CONFIG_LOG_MAX_LEVEL);
+    }
+    usb_uart_log_backend_was_active = false;
+  }
+#endif
+}
+
 static int set_usb_mass_storage_enabled(bool enable)
 {
   int ret;
 
   if (usb_enabled == enable) {
     return 0;
+  }
+
+  if (!enable) {
+    suspend_usb_console_and_log_backend();
   }
 
   ret = enable ? usb_enable(usb_status_cb) : usb_disable();
@@ -241,6 +311,12 @@ static int set_usb_mass_storage_enabled(bool enable)
 
   if (ret == 0) {
     usb_enabled = enable;
+    if (enable) {
+      resume_usb_console_and_log_backend();
+    }
+  } else if (!enable) {
+    /* USB remains active after a failed disable, so restore its outputs. */
+    resume_usb_console_and_log_backend();
   }
 
   return ret;

@@ -15,6 +15,7 @@
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
+#include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
@@ -914,8 +915,14 @@ int main(void)
 {
   int ret;
   int identity_err;
+  uint32_t reset_reason = nrfx_reset_reason_get();
+
+  /* RESETREAS is cumulative until acknowledged. Capture this boot's reason
+   * before clearing it, so the next boot is not reported with stale flags. */
+  nrfx_reset_reason_clear(reset_reason);
 
   printk("Starting Application... \n");
+  LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
   LOG_INF("Starting Logging...\n");
 
   ret = button0_init();

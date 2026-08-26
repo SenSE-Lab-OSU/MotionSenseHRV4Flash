@@ -999,7 +999,7 @@ int main(void)
 
   printk("Starting Application... \n");
   LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
-  LOG_INF("Starting Logging...\n");
+  LOG_INF("Starting Logging...");
 
   ret = button0_init();
   if (ret != 0)

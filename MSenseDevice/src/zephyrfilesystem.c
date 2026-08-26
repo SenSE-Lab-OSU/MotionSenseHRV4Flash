@@ -919,7 +919,7 @@ void setup_disk(void)
 	/* Allow log messages to flush to avoid interleaved output */
 	k_sleep(K_MSEC(50));
 
-	LOG_INF("Mount %s: %d\n", fs_mnt.mnt_point, rc);
+	LOG_INF("Mount %s: %d", fs_mnt.mnt_point, rc);
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
@@ -928,7 +928,7 @@ void setup_disk(void)
 	}
 
 	LOG_INF("%s: bsize = %lu ; frsize = %lu ;"
-	       " blocks = %lu ; bfree = %lu\n",
+	       " blocks = %lu ; bfree = %lu",
 	       mp->mnt_point,
 	       sbuf.f_bsize, sbuf.f_frsize,
 	       sbuf.f_blocks, sbuf.f_bfree);

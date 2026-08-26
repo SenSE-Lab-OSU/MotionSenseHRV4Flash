@@ -490,7 +490,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
+		LOG_INF("successfully wrote to file for %d, bytes = %i, writes = %i !", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}

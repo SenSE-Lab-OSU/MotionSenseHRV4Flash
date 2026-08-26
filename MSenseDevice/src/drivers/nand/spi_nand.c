@@ -655,6 +655,10 @@ int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* b
 	int non_corrupt_sector = get_sector_offset(page_number);
 	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
 	ret = spi_nand_page_read(dev, addr, buffer);
+	if (ret != 0) {
+		LOG_ERR("NAND read mapping: logical_page=%u mapped_page=%d rc=%d",
+			page_number, non_corrupt_sector, ret);
+	}
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
 		register_bad_sector(non_corrupt_sector);
 	}
@@ -666,6 +670,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	acquire_device(dev);
 	LOG_DBG("reading bytes at address %ld", page_addr);
 	nrfx_err_t res = 0;
+	int wait_res = 0;
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -695,7 +700,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
-	int wait_res = spi_flash_wait_until_ready(dev);
+	wait_res = spi_flash_wait_until_ready(dev);
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0 || wait_res != 0) {
@@ -705,24 +710,41 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 
 out:
 	uint8_t reg_status = spi_rdsr(dev);
-	int status = reg_status;
-	LOG_DBG("finished read! with status %i", status);
-	// get the ECC status
-	uint8_t ECC_status = reg_status >> 4;
-	if (ECC_status != 0){
-		if (ECC_status == 2){
-			ECC_err++;
-			LOG_ERR("ECC err too high, bad block");
-			status = FLASH_TOO_MANY_ECC_ERROR;
-		}
-		else {
-			// if it's just an ECC error then we should be able to correct it and move on
-			status = 0;
-			ECC_corrections++;
-			LOG_WRN("correctable err");
-			
-		}
-		LOG_WRN("ECC stat %d, tot corrections %d an err %d", ECC_status, ECC_corrections, ECC_err);
+	uint8_t ecc_status = (reg_status >> 4) & 0x07U;
+	int status = res != 0 ? (int)res : wait_res;
+
+	LOG_DBG("finished read! with status 0x%02x", reg_status);
+
+	switch (ecc_status) {
+	case 0:
+		break;
+	case 1:
+	case 3:
+	case 5:
+		/* Micron M70A reports corrected bit-flip ranges with these codes. */
+		ECC_corrections++;
+		LOG_WRN("NAND ECC corrected: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status, ECC_corrections);
+		break;
+	case 2:
+		/* This is the Micron M70A uncorrectable ECC code. */
+		ECC_err++;
+		LOG_ERR("NAND ECC uncorrectable: cs=%d die=%d die_page=%ld die_block=%ld page_in_block=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			(long)(page_addr / 64), (long)(page_addr % 64),
+			reg_status, ecc_status, ECC_err);
+		status = FLASH_TOO_MANY_ECC_ERROR;
+		break;
+	default:
+		/* ECC codes 4, 6, and 7 are reserved by the Micron M70A. */
+		LOG_ERR("NAND unexpected status: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u oip=%u wel=%u erase_fail=%u prog_fail=%u",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status,
+			reg_status & BIT(0), (reg_status >> 1) & BIT(0),
+			(reg_status >> 2) & BIT(0), (reg_status >> 3) & BIT(0));
+		status = -EIO;
+		break;
 	}
 
 	release_device(dev);

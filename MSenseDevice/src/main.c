@@ -11,6 +11,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/sys/atomic.h>
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
@@ -51,6 +52,12 @@ LOG_MODULE_REGISTER(main, 3);
 #define BUTTON0_NODE DT_NODELABEL(button0)
 #define BUTTON0_LONG_PRESS_MS 5000
 
+enum ship_mode_state {
+  SHIP_MODE_ACTIVE,
+  SHIP_MODE_WAITING_FOR_BUTTON,
+  SHIP_MODE_STARTING,
+};
+
 // define our red and green leds
 #define LED_PIN DT_GPIO_PIN(LED_NODE, gpios)
 #define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
@@ -73,6 +80,8 @@ static bool button0_pressed;
 static int64_t button0_pressed_time_ms;
 static struct k_mutex collection_mode_lock;
 static K_SEM_DEFINE(accel_record_fault_sem, 0, 1);
+static atomic_t ship_mode = ATOMIC_INIT(SHIP_MODE_WAITING_FOR_BUTTON);
+static K_SEM_DEFINE(ship_mode_exit_sem, 0, 1);
 
 static void button0_work_handler(struct k_work *work);
 static void button0_pressed_handler(const struct device *port,
@@ -463,6 +472,10 @@ void battery_maintenance()
 
 
 void blink_led(gpio_pin_t pin){
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
   gpio_pin_set(gpio0_device, pin, 1);
   k_sleep(K_MSEC(200));
   gpio_pin_set(gpio0_device, pin, 0);
@@ -470,6 +483,10 @@ void blink_led(gpio_pin_t pin){
 
 static void set_mode_leds(bool led0_on, bool led1_on)
 {
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
   gpio_pin_set(gpio0_device, LED_PIN, led0_on ? 1 : 0);
   gpio_pin_set(gpio0_device, LED1_PIN, led1_on ? 1 : 0);
 }
@@ -808,6 +825,15 @@ static void button0_work_handler(struct k_work *work)
   button0_pressed = false;
   pressed_duration_ms = k_uptime_get() - button0_pressed_time_ms;
 
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    if (atomic_cas(&ship_mode, SHIP_MODE_WAITING_FOR_BUTTON,
+                   SHIP_MODE_STARTING)) {
+      LOG_INF("Exiting ship mode");
+      k_sem_give(&ship_mode_exit_sem);
+    }
+    return;
+  }
+
   if (pressed_duration_ms >= BUTTON0_LONG_PRESS_MS) {
     LOG_WRN("Long button press detected, erasing flash");
     if (collecting_data) {
@@ -877,12 +903,17 @@ static int button0_init(void)
 
 
 void storage_clear_led(){
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
 }
 
 int main(void)
 {
   int identity_err;
+  int ret;
 
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
@@ -890,6 +921,13 @@ int main(void)
   identity_err = msense_device_identity_init();
   if (identity_err) {
     LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
+  }
+
+  ret = button0_init();
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to initialize button0: %d", ret);
+    return ret;
   }
   
 
@@ -906,6 +944,11 @@ int main(void)
     security_lock = true;
   #endif
 
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to enable USB mass storage: %d", ret);
+  }
 
   k_sleep(K_SECONDS(2));
   
@@ -913,7 +956,6 @@ int main(void)
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
   gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
   
-  int ret;
   // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
@@ -929,11 +971,6 @@ int main(void)
     LOG_ERR("IMU FSYNC timing initialization failed: %d", ret);
   }
   accel_recorder_set_fault_handler(accel_record_fault_handler, NULL);
-  ret = button0_init();
-  if (ret != 0)
-  {
-    LOG_ERR("Failed to initialize button0: %d", ret);
-  }
   
   // Init, verify ID and config sensors
   
@@ -945,11 +982,19 @@ int main(void)
   // Shutdown our PPG sensor until we need to get data from it
   //ppg_sleep();
 
+  LOG_INF("Ship mode active; press button0 to enable BLE and status LEDs");
+  ret = k_sem_take(&ship_mode_exit_sem, K_FOREVER);
+  if (ret != 0) {
+    LOG_ERR("Failed to exit ship mode: %d", ret);
+    return ret;
+  }
+
   if (identity_err == 0) {
     ble_init();
   } else {
     LOG_ERR("BLE advertising disabled because device identity is unavailable");
   }
+  atomic_set(&ship_mode, SHIP_MODE_ACTIVE);
 
   //get_storage_percent_full();
   
@@ -959,12 +1004,6 @@ int main(void)
   
   collecting_data = false;
   host_wants_collection = false;
-
-  ret = set_usb_mass_storage_enabled(true);
-  if (ret != 0)
-  {
-    LOG_ERR("Failed to enable USB mass storage: %d", ret);
-  }
 
   while (1)
   {

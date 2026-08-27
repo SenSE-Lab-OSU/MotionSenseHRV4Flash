@@ -87,7 +87,9 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 };
 
 &button0 {
-	status = "disabled";
+	status = "okay";
+	gpios = <&gpio0 1 (GPIO_ACTIVE_LOW)>;
+	label = "User button";
 };
 
 &button1 {

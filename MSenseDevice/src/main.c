@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(main, 3);
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS 6000
+#define BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES 4U
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED_NODE DT_ALIAS(led0)
@@ -282,11 +283,11 @@ static void bt_ready(int err)
 {
   if (err)
   {
-    printk("BLE init failed with error code %d\n", err);
+    LOG_ERR("BLE initialization callback failed: %d", err);
     return;
   }
   else
-    printk("BLE init success\n");
+    LOG_INF("BLE initialized");
 
   #if CONFIG_BT_SETTINGS
     settings_load();
@@ -326,10 +327,10 @@ static void bt_ready(int err)
   */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
-    printk("Advertising failed to start (err %d)\n", err);
+    LOG_ERR("BLE advertising failed to start: %d", err);
   else
   {
-    printk("Advertising started\n");
+    LOG_INF("BLE advertising started");
   }
 
   k_sem_give(&ble_init_ok);
@@ -338,7 +339,10 @@ static void bt_ready(int err)
   #ifndef CONFIG_DEBUG
   
     if (!security_lock){
-      usb_enable(usb_status_cb);
+      err = set_usb_mass_storage_enabled(true);
+      if (err != 0) {
+        LOG_WRN("USB enable returned %d", err);
+      }
     }
     //k_sleep(K_SECONDS(10));
     #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -356,18 +360,8 @@ static void ble_init(void)
   err = bt_enable(bt_ready);
   if (err)
   {
-    printk("BLE initialization failed\n");
+    LOG_ERR("Unable to start BLE initialization: %d", err);
   }
-
-  //err = bt_id_create(BT_ADDR_LE_ANY, NULL);
-  if (!err)
-    printk("Bluetooth initialized\n");
-  else
-  {
-    printk("BLE initialization did not complete in time\n");
-  }
-  if (err)
-    printk("Bluetooth init failed (err %d)\n", err);
 }
 
 // Timer handler that periodically executes commands with a period,
@@ -422,8 +416,12 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 void battery_maintenance()
 {
+  static uint8_t maintenance_cycles;
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
-  dt_update_battery(dev, true);
+  bool log_summary = (maintenance_cycles % BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES) == 0U;
+
+  maintenance_cycles++;
+  dt_update_battery(dev, log_summary);
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -979,9 +977,8 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      //battery_maintenance();
+      battery_maintenance();
       //get_current_unix_time();
-      LOG_INF("filesystem work queue active: %d", filesystem_workqueue_started);
     }
 
     if (!connectedFlag){

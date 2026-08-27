@@ -252,9 +252,8 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		// size parameter needs to be in bytes
-		// 4294901760 bytes is aproximately 4 GB. Updated from 2147450880 bytes (1.99 GB)
-		size = <4294901760>;
-		individual-size = <1073725440>;
+		size = <2147483648>;
+		individual-size = <1073741824>;
 		num-flashchips = <2>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;

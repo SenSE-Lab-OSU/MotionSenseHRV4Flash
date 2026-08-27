@@ -66,7 +66,7 @@ int upload_timeout_errors;
 
 bool file_lock;
 
-uint64_t last_time_update_sent;
+uint64_t last_time_update_uptime_ms;
 
 uint64_t set_date_time = 0;
 
@@ -678,22 +678,26 @@ int read_storage_percent_full(){
 
 
 void set_date_time_bt(uint64_t value){
-	
+	/*
+	 * The datetime characteristic uses Unix milliseconds. Keep the phone's full
+	 * precision and anchor it to the millisecond-resolution system uptime.
+	 */
 	set_date_time = value;
-	last_time_update_sent = k_uptime_get() / 1000;
-	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
-	
+	last_time_update_uptime_ms = k_uptime_get();
+	LOG_INF("datetime set to %llu milliseconds, uptime is %llu milliseconds",
+		set_date_time, last_time_update_uptime_ms);
+}
 
+uint64_t get_current_unix_time_ms(){
+	uint64_t current_uptime_ms = k_uptime_get();
+	uint64_t current_time_ms =
+		(current_uptime_ms - last_time_update_uptime_ms) + set_date_time;
+	LOG_DBG("current timestamp in milliseconds: %llu", current_time_ms);
+	return current_time_ms;
 }
 
 uint64_t get_current_unix_time(){
-	
-	uint64_t current_upime = k_uptime_get();
-	current_upime /= 1000;
-	LOG_DBG("current uptime in seconds: %llu", current_upime);
-	uint64_t current_time = (current_upime - last_time_update_sent) + set_date_time;
-	LOG_DBG("current timestamp: %llu", current_time);
-	return current_time;
+	return get_current_unix_time_ms() / 1000;
 }
 
 // for now we will use Mountain Time (UTC -7)
@@ -733,4 +737,3 @@ int64_t stop_timer(){
 	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }
-

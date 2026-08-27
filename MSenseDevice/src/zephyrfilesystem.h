@@ -44,6 +44,9 @@ void work_write(struct k_work* item);
 
 uint64_t get_current_unix_time();
 
+uint64_t get_current_unix_time_ms();
+
+/* Accepts Unix time in milliseconds. */
 void set_date_time_bt(uint64_t value);
 
 void start_timer();
@@ -62,4 +65,3 @@ extern uint64_t set_date_time;
 
 extern memory_container ppg_work_item;
 extern memory_container accel_work_item;
-

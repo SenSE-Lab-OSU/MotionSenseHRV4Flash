@@ -15,7 +15,10 @@
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
+#include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/printk-hooks.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
 #include "ppgSensor.h"
@@ -75,6 +78,9 @@ const struct device* gpio1_device;
 static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
 static struct gpio_callback button0_callback;
 static bool usb_enabled;
+static bool usb_uart_log_backend_was_active;
+static bool usb_console_suppressed;
+static printk_hook_fn_t usb_console_printk_hook;
 static bool filesystem_workqueue_started;
 static bool button0_pressed;
 static int64_t button0_pressed_time_ms;
@@ -225,12 +231,77 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
+/*
+ * The console and UART log backend are both routed through the USB CDC ACM
+ * device.  Collection mode disables that device to remove the NAND disk from
+ * the USB host, so leave neither path trying to transmit while it is down.
+ * RTT and the custom filesystem log backend are separate log backends and
+ * remain active.
+ */
+static int usb_console_discard_char(int c)
+{
+  return c;
+}
+
+static void suspend_usb_console_and_log_backend(void)
+{
+#if CONFIG_LOG_BACKEND_UART
+  const struct log_backend *backend;
+
+  backend = log_backend_get_by_name("log_backend_uart");
+  if (backend == NULL) {
+    LOG_WRN("USB UART log backend was not found");
+  } else {
+    usb_uart_log_backend_was_active = log_backend_is_active(backend);
+    if (usb_uart_log_backend_was_active) {
+      log_backend_disable(backend);
+    }
+  }
+#endif
+
+#if CONFIG_UART_CONSOLE
+  if (!usb_console_suppressed) {
+    usb_console_printk_hook = __printk_get_hook();
+    __printk_hook_install(usb_console_discard_char);
+    usb_console_suppressed = true;
+  }
+#endif
+}
+
+static void resume_usb_console_and_log_backend(void)
+{
+#if CONFIG_UART_CONSOLE
+  if (usb_console_suppressed) {
+    __printk_hook_install(usb_console_printk_hook);
+    usb_console_suppressed = false;
+  }
+#endif
+
+#if CONFIG_LOG_BACKEND_UART
+  if (usb_uart_log_backend_was_active) {
+    const struct log_backend *backend;
+
+    backend = log_backend_get_by_name("log_backend_uart");
+    if (backend == NULL) {
+      LOG_WRN("USB UART log backend was not found");
+    } else {
+      log_backend_enable(backend, backend->cb->ctx, CONFIG_LOG_MAX_LEVEL);
+    }
+    usb_uart_log_backend_was_active = false;
+  }
+#endif
+}
+
 static int set_usb_mass_storage_enabled(bool enable)
 {
   int ret;
 
   if (usb_enabled == enable) {
     return 0;
+  }
+
+  if (!enable) {
+    suspend_usb_console_and_log_backend();
   }
 
   ret = enable ? usb_enable(usb_status_cb) : usb_disable();
@@ -240,6 +311,12 @@ static int set_usb_mass_storage_enabled(bool enable)
 
   if (ret == 0) {
     usb_enabled = enable;
+    if (enable) {
+      resume_usb_console_and_log_backend();
+    }
+  } else if (!enable) {
+    /* USB remains active after a failed disable, so restore its outputs. */
+    resume_usb_console_and_log_backend();
   }
 
   return ret;
@@ -912,22 +989,28 @@ void storage_clear_led(){
 
 int main(void)
 {
-  int identity_err;
   int ret;
+  int identity_err;
+  uint32_t reset_reason = nrfx_reset_reason_get();
+
+  /* RESETREAS is cumulative until acknowledged. Capture this boot's reason
+   * before clearing it, so the next boot is not reported with stale flags. */
+  nrfx_reset_reason_clear(reset_reason);
 
   printk("Starting Application... \n");
-  LOG_INF("Starting Logging...\n");
-
-  identity_err = msense_device_identity_init();
-  if (identity_err) {
-    LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
-  }
+  LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
+  LOG_INF("Starting Logging...");
 
   ret = button0_init();
   if (ret != 0)
   {
     LOG_ERR("Failed to initialize button0: %d", ret);
     return ret;
+  }
+
+  identity_err = msense_device_identity_init();
+  if (identity_err) {
+    LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
   }
   
 

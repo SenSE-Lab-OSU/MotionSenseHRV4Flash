@@ -490,7 +490,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
+		LOG_INF("successfully wrote to file for %d, bytes = %i, writes = %i !", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -919,7 +919,7 @@ void setup_disk(void)
 	/* Allow log messages to flush to avoid interleaved output */
 	k_sleep(K_MSEC(50));
 
-	LOG_INF("Mount %s: %d\n", fs_mnt.mnt_point, rc);
+	LOG_INF("Mount %s: %d", fs_mnt.mnt_point, rc);
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
@@ -928,7 +928,7 @@ void setup_disk(void)
 	}
 
 	LOG_INF("%s: bsize = %lu ; frsize = %lu ;"
-	       " blocks = %lu ; bfree = %lu\n",
+	       " blocks = %lu ; bfree = %lu",
 	       mp->mnt_point,
 	       sbuf.f_bsize, sbuf.f_frsize,
 	       sbuf.f_blocks, sbuf.f_bfree);

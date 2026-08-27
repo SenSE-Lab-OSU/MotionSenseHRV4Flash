@@ -14,7 +14,6 @@
 LOG_MODULE_REGISTER(IMUSensor, CONFIG_LOG_LEVEL_IMU_COLLECTION);
 
 float32_t runningMeanGyro=0.0f, runningSquaredMeanGyro=0.0f;
-float32_t runningMeanAcc=0.0f, runningSquaredMeanAcc=0.0f;
 uint16_t counterGyro=0,counterAcc=0;
 float enmo_store[32];
 uint16_t testcounter = 0;
@@ -23,24 +22,36 @@ int log_counter = 0;
 int16_t dataReadGyroX, dataReadGyroY, dataReadGyroZ;
 const float accThreshold= 0.001f;
 const float gyroThreshold= 5.0f;
-uint8_t blePktMagneto[ble_magnetometerPktLength];
+
 uint8_t blePktMotion[ble_motionPktLength];
 float quaternionResult_1[4] = {0.0, 0.0, 0.0, 1.0};
 struct bleDataPacket my_motionData;
 
+
+struct accel_config accelConfig = {
+  .isEnabled = true, 
+  .txPacketEnable = true,
+  .sample_bw = IMU_FIXED_ACCEL_DLPFCFG,
+  .sensitivity = ACCEL_FS_SEL_4g
+};
+
+struct gyro_config gyroConfig = {
+  .isEnabled = true,
+  .txPacketEnable = true,
+  .tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR,
+  .sensitivity = GYRO_FS_SEL_500
+};
+
+
+struct accData currentAccData;
+struct gyroData current_gyro_data;
+
 struct bleDataPacket enmoThreshold;
 // Magnometer variables
  
-bool magnoSecondReading = false;
-uint8_t burst_tx_magneto[17];	
 
-#if MAGNETOMETER_DATA_PATH_ENABLED
-#define IMU_USER_CTRL_VALUE (I2C_MST_EN | I2C_IF_DIS)
-#define IMU_LP_CONFIG_VALUE I2C_MST_CYCLE
-#else
 #define IMU_USER_CTRL_VALUE I2C_IF_DIS
 #define IMU_LP_CONFIG_VALUE 0x00
-#endif
 
 void spiReadWriteIMU(uint8_t * tx_buffer, uint8_t txLen, 
 uint8_t * rx_buffer, uint8_t rxLen){
@@ -126,8 +137,6 @@ static void gyroscope_measurement(float * quaternionResult){
   angularVelY = (float)dataReadGyroY*dividerGyro;
   angularVelZ = (float)dataReadGyroZ*dividerGyro;
   
-  //printf("angX = %f,angy = %f,angz = %f,counterGyro=%d\n",
-   // angularVelX,angularVelY,angularVelZ,counterGyro);
 				
   arm_sqrt_f32(angularVelX*angularVelX+angularVelY*angularVelY+
     angularVelZ*angularVelZ,&newMagGyro);
@@ -221,286 +230,13 @@ static void gyroscope_measurement(float * quaternionResult){
 // Function that converts the accumulated quarternion 
 // back to angular velocity measurements.
 static void prepare_gyros(float* quaternionResult){
-  /* 
-  float quantizerScale; 
-  float pi =(float) 3.14159;
-  float32_t rad_deg = 180.0f/pi; 
-  float bounds1 = 0.0f;
-/*  const float coeffs1[8] = {
-    1.5707963050f, -0.214598016f, 0.0889789874f, -0.051743046f,
-    0.0308918810f, -0.0170881256f, 0.0066700901f, -0.0012624911f  
-  }; // coefficients of the polynomial aproximation for acos(x)
-
-  const float coeffsNum[21] = {
-    4.999041E-07, 2.834031E-05, -1.490620E-04, -1.771155E-03,
-    5.964344E-03, 3.300317E-02, -8.814134E-02, -2.804760E-01,
-    6.451019E-01, 1.290628E+00, -2.668552E+00, -3.482593E+00,
-    6.642922E+00, 5.667227E+00, -1.014432E+01, -5.467928E+00,
-    9.295363E+00, 2.878479E+00, -4.688171E+00, -6.366198E-01,1 
-  }; 
-
-  const float coeffsDenom[21] = {
-    4.999041E-07, 0, -1.490620E-04, 0, 5.964344E-03, 0, 
-    -8.814134e-02, 0, 6.451019e-01, 0, -2.668552E+00, 0,
-    6.642922E+00, 0, -1.014432E+01, 0, 9.295363E+00, 0,
-    -4.688171E+00, 0, 1
-  }; 
-
-  float delta_T;
-  if(gyroConfig.tot_samples == 1) 
-    delta_T = 1.0f/200.0f;
-  else if(gyroConfig.tot_samples == 2) 
-    delta_T = 1.0f/ 100.0f;
-  else if(gyroConfig.tot_samples == 4) 
-    delta_T = 1.0f/ 50.0f;
-  else 
-    delta_T = 1.0f/ 25.0f;
-		
-  if(gyroConfig.sensitivity == 0x00){
-    quantizerScale = 32767.0f/250.0f;
-    bounds1 = 250.0f;
-  }
-  else if(gyroConfig.sensitivity == 0x02 ){
-    bounds1 = 500.0f;
-    quantizerScale = 32767.0f/500.0f;
-  }
-  else if(gyroConfig.sensitivity == 0x04 ){ 
-    bounds1 = 1000.0f;
-    quantizerScale = 32767.0f/ 1000.0f;
-  }
-  else if(gyroConfig.sensitivity == 0x06 ){
-    quantizerScale = 32767.0f/ 2000.0f;
-    bounds1 = 2000.0f;
-
-  }
-  */
-/* Using Polynomial approximation for acos(x) = 
-  (c0 +c1*x + c2*x^2 + ... + c21*x^21)/(d0 +d1*x + d2*x^2 + ... + d21*x^21) */
-/* Not using the polynomial expansion and reverting back to Taylor's series */
-/*	
-  float temp,q3New = 1.0,acosValue=coeffs1[0],temp2,theta_rate,qq;
-
-  float angularX,angularY,angularZ;
-  //float acosValueNum=1.0,acosValueDenom=1.0;
-  float factorMul = 1.570796;
-  
-  arm_sqrt_f32(1-quaternionResult[0]*quaternionResult[0] - 
-    quaternionResult[1]*quaternionResult[1] - 
-    quaternionResult[2]*quaternionResult[2], &qq );
-  arm_sqrt_f32(1-qq, &temp );
-  
-  for(uint8_t i=1;i<8;i++){
-    q3New = q3New*qq;
-    acosValue=acosValue+coeffs1[i]*q3New;
-    //acosValueNum = acosValueNum + coeffsNum[20-i]*q3New;
-    //acosValueDenom = acosValueDenom + coeffsDenom[20-i]*q3New;
-  }*/
-  //acosValue = (float) temp*acosValueNum/acosValueDenom*factorMul;
-  /*
-
-  acosValue = (float32_t) temp*acosValue;
-  theta_rate = (float)2.0f*acosValue/delta_T;
-  temp2 = arm_sin_f32(theta_rate*delta_T/2.0f);
-  
-  if(temp2 < 0.000001f)	{
-    temp2 = 0.0f;
-    angularX = 0.0f;
-    angularY = 0.0f;
-    angularZ = 0.0f;
-    theta_rate = 0.0f;
-  }				
-  else{
-    angularX= quaternionResult[0]/ temp2 *theta_rate *rad_deg;
-    angularY= quaternionResult[1]/ temp2 *theta_rate*rad_deg;
-    angularZ= quaternionResult[2]/ temp2 *theta_rate*rad_deg;
-  }
-  
-  if(angularX > bounds1) 
-    angularX = bounds1;
-  if(angularY > bounds1) 
-    angularY = bounds1;
-  if(angularZ > bounds1 )  
-    angularZ = bounds1;
-  if(angularX < -bounds1) 
-    angularX = -bounds1;
-  if(angularY < -bounds1 ) 
-    angularY = -bounds1;
-  if(angularZ < -bounds1 )  
-    angularZ = -bounds1;
-
-  current_gyro_data.gyrox_val = angularX;
-  current_gyro_data.gyroy_val = angularY;
-  current_gyro_data.gyroz_val = angularZ;
-	*/
-  //printf("angX_final = %f,angy_final = %f,angz_final = %f\n",
-   // angularX,angularY,angularZ);
-
-  // Storing only the first three components of the Quaternion. 
-  // The fourth component can be computed because the norm of the 
-  // quaternion vector is 1.	
-  /*
-
-  temp1.float_val =  quaternionResult[0]; // angularX; changed to quaternionComponent 0 
-  blePktMotion[6] = temp1.floatcast[0];
-  blePktMotion[7] = temp1.floatcast[1];
-  blePktMotion[8] = temp1.floatcast[2];
-  blePktMotion[9] = temp1.floatcast[3];
-
-  temp1.float_val =  quaternionResult[1]; // angularY;
-  blePktMotion[10] = temp1.floatcast[0];
-  blePktMotion[11] = temp1.floatcast[1];
-  blePktMotion[12] = temp1.floatcast[2];
-  blePktMotion[13] = temp1.floatcast[3];
-
-  temp1.float_val =  quaternionResult[2]; // angularZ;
-  blePktMotion[14] = temp1.floatcast[0];
-  blePktMotion[15] = temp1.floatcast[1];
-  blePktMotion[16] = temp1.floatcast[2];
-  blePktMotion[17] = temp1.floatcast[3];*/
-
+ 
   current_gyro_data.quaternion_1_val = quaternionResult[0];
   current_gyro_data.quaternion_2_val = quaternionResult[1];
   current_gyro_data.quaternion_3_val = quaternionResult[2];
   current_gyro_data.quaternion_4_val = quaternionResult[3];
 }
-// Read the magnetometer sample and use it for orientation calculation
-static void magnetometer_data_read_send(bool validMeasurement , uint16_t pktCounter){
-  uint8_t txLen=9, rxLen=9;
-  
-  // Burst read external sensor ( Magnetometer)  registers (0x49-0x50).
-  uint8_t burst_rx_magneto[9];	// SPI burst read holders.
-  
-  printk("packet counter: %i", (unsigned int)pktCounter);
-  //Magneto Transmitting 0xFF
-  
-  burst_tx_magneto[0] =(READMASTER | EXT_SENSE_DATA_0_IMU);
-  burst_tx_magneto[1] = SPI_FILL;
-  burst_tx_magneto[2] = SPI_FILL;
-  burst_tx_magneto[3] = SPI_FILL;
-  burst_tx_magneto[4] = SPI_FILL;
-  burst_tx_magneto[5] = SPI_FILL;
-  burst_tx_magneto[6] = SPI_FILL;
-  burst_tx_magneto[7] = SPI_FILL;
-  burst_tx_magneto[8] = SPI_FILL;
-  // Reading magnetometer data
-  spiReadWriteIMU(burst_tx_magneto, txLen, burst_rx_magneto, rxLen);
-  
-  // Sort magneto data.
-  if (magnoSecondReading){
-  //for(uint8_t i=0;i<6;i++)
-    //blePktMagneto[i]=burst_rx_magneto[i+1];
-    blePktMagneto[2] = burst_rx_magneto[0+1];
-    blePktMagneto[3] = burst_rx_magneto[1+1];
-    blePktMagneto[6] = burst_rx_magneto[2+1];
-    blePktMagneto[7] = burst_rx_magneto[3+1];
-    blePktMagneto[9] = burst_rx_magneto[4+1];
-    blePktMagneto[10] = burst_rx_magneto[5+1];
-}
 
-  blePktMagneto[15] = (pktCounter&0xFF00) >> 8;
-  blePktMagneto[16] = (pktCounter&0x00FF);
-  if(magnetoConfig.txPacketEnable == true){
-    my_magnetoSensor.dataPacket = blePktMagneto;
-    my_magnetoSensor.packetLength = MAGNETOMETER_DATA_LEN;
-    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-    k_work_submit(&my_magnetoSensor.work);
-    #endif
-  }
-  else{
-    blePktMagneto[0] = burst_rx_magneto[0+1];
-    blePktMagneto[1] = burst_rx_magneto[1+1];
-    blePktMagneto[4] = burst_rx_magneto[2+1];
-    blePktMagneto[5] = burst_rx_magneto[3+1];
-    blePktMagneto[7] = burst_rx_magneto[4+1];
-    blePktMagneto[8] = burst_rx_magneto[5+1];
-  }
-
-  if(validMeasurement == true){
-    current_magneto_data.Hy = (burst_rx_magneto[2]<<8) + burst_rx_magneto[1];
-    if((burst_rx_magneto[2]&0x80) == 0x80)
-      current_magneto_data.Hy = -(~(current_magneto_data.Hy) + 1);
-    current_magneto_data.Hx = (burst_rx_magneto[4]<<8) + burst_rx_magneto[3];
-    if((burst_rx_magneto[4]&0x80) == 0x80)
-      current_magneto_data.Hx = -(~(current_magneto_data.Hx) + 1);
-    current_magneto_data.Hz = (burst_rx_magneto[6]<<8) + burst_rx_magneto[5];
-    if((burst_rx_magneto[6]&0x80) == 0x80)
-      current_magneto_data.Hz = -(~(current_magneto_data.Hz) + 1);
-    current_magneto_data.Hz = -current_magneto_data.Hz;
-    current_magneto_data.Hx_val = current_magneto_data.Hx *0.15;
-    current_magneto_data.Hy_val = current_magneto_data.Hy *0.15;
-    current_magneto_data.Hz_val = current_magneto_data.Hz *0.15;
-
-  }
-  else{
-    current_magneto_data.Hy = 0;
-    current_magneto_data.Hx = 0;
-    current_magneto_data.Hz = 0;
-    current_magneto_data.Hx_val = current_magneto_data.Hx *0.15;
-    current_magneto_data.Hy_val = current_magneto_data.Hy *0.15;
-    current_magneto_data.Hz_val = current_magneto_data.Hz *0.15;
-  }
-  //printf("H_x=%f,H_y=%f,H_z=%f\n", 
-  //  magnetoData1.Hx_val,magnetoData1.Hy_val,magnetoData1.Hz_val);
-  motion_data_orientation_timeout_handler(pktCounter);
-  magnoSecondReading = !magnoSecondReading;
-}
-
-// Configure the magnetometer sensor using the external sensor mode
-static void magnetometer_read_sample_config(
-magneto_sample_config_t magneto_smpl_config){
-  static uint8_t m_tx_buf[2] = {WHO_AM_I | READMASTER,SPI_FILL};		/**< TX buffer. */
-  static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
-  static uint8_t tx_buf[14];
-  uint8_t magnetoConfig_length;
-  static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
-
-  tx_buf[0] = REG_BANK_SEL | WRITEMASTER;
-  tx_buf[1] = REG_BANK_3;
-  tx_buf[2] = I2C_SLV0_ADDR_IMU;
-  switch(magneto_smpl_config){
-    case MAGNETOMETER_SINGLE:
-      tx_buf[3] = MAGNETOADDRESS;
-      tx_buf[4] = I2C_SLV0_REG_IMU;
-      tx_buf[5] = MAGNETOMETER_CNTL2;
-      tx_buf[6] = I2C_SLV0_CTRL_IMU;
-      tx_buf[7] = I2C_SLV_EN | 0x01; // writing 1 byte
-      tx_buf[8] = I2C_SLV0_DO_IMU;
-      tx_buf[9] = MAGNETO_SINGLE_MEASUREMENT;
-      tx_buf[10] = I2C_SLV0_CTRL_IMU;
-      tx_buf[11] = I2C_SLV_EN | 0x01;
-      tx_buf[12] = REG_BANK_SEL | WRITEMASTER;
-      tx_buf[13] = REG_BANK_0;
-      magnetoConfig_length = 14;
-      break;
-    case MAGNETOMETER_SET_EXT_SENSOR:
-      tx_buf[3] = READMASTER | MAGNETOADDRESS;
-      tx_buf[4] = I2C_SLV0_REG_IMU;
-      tx_buf[5] = MAGNETOMETER_HXL;  //Reading magnetometer data
-      tx_buf[6] = I2C_SLV0_CTRL_IMU;
-      tx_buf[7] = I2C_SLV_EN | 0x08; //Reading 8 bytes
-      tx_buf[8] = REG_BANK_SEL | WRITEMASTER;
-      tx_buf[9] = REG_BANK_0; // changing back to register bank 0
-      magnetoConfig_length = 10;
-      break;
-    case MAGNETOMETER_SET_EXT_TOREAD:
-      tx_buf[3] = READMASTER | MAGNETOADDRESS;
-      tx_buf[4] = I2C_SLV0_REG_IMU;
-      tx_buf[5] = MAGNETOMETER_ST1;
-      tx_buf[6] = I2C_SLV0_CTRL_IMU;
-      tx_buf[7] = I2C_SLV_EN | 0x01; // reading 1 byte
-      tx_buf[8] = REG_BANK_SEL | WRITEMASTER;
-      tx_buf[9] = REG_BANK_0; // changing back to register bank 0
-      magnetoConfig_length = 10;
-      break;
-    default:
-      return;
-  }
-  for(int i = 0; i < magnetoConfig_length; i += 2){
-    m_tx_buf[0] = tx_buf[i];
-    m_tx_buf[1] = tx_buf[i+1];	
-    spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
-  }
-}
 
 // our global variables needed for enmo calculation
 #define enmo_samples_size 600
@@ -551,8 +287,9 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       }
       enmo /= 32;
       currentAccData.ENMO = enmo;
-      LOG_INF("%f, %f, %f", accelX, accelY, accelZ);
-      LOG_INF("Enmo: %f", enmo*1000);
+      // floats are cast to double in print calls
+      LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
+      LOG_INF("Enmo: %f", (double)enmo*1000);
       //currentAccData.time = get_current_unix_time();
        
       
@@ -582,7 +319,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %f", currentAccData.ENMO);
+      LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
       k_work_submit(&my_motionData.work);
       }
     }
@@ -653,10 +390,6 @@ void motion_data_timeout_handler(struct k_work *item)
   struct motionInfo *the_device = ((struct motionInfo *)(((char *)(item)) - offsetof(struct motionInfo, work)));
   uint16_t pktCounter = the_device->pktCounter;
   
-
-  // printk("gyro: %i \n", gyro_first_readTemp);
-  uint8_t burst_tx_INT_STAT[2] = {INT_STAATUS_1 | READMASTER, SPI_FILL}; // SPI burst read holders.
-  
   uint8_t burst_tx[13] = {
       READMASTER | ACCEL_XOUT_H, SPI_FILL,
       SPI_FILL, SPI_FILL, SPI_FILL, SPI_FILL,
@@ -670,50 +403,6 @@ void motion_data_timeout_handler(struct k_work *item)
   uint8_t burst_rx[23];                                           // SPI burst read holders.
   uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
   uint8_t m_rx_buf[15];      
-  
-
-#if MAGNETOMETER_DATA_PATH_ENABLED
-  if (magnetoConfig.isEnabled)
-  {
-    bool measurement_valid = false;
-    uint16_t checkMag = 0;
-    uint8_t magneto_first_readTemp = the_device->magneto_first_read;
-    // Point to register bank 0 for reading the data from sensors.
-    spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
-    if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2)
-    {
-      // Checking the magnetometer status bits
-
-      while (checkMag < 40000)
-      {
-        spiReadWriteIMU(burst_tx_INT_STAT, 2, burst_rx, 2);
-        if ((burst_rx[1] & 0x01) == 0x01)
-        {
-          measurement_valid = true;
-          checkMag = 0;
-
-          break;
-        }
-        checkMag = checkMag + 1;
-      }
-
-      magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_SENSOR);
-    }
-
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 1)
-      magnetometer_data_read_send(measurement_valid, pktCounter);
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 2)
-      magnetometer_read_sample_config(MAGNETOMETER_SINGLE);
-    else if (magneto_first_readTemp == (GYRO_SAMPLING_RATE / MAGNETO_SAMPLING_RATE) / 2 + 3)
-      magnetometer_read_sample_config(MAGNETOMETER_SET_EXT_TOREAD);
-  }
-#else
-  if (magnetoConfig.isEnabled || magnetoConfig.txPacketEnable) {
-    magnetoConfig.isEnabled = false;
-    magnetoConfig.txPacketEnable = false;
-  }
-#endif
-
 
   // Point to register bank 0 for reading the data from sensors.
   spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
@@ -761,9 +450,9 @@ void motion_data_timeout_handler(struct k_work *item)
     currentAccData.raw_accy = dataReadAccY;
     currentAccData.raw_accz = dataReadAccZ;
 
-    accelX = dataReadAccX * dividerAcc / 1.0;
-    accelY = dataReadAccY * dividerAcc / 1.0;
-    accelZ = dataReadAccZ * dividerAcc / 1.0;
+    accelX = dataReadAccX * dividerAcc / 1.0f;
+    accelY = dataReadAccY * dividerAcc / 1.0f;
+    accelZ = dataReadAccZ * dividerAcc / 1.0f;
     currentAccData.accx_val = accelX;
     currentAccData.accy_val = accelY;
     currentAccData.accz_val = accelZ;
@@ -844,106 +533,7 @@ void motion_data_timeout_handler(struct k_work *item)
   }
 }
 
-void magnetometer_config(void){
-  if (magnetoConfig.isEnabled){
-    uint8_t m_tx_buf[2] = {READMASTER | WHO_AM_I,SPI_FILL};		/**< TX buffer. */
-    uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
-    uint8_t tx_buf[14], rx_buf[4];  /**<Tx/ RX buffer. */
 
-    const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
-
-    static uint8_t magneto_chipId[10] ={ 
-      REG_BANK_SEL, REG_BANK_3, //changing register bank to register bank 3
-      I2C_SLV0_ADDR_IMU, (READMASTER | MAGNETOADDRESS),
-      I2C_SLV0_REG_IMU,MAGNETOMETER_ID, // read from register address 0 in magnetometer
-      I2C_SLV0_CTRL_IMU, I2C_SLV_EN | 0x01, // read 2 bytes from the register 
-      REG_BANK_SEL, REG_BANK_0, // change back to register bank 0
-    };// commands for configuring I2C master in IMU
-    
-    static uint8_t magnetoConfig[14] = {   
-      REG_BANK_SEL,REG_BANK_3, //switching to register bank 3
-      I2C_SLV0_ADDR_IMU, MAGNETOADDRESS,
-      I2C_SLV0_REG_IMU,MAGNETOMETER_CNTL2, // writing in CNTL2 register to power down mode
-      I2C_SLV0_CTRL_IMU, I2C_SLV_EN | 0x01,
-      I2C_SLV0_DO_IMU,0x00,
-      I2C_SLV0_CTRL_IMU,I2C_SLV_EN | 0x01,
-      REG_BANK_SEL, REG_BANK_0
-    }; // commands for powering down magnetomete
-    
-    for(int i = 0; i < sizeof(magneto_chipId); i += 2){
-      m_tx_buf[0] = magneto_chipId[i];
-      m_tx_buf[1] = magneto_chipId[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
-      
-    }
-
-    k_msleep(15);    
-    // Going to the User Bank 0
-    tx_buf[0] = REG_BANK_SEL;
-    tx_buf[1] = REG_BANK_0;
-    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
-
-    tx_buf[0] =(READMASTER | EXT_SENSE_DATA_0_IMU);
-    tx_buf[1] = SPI_FILL;
-    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
-    printk("magnetometer chip ID=%x,%x\n",rx_buf[0],rx_buf[1]);
-    k_msleep(15);  
-    // Going to the User Bank 3
-    tx_buf[0] = REG_BANK_SEL;
-    tx_buf[1] = REG_BANK_3;
-    spiReadWriteIMU(tx_buf, 2,rx_buf, 2);
-    for(int i = 0; i < sizeof(magnetoConfig); i += 2){
-      m_tx_buf[0] = magnetoConfig[i];
-      m_tx_buf[1] = magnetoConfig[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
-    }
-		
-    for(int i = 0; i < sizeof(magnetoConfig); i += 2){
-      m_tx_buf[0] = magnetoConfig[i];
-      m_tx_buf[1] = magnetoConfig[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
-    }
-//single mode
-    tx_buf[0] = REG_BANK_SEL ;
-    tx_buf[1] = REG_BANK_3; // switching to register bank 3
-    tx_buf[2] = I2C_SLV0_ADDR_IMU;
-    tx_buf[3] = MAGNETOADDRESS;
-    tx_buf[4] = I2C_SLV0_REG_IMU;
-    tx_buf[5] = MAGNETOMETER_CNTL2;
-    tx_buf[6] = I2C_SLV0_CTRL_IMU;
-    tx_buf[7] = I2C_SLV_EN | 0x01;
-    tx_buf[8] = I2C_SLV0_DO_IMU;
-    tx_buf[9] = MAGNETO_SINGLE_MEASUREMENT;
-    tx_buf[10] = I2C_SLV0_CTRL_IMU;
-    tx_buf[11] = I2C_SLV_EN | 0x01;
-    tx_buf[12] = REG_BANK_SEL;
-    tx_buf[13] = REG_BANK_0;
-    k_msleep(15);
-    for(int i = 0; i < 14; i += 2){
-      m_tx_buf[0] = tx_buf[i];
-      m_tx_buf[1] = tx_buf[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
-    }
-   // Setting up External sensor data to read magnetometer 
-    tx_buf[0] = REG_BANK_SEL;
-    tx_buf[1] = REG_BANK_3;
-    tx_buf[2] = I2C_SLV0_ADDR_IMU;
-    tx_buf[3] = READMASTER | MAGNETOADDRESS;
-    tx_buf[4] = I2C_SLV0_REG_IMU;
-    tx_buf[5] = MAGNETOMETER_ST1; // reading the ST1 register to check DRDY bit
-    tx_buf[6] = I2C_SLV0_CTRL_IMU;
-    tx_buf[7] = I2C_SLV_EN | 0x01;
-    tx_buf[8] = REG_BANK_SEL;
-    tx_buf[9] = REG_BANK_0; // changing back to register bank 0	
-    k_msleep(15);
-    for(int i = 0; i < 10; i += 2){
-      m_tx_buf[0] = tx_buf[i];
-      m_tx_buf[1] = tx_buf[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
-    }
-    k_msleep(15);
-  }
-}
 
 /**
  * @brief Function for configuring the motion processor.
@@ -1000,9 +590,6 @@ void motion_config(void){
       spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
     k_msleep(10);
-#if MAGNETOMETER_DATA_PATH_ENABLED
-    magnetometer_config();
-#endif
   }
 }
 
@@ -1039,37 +626,6 @@ void motionSensitivitySampling_config(void){
       m_tx_buf[1] = imu_config[i+1];
       spiReadWriteIMU(m_tx_buf, m_length, m_rx_buf, m_length);
     }
-  }
-}
-void magnetometer_sleep(void){
-  if(magnetoConfig.isEnabled){
-    uint8_t tx_buf[12];  /**<Tx/ RX buffer. */
-    uint8_t m_tx_buf[2] = {WHO_AM_I | READMASTER,SPI_FILL};/**< TX buffer. */
-    uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
-    const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
-
-    // Powering down magnetometer
-    tx_buf[0] = REG_BANK_SEL;
-    tx_buf[1] = REG_BANK_3;
-    tx_buf[2] = I2C_SLV0_ADDR_IMU;
-    tx_buf[3] = MAGNETOADDRESS;
-    tx_buf[4] = I2C_SLV0_REG_IMU;
-    tx_buf[5] = MAGNETOMETER_CNTL2;
-    tx_buf[6] = I2C_SLV0_CTRL_IMU;
-    tx_buf[7] = I2C_SLV_EN | 0x01;
-    tx_buf[8] = I2C_SLV0_DO_IMU;
-    tx_buf[9] = MAGNETOMETER_POWERDOWN;
-    tx_buf[10] = I2C_SLV0_CTRL_IMU;
-    tx_buf[11] = I2C_SLV_EN | 0x01;
-    for(int i = 0; i < 12; i += 2){
-      m_tx_buf[0] = tx_buf[i];
-      m_tx_buf[1] = tx_buf[i+1];
-      spiReadWriteIMU(m_tx_buf, m_length,m_rx_buf, m_length);
-    }
-    // Returning back to the User Bank 0
-    m_tx_buf[0] = REG_BANK_SEL;
-    m_tx_buf[1] = REG_BANK_0;
-    spiReadWriteIMU(m_tx_buf,2, m_rx_buf, 2);
   }
 }
 

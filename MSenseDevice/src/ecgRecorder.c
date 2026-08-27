@@ -15,7 +15,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
-#include "BLEService.h"
 
 LOG_MODULE_REGISTER(ecg_recorder, CONFIG_LOG_LEVEL_MAX30001);
 
@@ -42,12 +41,6 @@ static atomic_t ecg_record_requested;
 static atomic_t ecg_record_active;
 static bool ecg_intb_callback_added;
 static uint32_t ecg_sequence;
-uint32_t ecg_total_samples = 0;
-uint32_t ecg_last_update_samples = 0;
-
-float random_bar;
-uint8_t ecg_packet[ENMO_DATA_LEN] = {0};
-#define ECG_COUNTER (sizeof(random_bar))
 
 
 static void ecg_record_thread(void *arg1, void *arg2, void *arg3);
@@ -239,11 +232,8 @@ static void ecg_record_process_samples(const struct max30001_ecg_sample *samples
  * both signs the FIFO is empty. The pass limit bounds time spent here if
  * samples arrive as fast as they are drained.
  *
- * Each burst is persisted via ecg_record_process_samples(). Running totals
- * are also maintained, and once at least 1024 new samples have accumulated,
- * the cumulative sample count is copied into ecg_packet and submitted to the
- * BLE work queue as a lightweight progress notification for the connected
- * host.
+ * Each burst is persisted via ecg_record_process_samples(). No IMU or
+ * collection-progress data is transmitted over BLE from this path.
  *
  * FIFO read errors are logged and abort the drain; the next interrupt
  * retries naturally.
@@ -269,18 +259,6 @@ static void ecg_record_drain_fifo(void)
 		
 		
 		ecg_record_process_samples(samples, count);
-
-		ecg_total_samples += count;
-		ecg_last_update_samples += count;
-		if (ecg_last_update_samples >= 1024){
-			LOG_INF("count: %d", ecg_total_samples);
-			
-			memcpy(&ecg_packet[4], &ecg_total_samples, sizeof(ecg_total_samples));
-			my_motionData.dataPacket = ecg_packet;
-      		my_motionData.packetLength = sizeof(ecg_packet);
-			ecg_last_update_samples = 0;
-      		k_work_submit(&my_motionData.work);
-		}
 
 		if (count < ARRAY_SIZE(samples) || samples[count - 1].eof) {
 			return;

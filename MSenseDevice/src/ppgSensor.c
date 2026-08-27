@@ -1,6 +1,5 @@
 
 #include "ppgSensor.h"
-#include "imuSensor.h"
 #include "BLEService.h"
 #include "common.h"
 #include "zephyrfilesystem.h"
@@ -409,10 +408,7 @@ void ppg_led_update(void)
   {
     if (ppg_brightness_check_counter == timeWindow)
     {
-      LOG_DBG("moving flag: %d", current_gyro_data.movingFlag);
-      if (current_gyro_data.movingFlag == 0)
-      { // If motion is minimal
-        LOG_DBG("motion minimal, triggering adaptation check");
+      LOG_DBG("triggering adaptation check");
         // This is computing a running standard deviation
         arm_sqrt_f32(runningSquaredMeanCh1aFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1aFil * runningMeanCh1aFil, &ppgData1.stdChanIR_1);
         arm_sqrt_f32(runningSquaredMeanCh1bFil - timeWindow / (timeWindow - 1.0f) * runningMeanCh1bFil * runningMeanCh1bFil, &ppgData1.stdChanIR_2);
@@ -447,7 +443,7 @@ void ppg_led_update(void)
           stdGreen = ppgData1.stdChanGreen_2;
         }
       
-      // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
+      // If the adaptation flag is disabled and data quality is bad.
       LOG_DBG("adapt_flag: %d\n", adapt_Ch2);
       LOG_DBG("green mean: %f \n", (double)meanGreen);
       LOG_DBG("IR mean: %f \n", (double)meanIR);
@@ -484,7 +480,7 @@ void ppg_led_update(void)
       
       
       if (adapt_Ch1 == 1)
-      { // Motion is minimal and adaptation is required
+      { // Adaptation is required.
         // TODO: Potentially seperate this into it's own function?
         ppgConfig.infraRed_intensity = searchStep(
             adapt_counterCh1, meanIR, stdIR,
@@ -529,7 +525,6 @@ void ppg_led_update(void)
           badDataCounterCh2 = 0;
         }
       }
-      }
     }
   }
 }
@@ -569,7 +564,7 @@ uint32_t ppg_packet_counter = 0;
 
 void read_ppg_fifo_buffer(struct k_work *item)
 {
-  struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
+  ARG_UNUSED(item);
 
   
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};

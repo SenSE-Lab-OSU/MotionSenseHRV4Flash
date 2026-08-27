@@ -154,9 +154,18 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&spi1_default>;
-	pinctrl-1 = <&spi1_sleep>;
+	pinctrl-0 = <&icm20948_spi_default>;
+	pinctrl-1 = <&icm20948_spi_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	icm20948: icm20948@0 {
+		compatible = "invensense,icm20948";
+		reg = <0>;
+		spi-max-frequency = <4000000>;
+		int-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+		fsync-gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
 };
 
 // We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
@@ -281,8 +290,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
  */
 
 &pinctrl {
-	//spi 1, imu sensor
-	spi1_default: spi1_default {
+	icm20948_spi_default: icm20948_spi_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
@@ -290,7 +298,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		};
 	};
 
-	spi1_sleep: spi1_sleep {
+	icm20948_spi_sleep: icm20948_spi_sleep {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,

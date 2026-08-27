@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  ICM-20948 accelerometer-only SPI interface used by the MotionSense ECG PCB.
+
+compatible: "invensense,icm20948"
+
+include: spi-device.yaml
+
+properties:
+  int-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      INT1 data-ready signal. The ICM-20948 is configured as active-high,
+      push-pull, and pulse mode.
+
+  fsync-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      FSYNC input driven inactive by the host while frame synchronization is
+      unused.

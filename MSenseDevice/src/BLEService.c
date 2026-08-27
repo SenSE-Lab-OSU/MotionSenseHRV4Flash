@@ -1,15 +1,19 @@
 
 #include <zephyr/types.h>
+#include <errno.h>
 #include <stddef.h>
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
 
 #include "ppgSensor.h"
-#include "imuSensor.h"
 #include "batterymonitordt.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/bluetooth/hci.h>
@@ -17,14 +21,9 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 #include "zephyr/bluetooth/services/bas.h"
-#include <nrfx_timer.h>
-#include "BLEService.h"
-
+#include <hal/nrf_rtc.h>
 #include <nrfx_rtc.h>
-
-#if ((32768U % IMU_RTC_TICK_HZ) != 0)
-#error "IMU_RTC_TICK_HZ must divide the 32768 Hz RTC clock exactly"
-#endif
+#include "BLEService.h"
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
@@ -33,10 +32,211 @@
 
 
 
-static const nrfx_rtc_t rtc = NRFX_RTC_INSTANCE(0);
-
 
 LOG_MODULE_REGISTER(user_bluetooth);
+
+#define RTC0_COLLECTION_COUNTER_HZ 512U
+#define RTC0_COLLECTION_COUNTER_PRESCALER \
+	((32768U / RTC0_COLLECTION_COUNTER_HZ) - 1U)
+#define RTC0_COLLECTION_COUNTER_MASK 0x00FFFFFFU
+#define RTC0_COLLECTION_COUNTER_WRAP (RTC0_COLLECTION_COUNTER_MASK + 1U)
+#define RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS (3U * RTC0_COLLECTION_COUNTER_HZ)
+#define RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL 0U
+
+BUILD_ASSERT((32768U % RTC0_COLLECTION_COUNTER_HZ) == 0U,
+	     "RTC0 collection counter frequency must divide LFCLK");
+
+static const nrfx_rtc_t rtc0_collection_counter = NRFX_RTC_INSTANCE(0);
+static atomic_t rtc0_collection_counter_started;
+static atomic_t rtc0_collection_notify_active;
+static atomic_t rtc0_collection_notify_ticks;
+static uint32_t rtc0_collection_counter_epoch;
+static uint32_t rtc0_collection_next_compare;
+static uint32_t rtc0_collection_next_notify_ticks;
+static struct k_work_sync rtc0_collection_notify_work_sync;
+
+static void rtc0_collection_notify_work_handler(struct k_work *work);
+K_WORK_DEFINE(rtc0_collection_notify_work, rtc0_collection_notify_work_handler);
+
+static uint32_t rtc0_collection_counter_get_locked(uint32_t *raw_ticks)
+{
+	bool overflow_pending;
+	uint32_t raw;
+	uint32_t epoch = rtc0_collection_counter_epoch;
+
+	/*
+	 * Account for a hardware wrap whose interrupt is still pending. Re-read the
+	 * low counter if the overflow arrives between the first read and check.
+	 */
+	overflow_pending = nrf_rtc_event_check(rtc0_collection_counter.p_reg,
+						 NRF_RTC_EVENT_OVERFLOW);
+	raw = nrfx_rtc_counter_get(&rtc0_collection_counter) &
+	      RTC0_COLLECTION_COUNTER_MASK;
+	if (!overflow_pending && nrf_rtc_event_check(rtc0_collection_counter.p_reg,
+						      NRF_RTC_EVENT_OVERFLOW)) {
+		overflow_pending = true;
+		raw = nrfx_rtc_counter_get(&rtc0_collection_counter) &
+		      RTC0_COLLECTION_COUNTER_MASK;
+	}
+	if (overflow_pending) {
+		epoch += RTC0_COLLECTION_COUNTER_WRAP;
+	}
+
+	if (raw_ticks != NULL) {
+		*raw_ticks = raw;
+	}
+
+	return epoch | raw;
+}
+
+static void rtc0_collection_notify_stop(void)
+{
+	unsigned int key;
+
+	if (atomic_cas(&rtc0_collection_notify_active, 1, 0)) {
+		key = irq_lock();
+		(void)nrfx_rtc_cc_disable(&rtc0_collection_counter,
+					  RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL);
+		irq_unlock(key);
+	}
+
+	(void)k_work_cancel_sync(&rtc0_collection_notify_work,
+				 &rtc0_collection_notify_work_sync);
+}
+
+static void rtc0_collection_counter_handler(nrfx_rtc_int_type_t event_type)
+{
+	nrfx_err_t err;
+	uint32_t notify_ticks;
+
+	if (event_type == NRFX_RTC_INT_OVERFLOW) {
+		rtc0_collection_counter_epoch += RTC0_COLLECTION_COUNTER_WRAP;
+		return;
+	}
+
+	if (event_type != (nrfx_rtc_int_type_t)RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL ||
+	    atomic_get(&rtc0_collection_notify_active) == 0) {
+		return;
+	}
+
+	/* Advance from the prior target to keep an exact 1536-tick cadence. */
+	notify_ticks = rtc0_collection_next_notify_ticks;
+	rtc0_collection_next_notify_ticks += RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS;
+	rtc0_collection_next_compare =
+		(rtc0_collection_next_compare + RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS) &
+		RTC0_COLLECTION_COUNTER_MASK;
+
+	err = nrfx_rtc_cc_set(&rtc0_collection_counter,
+			      RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL,
+			      rtc0_collection_next_compare, true);
+	if (err != NRFX_SUCCESS) {
+		atomic_set(&rtc0_collection_notify_active, 0);
+		return;
+	}
+
+	atomic_set(&rtc0_collection_notify_ticks, (atomic_val_t)notify_ticks);
+	(void)k_work_submit(&rtc0_collection_notify_work);
+}
+
+int rtc0_collection_counter_start(void)
+{
+	nrfx_rtc_config_t config = NRFX_RTC_DEFAULT_CONFIG;
+	nrfx_err_t err;
+
+	if (atomic_get(&rtc0_collection_counter_started) != 0 ||
+	    nrfx_rtc_init_check(&rtc0_collection_counter)) {
+		return -EALREADY;
+	}
+
+	config.prescaler = RTC0_COLLECTION_COUNTER_PRESCALER;
+	err = nrfx_rtc_init(&rtc0_collection_counter, &config,
+			    rtc0_collection_counter_handler);
+	if (err != NRFX_SUCCESS) {
+		LOG_ERR("RTC0 collection counter initialization failed: %d", err);
+		return -EIO;
+	}
+
+	nrfx_rtc_counter_clear(&rtc0_collection_counter);
+	rtc0_collection_counter_epoch = 0U;
+	rtc0_collection_next_compare = 0U;
+	rtc0_collection_next_notify_ticks = 0U;
+	atomic_set(&rtc0_collection_notify_active, 0);
+	atomic_set(&rtc0_collection_notify_ticks, 0);
+	nrfx_rtc_overflow_enable(&rtc0_collection_counter, true);
+	nrfx_rtc_enable(&rtc0_collection_counter);
+	atomic_set(&rtc0_collection_counter_started, 1);
+	LOG_INF("RTC0 collection counter started at %u Hz",
+		RTC0_COLLECTION_COUNTER_HZ);
+
+	return 0;
+}
+
+void rtc0_collection_counter_stop(void)
+{
+	if (!atomic_cas(&rtc0_collection_counter_started, 1, 0)) {
+		return;
+	}
+
+	rtc0_collection_notify_stop();
+	nrfx_rtc_overflow_disable(&rtc0_collection_counter);
+	nrfx_rtc_disable(&rtc0_collection_counter);
+	nrfx_rtc_uninit(&rtc0_collection_counter);
+	LOG_INF("RTC0 collection counter stopped");
+}
+
+int rtc0_collection_counter_get(uint32_t *ticks)
+{
+	if (ticks == NULL) {
+		return -EINVAL;
+	}
+	if (atomic_get(&rtc0_collection_counter_started) == 0) {
+		return -EACCES;
+	}
+
+	{
+		unsigned int key = irq_lock();
+
+		*ticks = rtc0_collection_counter_get_locked(NULL);
+		irq_unlock(key);
+	}
+
+	return 0;
+}
+
+int rtc0_collection_notification_start(void)
+{
+	nrfx_err_t err;
+	unsigned int key;
+	uint32_t raw_ticks;
+	uint32_t extended_ticks;
+
+	if (atomic_get(&rtc0_collection_counter_started) == 0) {
+		return -EACCES;
+	}
+	if (!atomic_cas(&rtc0_collection_notify_active, 0, 1)) {
+		return -EALREADY;
+	}
+
+	key = irq_lock();
+	extended_ticks = rtc0_collection_counter_get_locked(&raw_ticks);
+	rtc0_collection_next_compare =
+		(raw_ticks + RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS) &
+		RTC0_COLLECTION_COUNTER_MASK;
+	rtc0_collection_next_notify_ticks =
+		extended_ticks + RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS;
+	err = nrfx_rtc_cc_set(&rtc0_collection_counter,
+			      RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL,
+			      rtc0_collection_next_compare, true);
+	irq_unlock(key);
+	if (err != NRFX_SUCCESS) {
+		atomic_set(&rtc0_collection_notify_active, 0);
+		return -EIO;
+	}
+
+	LOG_INF("RTC0 BLE timing notification started at %u-tick cadence",
+		RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS);
+	return 0;
+}
 
 // define our status registers
 bool connectedFlag = false;
@@ -62,8 +262,6 @@ static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *
 static ssize_t read_generic_four(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset);
-static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
   uint16_t len, uint16_t offset);
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
@@ -107,16 +305,12 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
  struct bt_uuid_128 bt_uuid_data = BT_UUID_INIT_128(UPDATE3_SERVICE_UUID);
  struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
  struct bt_uuid_128 bt_uuid_ppg_tx = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_acc_gyro_tx = BT_UUID_INIT_128(ACC_GRYO_TX_CHARACTERISTIC_UUID);
  
  struct bt_uuid_128 bt_uuid_ppg_quality = BT_UUID_INIT_128(PPG_QUALITY_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_acc_quality = BT_UUID_INIT_128(ACC_QUALITY_CHARACTERISTIC_UUID);
 #define BT_UUID_DATA_SERVICE      (struct bt_uuid_128 *)(&bt_uuid_data)
 
 #define BT_UUID_PPG_TX   (struct bt_uuid_128 *)(&bt_uuid_ppg_tx)
-#define BT_UUID_ACC_GYRO_TX   (struct bt_uuid_128 *)(&bt_uuid_acc_gyro_tx)
 #define BT_UUID_PPG_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_ppg_quality)
-#define BT_UUID_ACC_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_acc_quality)
 // control service characteristics
 struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(CONTROL_SERVICE_UUID);
 struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
@@ -130,9 +324,10 @@ struct bt_uuid_128 bt_uuid_status_service = BT_UUID_INIT_128(STATUS_SERVICE_UUID
 struct bt_uuid_128 bt_uuid_read_storage = BT_UUID_INIT_128(READ_STORAGE_LEFT_UUID);
 struct bt_uuid_128 bt_uuid_read_status = BT_UUID_INIT_128(READ_STATUS_REGISTER_UUID);
 struct bt_uuid_128 bt_uuid_read_uptime = BT_UUID_INIT_128(READ_UPTIME_UUID);
-struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
-struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
-struct bt_uuid_128 bt_uuid_enmothreshold_notify = BT_UUID_INIT_128(NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID);
+static struct bt_uuid_128 bt_uuid_timing_update_service =
+	BT_UUID_INIT_128(TIMING_UPDATE_SERVICE_UUID);
+static struct bt_uuid_128 bt_uuid_timing_update =
+	BT_UUID_INIT_128(TIMING_UPDATE_CHARACTERISTIC_UUID);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
@@ -146,22 +341,12 @@ BT_GATT_SERVICE_DEFINE(data_service, // 0
   BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//4
     BT_GATT_PERM_READ, read_ppg_quality,
     NULL, ppgQuality),
-  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ),//5
-  BT_GATT_CHARACTERISTIC(BT_UUID_ACC_GYRO_TX,//6,
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, 
-        BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //7
-  BT_GATT_DESCRIPTOR(BT_UUID_ACC_QUALITY, //8
-    BT_GATT_PERM_READ, read_acc_quality,
-    NULL, accQuality),
-  BT_GATT_CUD(ACC_NAME, BT_GATT_PERM_READ) //9
+  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ)
 );
 
 #define BLE_ATTR_PRIMARY_SERVICE 0
 #define BLE_ATTR_CONFIG_CHARACTERISTIC 1
 #define BLE_ATTR_PPG_CHARACTERISTIC 2
-#define BLE_ATTR_ACC_CHARACTERISTIC 6
 
 #endif
 
@@ -203,28 +388,65 @@ BT_GATT_SERVICE_DEFINE(status_service,
     BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
-/* update service: read ENMO updates */
-BT_GATT_SERVICE_DEFINE(update_service, // 0
-  BT_GATT_PRIMARY_SERVICE(&bt_uuid_update_service), // 1
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmo_notify.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
-    NULL, NULL, NULL), // 2
-  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //3 
+/*
+ * This preserves the main-branch update-service UUID and its 8-byte packet
+ * compatibility. It deliberately exposes no ENMO, threshold, or sensor data.
+ */
+BT_GATT_SERVICE_DEFINE(timing_update_service,
+	BT_GATT_PRIMARY_SERVICE(&bt_uuid_timing_update_service),
+	BT_GATT_CHARACTERISTIC(&bt_uuid_timing_update.uuid, BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_NONE, NULL, NULL, NULL),
+	BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+);
 
-  BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify.uuid, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
-    read_enmo_threshold, NULL, &enmo_threshold_packet), // 4
-  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  );
+static struct k_spinlock my_connection_lock;
+static struct bt_conn *my_connection;
 
+static struct bt_conn *collection_notification_connection_get(void)
+{
+	struct bt_conn *conn = NULL;
+	k_spinlock_key_t key;
 
+	key = k_spin_lock(&my_connection_lock);
+	if (my_connection != NULL) {
+		conn = bt_conn_ref(my_connection);
+	}
+	k_spin_unlock(&my_connection_lock, key);
 
-struct bt_conn* my_connection;
+	return conn;
+}
 
+static void rtc0_collection_notify_work_handler(struct k_work *work)
+{
+	const struct bt_gatt_attr *attr = &timing_update_service.attrs[2];
+	struct bt_conn *conn;
+	uint8_t packet[8] = {0};
+	uint32_t ticks;
+	int ret;
 
+	ARG_UNUSED(work);
 
+	if (atomic_get(&rtc0_collection_notify_active) == 0 || !collecting_data) {
+		return;
+	}
 
+	ticks = (uint32_t)atomic_get(&rtc0_collection_notify_ticks);
+	sys_put_le32(ticks, &packet[4]);
 
-uint8_t gyro_first_read = 0; 
-uint8_t ppg_read = 0;
+	conn = collection_notification_connection_get();
+	if (conn == NULL) {
+		return;
+	}
+
+	if (bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+		ret = bt_gatt_notify(conn, attr, packet, sizeof(packet));
+		if (ret != 0) {
+			LOG_WRN("RTC0 timing notification failed: %d", ret);
+		}
+	}
+
+	bt_conn_unref(conn);
+}
 
 
 
@@ -232,8 +454,6 @@ uint8_t ppg_read = 0;
 
 struct ppgInfo my_ppgSensor;
 struct ble_battery_info my_battery ;  // work-queue instance for batter level
-
-struct motionInfo my_motionSensor; // work-queue instance for motion sensor
 
 struct bleDataPacket my_ppgDataSensor;
 
@@ -264,76 +484,29 @@ static ssize_t update_ble_status_register(struct bt_conn *conn, const struct bt_
   return read_generic_eight(conn, attr, buf, len, offset);
 }
 
-void rtc_handler(nrfx_rtc_int_type_t event_type){
-  int work_queue_result;
-
-  // Get the spurious cases out of the way...
-  if (!collecting_data) { return; }
-  if (event_type != NRFX_RTC_INT_TICK) { return; }
-
-  // submit work to read gyro, acc, magnetometer and orientation
-  my_motionSensor.pktCounter = global_counter;
-  my_motionSensor.gyro_first_read = gyro_first_read;
-  work_queue_result = k_work_submit(&my_motionSensor.work);
-  if (work_queue_result != 1) { LOG_ERR("accel work queue was not submitted: %i", work_queue_result); }
-
-  if(ppg_read == 0){
-    my_ppgSensor.pktCounter = global_counter;
-    my_ppgSensor.movingFlag = current_gyro_data.movingFlag;
-    work_queue_result = k_work_submit(&my_ppgSensor.work);
-    if (work_queue_result != 1) { LOG_ERR("PPG work queue was not submitted: %i", work_queue_result); }
-  }
-
-  // ppgConfig.numCounts is derived from the RTC cadence.
-  ppg_read = (ppg_read+1) % ppgConfig.numCounts;
-  
-
-  gyro_first_read = (gyro_first_read + 1) % (gyroConfig.tot_samples);
-
-  global_counter++;
-}
-
-
-static void rtc_deinit(void){
-  nrfx_rtc_disable(&rtc);
-  nrfx_rtc_uninit(&rtc);
-  motion_sleep();
-  ppg_sleep();
-}
-
-
-
-static void rtc_init(void){
-  nrfx_err_t          err;
-
-  // Setup RTC0 (RTC1 used by Zephyr)
-  // Initialize RTC: 32.768kHz / (IMU_RTC_PRESCALER + 1)
-  // We will use the TICK interrupt
-  nrfx_rtc_config_t config = NRFX_RTC_DEFAULT_CONFIG;
-  config.prescaler = IMU_RTC_PRESCALER;
-  config.interrupt_priority = IMU_RTC_IRQ_PRIORITY;
-  err = nrfx_rtc_init(&rtc, &config, rtc_handler);
-  if (err != NRFX_SUCCESS) { printk("nrfx_rtc_init() failed with: %d\n", err); }
-  nrfx_rtc_tick_enable(&rtc, true);
-  nrfx_rtc_enable(&rtc);
-  IRQ_CONNECT(RTC0_IRQn, IMU_RTC_IRQ_PRIORITY, nrfx_rtc_0_irq_handler, NULL, 0);
-  irq_enable(RTC0_IRQn);
-}
-
-
-
-
 
 void connected(struct bt_conn* conn, uint8_t err){
   struct bt_conn_info info; 
+  struct bt_conn *previous;
   char addr[BT_ADDR_LE_STR_LEN];
 
-  my_connection = conn;
   if (err) {
     printk("Connection failed (err %u)\n", err);
     return;
   }
-  else if(bt_conn_get_info(conn, &info))
+
+  {
+    k_spinlock_key_t key = k_spin_lock(&my_connection_lock);
+
+    previous = my_connection;
+    my_connection = bt_conn_ref(conn);
+    k_spin_unlock(&my_connection_lock, key);
+  }
+  if (previous != NULL) {
+    bt_conn_unref(previous);
+  }
+
+  if(bt_conn_get_info(conn, &info))
     printk("Could not parse connection info\n");
   else{  
   // Start the timer and stop advertising and initialize all the modules
@@ -349,25 +522,29 @@ void connected(struct bt_conn* conn, uint8_t err){
     
     
     connectedFlag=true;
-    #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-    start_stop_device_collection(true);
-    #endif
-    
-    
-    
   }
 }
 
 void disconnected(struct bt_conn *conn, uint8_t reason){
+  struct bt_conn *previous = NULL;
   // Stop timer and do all the cleanup
   printk("Disconnected (reason %u)\n", reason);
-  
+
+  {
+    k_spinlock_key_t key = k_spin_lock(&my_connection_lock);
+
+    if (my_connection == conn) {
+      previous = my_connection;
+      my_connection = NULL;
+    }
+    k_spin_unlock(&my_connection_lock, key);
+  }
+  if (previous != NULL) {
+    bt_conn_unref(previous);
+  }
   
   connectedFlag=false;
 
-  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-    start_stop_device_collection(false);
-  #endif
 }
 
 
@@ -411,58 +588,6 @@ void reset_device(bool reset_bad_blocks){
   }
    
   NVIC_SystemReset();
-
-}
-
-void start_stop_device_collection(uint8_t val){
-
-
-  if (val != collecting_data){
-    if (val){
-      ppg_config();
-      motion_config();
-
-      #if CONFIG_DISK_DRIVER_RAW_NAND
-      set_read_only(false);
-      #endif
-
-      #ifndef CONFIG_USB_ALWAYS_ON
-        usb_disable();
-      #endif
-      // we sleep for a tiny bit to let the ppg and accel config power up, 
-      //as we get junk values in the initial seconds of turning them on.
-      // TODO: Flush the PPG buffer before starting collection, if we sleep and don't do this samples will accumulate!
-      //k_sleep(K_MSEC(500));
-      
-      rtc_init();
-      global_counter = 0;
-      gyro_first_read = 0;
-      ppg_read = 0;
-      host_wants_collection = true;
-      collecting_data = true;
-      
-    } 
-    else{
-      rtc_deinit();
-      k_sleep(K_MSEC(500));
-      close_all_files();
-      enmo_sample_counter = 0;
-      last_activated_trigger_counter = 0;
-
-      #if CONFIG_DISK_DRIVER_RAW_NAND
-      set_read_only(true);
-      #endif
-
-      #ifndef CONFIG_USB_ALWAYS_ON
-      if (!security_lock){
-        usb_enable(NULL);	
-      }
-      #endif
-
-      collecting_data = false;
-    
-  }
-}
 
 }
 
@@ -769,52 +894,6 @@ static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr
 
 }
 
-static ssize_t read_enmo_threshold(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  const char* value = attr->user_data;
-  //uint8_t space_left = storage_percent_full;
-  //LOG_INF("space full: %i", space_left);
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, value, 9);
-
-}
-
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-void enmo_send(struct bt_conn* conn, uint8_t* data, uint8_t len){
-
-
-  
-  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
-  const struct bt_gatt_attr *attr = &update_service.attrs[2];
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(conn, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-
-}
-
-/* This function sends a notification to a Client with the provided data,
-given that the Client Characteristic Control Descripter has been set to Notify (0x1).
-It also calls the on_sent() callback if successful*/
-void enmo_threshold_send(uint8_t* data, uint8_t len){
-
-  // the number 2 acesses the 2rd attribute in the service, enmo characteristic 
-  const struct bt_gatt_attr *attr = &update_service.attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(my_connection, attr, data, len);
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-
-}
-
-
 void status_reg_ble_notification(){
 
   for (int x = 0; x < num_of_status_registers; x++){
@@ -865,60 +944,10 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
   }
   return ret; 
 }
-
-
-
-void motion_notify(struct k_work *item){
-  
-  struct bleDataPacket* the_device = CONTAINER_OF(item, struct bleDataPacket, work);
-  
-  uint8_t packetLength = the_device->packetLength;
-  printk("%i", packetLength);
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-  acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #else
-  //uint8_t *dataPacket = the_device->dataPacket;
-  //memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
-  enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
-  #endif
-
-}
-
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 
 uint8_t configRead[6] = {0,0,0,0,0,0};
 uint8_t ppgQuality[4] = {0};
-uint8_t accQuality[4] = {0};
-
-
-void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  
-  const struct bt_gatt_attr *attr = &data_service.attrs[BLE_ATTR_ACC_CHARACTERISTIC]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_ACC_GYRO_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-    
-  // Check whether notifications are enabled or not
-
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    
-    if(bt_gatt_notify_cb(conn, &params)){
-            printk("Error, unable to send notification\n");
-    }
-    
-  }
-  else{
-      //  printk("Warning, notification not enabled on the selected attribute\n");
-  }
-
-}
-
 
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
@@ -962,51 +991,6 @@ static ssize_t read_ppg_quality(struct bt_conn *conn,const struct bt_gatt_attr *
 
   return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,PPGQUALITY_DATA_LEN);
 }
-static ssize_t read_acc_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,ACCQUALITY_DATA_LEN);
-}
-
-
-
-
-//#if CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-// Config Data Tx
-// B_1 B_2 - 0x0001 PPG enabled
-//         - 0x0002 IMU enabled
-//         - 0x0004 orientation enabled
-//         - 0x0008 TF micro enabled (deprecated)
-//         - 0x0010 Magnetometer enabled (deprecated)
-//         - 0x0100 PPG BLE transmit enable
-//         - 0x0200 IMU BLE transmit enable
-//         - 0x0400 orientation BLE transmit enable
-//         - 0x0800 TF micro BLE transmit enable
-//         - 0x1000 Magnetometer BLE transmit enable (deprecated)
-// B_3     - Green intensity
-// B_4     - Infra-red intensity
-// B_5     - Gyro Sensitivity, Acc sensitivity
-//         - 0x01 2g
-//         - 0x02 4g
-//         - 0x03 8g
-//         - 0x04 16g
-//         - 0x10 250 dps
-//         - 0x20 500 dps
-//         - 0x30 1000 dps
-//         - 0x40 2000 dps
-// B_6     - PPG sampling Rate, Motion Sampling rate
-//         - 0x10 - PPG FS=200
-//         - 0x20 - PPG FS=100
-//         - 0x30 - PPG FS=50
-//         - 0x40 - PPG FS=25
-//         - 0x01 - Motion FS=200
-//         - 0x02 - Motion FS=100
-//         - 0x03 - Motion FS=50
-//         - 0x04 - Motion FS=25
 /* This function is called whenever the RX Characteristic has been written to by a Client */
 ssize_t legacy_on_settings_change(struct bt_conn *conn,
 			  const struct bt_gatt_attr *attr,
@@ -1025,16 +1009,6 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
   switch(buffer[0]){
     case BLE_CONFIG_SENSOR_ENABLE:
       // Enabling or disabling sensors
-      if((buffer[1] & IMU_ENABLE) == IMU_ENABLE){
-        gyroConfig.isEnabled = true;
-        accelConfig.isEnabled = true;
-        configRead[1] = configRead[1] | 0x02;
-      }
-      else if((buffer[1] & IMU_ENABLE) == 0x00){
-        gyroConfig.isEnabled = false;
-        accelConfig.isEnabled = false;
-        configRead[1] = configRead[1] & 0xFD;     
-      }
       if((buffer[1] & PPG_ENABLE) == PPG_ENABLE){
         ppgConfig.isEnabled = true;
         configRead[1] = configRead[1] | 0x01; 
@@ -1043,16 +1017,6 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
         ppgConfig.isEnabled = false;
         configRead[1] = configRead[1] & 0xFE; 
       }     
-      if((buffer[2] & MOTION_BLE_ENABLE) == MOTION_BLE_ENABLE){
-        accelConfig.txPacketEnable = true;
-        gyroConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x02;
-      }
-      else if((buffer[2] & MOTION_BLE_ENABLE) == MOTION_BLE_ENABLE){
-        accelConfig.txPacketEnable = false;
-        gyroConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xFD;     
-      }
       if((buffer[2] & PPG_BLE_ENABLE) == PPG_BLE_ENABLE){
         ppgConfig.txPacketEnable = true;
         configRead[0] = configRead[0] | 0x01; 
@@ -1061,54 +1025,6 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
         ppgConfig.txPacketEnable = false;
         configRead[0] = configRead[0] & 0xFE; 
       }
-      break;
-    case BLE_CONFIG_GYRO_SENSITIVITY:
-      // configuring Gyroscope Full-scale
-      if(buffer[1] == GYRO_250_DPS){
-        gyroConfig.sensitivity = GYRO_FS_SEL_250;
-        configRead[4] = 0x10 | (configRead[4]&0x0F);
-      }
-      else if(buffer[1] == GYRO_500_DPS){
-        gyroConfig.sensitivity = GYRO_FS_SEL_500;
-        configRead[4] = 0x20 | (configRead[4]&0x0F);
-      }
-      else if(buffer[1] == GYRO_1000_DPS){
-        gyroConfig.sensitivity = GYRO_FS_SEL_1000;
-        configRead[4] = 0x30 | (configRead[4]&0x0F);
-      }
-      else if(buffer[1] == GYRO_2000_DPS){
-        gyroConfig.sensitivity = GYRO_FS_SEL_2000;
-        configRead[4] = 0x40 | (configRead[4]&0x0F);
-      }
-      else{
-        gyroConfig.sensitivity = GYRO_FS_SEL_500;
-        configRead[4] = 0x10 | (configRead[4]&0x0F);
-      }
-      motionSensitivitySampling_config();
-      break;
-    case BLE_CONFIG_ACC_SENSITIVITY:
-      // configuring Accelerometer Full-scale
-      if(buffer[1] == ACC_2G){
-        accelConfig.sensitivity = ACCEL_FS_SEL_2g;
-        configRead[4] = 0x01 | (configRead[4]&0xF0);
-      }
-      else if(buffer[1] == ACC_4G){
-        accelConfig.sensitivity = ACCEL_FS_SEL_4g;
-        configRead[4] = 0x02 | (configRead[4]&0xF0);
-      }
-      else if(buffer[1] == ACC_8G){
-        accelConfig.sensitivity = ACCEL_FS_SEL_8g;
-        configRead[4] = 0x03 | (configRead[4]&0xF0);
-      }
-      else if(buffer[1] == ACC_16G){
-        accelConfig.sensitivity = ACCEL_FS_SEL_16g;
-        configRead[4] = 0x04 | (configRead[4]&0xF0);
-      }
-      else{
-        accelConfig.sensitivity = ACCEL_FS_SEL_4g;
-        configRead[4] = 0x01 | (configRead[4]&0xF0);
-      }
-      motionSensitivitySampling_config();
       break;
     case BLE_CONFIG_LED_INTENSITY_GREEN:
       // configuring PPG Green intensity
@@ -1121,14 +1037,6 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
       ppgConfig.infraRed_intensity = buffer[1];
       configRead[3] = ppgConfig.infraRed_intensity;
       ppg_changeIntensity();
-      break;
-    case BLE_CONFIG_SAMPLING_RATE_ACC:
-      // IMU integrates at 512 Hz and emits/stores one record every 16 ticks.
-      // Ignore host rate selections so the firmware has one motion cadence.
-      accelConfig.sample_bw = IMU_FIXED_ACCEL_DLPFCFG;
-      gyroConfig.tot_samples = IMU_FIXED_ACCEL_REPORT_DIVISOR;
-      configRead[5] = MOTION_FIXED_32HZ_STATUS | (configRead[5]&0xF0);
-      motionSensitivitySampling_config();
       break;
     case BLE_CONFIG_SAMPLING_RATE_PPG:
       // PPG sampling is fixed at 512 sps with 2-sample averaging.
@@ -1143,12 +1051,12 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
 }
 
 void legacy_initialize_settings(){
-  configRead[0] = MOTION_BLE_ENABLE | PPG_BLE_ENABLE;
-  configRead[1] = IMU_ENABLE | PPG_ENABLE;
+  configRead[0] = PPG_BLE_ENABLE;
+  configRead[1] = PPG_ENABLE;
   configRead[2] = ppgConfig.green_intensity;
   configRead[3] = ppgConfig.infraRed_intensity;
-  configRead[4] = 0x12;
-  configRead[5] = PPG_FIXED_256HZ_STATUS | MOTION_FIXED_32HZ_STATUS;
+  configRead[4] = 0U;
+  configRead[5] = PPG_FIXED_256HZ_STATUS;
 }
 
 /* This function is called whenever a Notification has been sent by the TX Characteristic */

@@ -166,4 +166,19 @@ also note that device USB appears not to work when not using the MCU bootloader.
 2.8 -> 2.9
 include from ssize_t changed from zephyr/types.h to sys/types.h, included the mentioned file to fix.
 
+NCS v2.9.3 LFXO bypass SDK change
 
+The nRF53 SoC Kconfig now defines CONFIG_SOC_LFXO_BYPASS. It depends on
+CONFIG_SOC_ENABLE_LFXO and defaults to n. When enabled, the nRF53 SoC
+initialization forces NRF_OSCILLATORS_LFXO_CAP_EXTERNAL, enables LFXO bypass for
+a rail-to-rail external clock source, and assigns XL2 to the application core.
+The Kconfig load-capacitance choice retains its upstream options and default;
+when bypass is enabled, soc.c ignores that selection and programs the external
+capacitance setting. When bypass is disabled, the SDK retains its standard
+capacitance selection and peripheral ownership of XL2.
+
+MSenseDevice/prj.conf explicitly sets CONFIG_SOC_LFXO_BYPASS=n. MCUboot and
+the HCI IPC image use the default-disabled value.
+
+The standalone file msense_ncs_v2.9.3_lfxo_bypass.patch contains only this
+Kconfig and soc.c SDK change.

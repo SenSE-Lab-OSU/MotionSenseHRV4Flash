@@ -5,6 +5,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <errno.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/spi.h>
@@ -20,14 +21,17 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
-#include "ecgStream.h"
+#include "ecgRecorder.h"
 #include "zephyrfilesystem.h"
+#if CONFIG_DISK_DRIVER_RAW_NAND
+#include "drivers/nand/nand_disk.h"
+#endif
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 
 
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
@@ -38,12 +42,14 @@ LOG_MODULE_REGISTER(main);
 #define LED_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 #define PPG_POWER_NODE DT_ALIAS(led2) 
+#define BUTTON0_NODE DT_NODELABEL(button0)
+#define BUTTON0_LONG_PRESS_MS 5000
 
 // define our red and green leds
 #define LED_PIN DT_GPIO_PIN(LED_NODE, gpios)
 #define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
 
-#define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
+#define LED_FLAGS DT_GPIO_FLAGS(LED_NODE, gpios)
 
 
 
@@ -52,6 +58,20 @@ LOG_MODULE_REGISTER(main);
 
 const struct device* gpio0_device;
 const struct device* gpio1_device;
+
+static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
+static struct gpio_callback button0_callback;
+static bool usb_enabled;
+static bool filesystem_workqueue_started;
+static bool button0_pressed;
+static int64_t button0_pressed_time_ms;
+
+static void button0_work_handler(struct k_work *work);
+static void button0_pressed_handler(const struct device *port,
+                                    struct gpio_callback *cb,
+                                    uint32_t pins);
+
+K_WORK_DEFINE(button0_work, button0_work_handler);
 
 
 /* SPI Definitions */
@@ -177,6 +197,26 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
     
   LOG_INF("USB Status: %d", status);
 
+}
+
+static int set_usb_mass_storage_enabled(bool enable)
+{
+  int ret;
+
+  if (usb_enabled == enable) {
+    return 0;
+  }
+
+  ret = enable ? usb_enable(usb_status_cb) : usb_disable();
+  if (ret == -EALREADY) {
+    ret = 0;
+  }
+
+  if (ret == 0) {
+    usb_enabled = enable;
+  }
+
+  return ret;
 }
 
 void write_uuid_file(){
@@ -451,6 +491,267 @@ void blink_led(gpio_pin_t pin){
   gpio_pin_set(gpio0_device, pin, 0);
 }
 
+static void set_mode_leds(bool led0_on, bool led1_on)
+{
+  gpio_pin_set(gpio0_device, LED_PIN, led0_on ? 1 : 0);
+  gpio_pin_set(gpio0_device, LED1_PIN, led1_on ? 1 : 0);
+}
+
+static void blink_collection_mode_pattern(void)
+{
+  for (int i = 0; i < 3; i++) {
+    set_mode_leds(true, false);
+    k_sleep(K_MSEC(120));
+    set_mode_leds(false, true);
+    k_sleep(K_MSEC(120));
+  }
+  set_mode_leds(false, false);
+}
+
+static void blink_usb_mode_pattern(void)
+{
+  for (int i = 0; i < 2; i++) {
+    set_mode_leds(true, true);
+    k_sleep(K_MSEC(200));
+    set_mode_leds(false, false);
+    k_sleep(K_MSEC(200));
+  }
+}
+
+static void blink_flash_format_pattern(void)
+{
+  for (int i = 0; i < 8; i++) {
+    set_mode_leds(true, true);
+    k_sleep(K_MSEC(80));
+    set_mode_leds(false, false);
+    k_sleep(K_MSEC(80));
+  }
+
+  set_mode_leds(true, true);
+  k_sleep(K_MSEC(500));
+  set_mode_leds(false, false);
+}
+
+static void filesystem_workqueue_init(void)
+{
+  struct k_work_queue_config cfg = {
+    .name = "file_sys",
+    .no_yield = false
+  };
+
+  if (filesystem_workqueue_started) {
+    return;
+  }
+
+  k_work_queue_init(&my_work_q);
+  k_work_queue_start(&my_work_q, my_stack_area,
+                     K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, &cfg);
+
+  k_work_init(&ppg_work_item.work, work_write);
+  ppg_work_item.sensor = ppg;
+
+  k_work_init(&accel_work_item.work, work_write);
+  accel_work_item.sensor = accelorometer;
+
+  k_work_init(&ecg_work_item.work, work_write);
+  ecg_work_item.sensor = ecg;
+
+  k_work_init(&log_work_item.work, work_write);
+  log_work_item.sensor = customlog;
+
+  filesystem_workqueue_started = true;
+}
+
+/**
+ * @brief Switch the device from USB mass-storage mode into ECG collection
+ *        mode.
+ *
+ * Invoked by the button handler (short press while idle) and exposed to the
+ * BLE service so a connected host can start a recording remotely. It blinks
+ * the collection-mode LED pattern, makes the NAND filesystem writable
+ * (recording needs write access, and the disk is kept read-only while it is
+ * exposed to a USB host), and starts the ECG recorder thread via
+ * ecg_recorder_start().
+ *
+ * On success the global collecting_data / host_wants_collection flags are
+ * set so the rest of the firmware (button logic, BLE status) knows a
+ * recording is in progress. If the recorder fails to start, the filesystem
+ * is returned to read-only and the mode change is abandoned, leaving the
+ * device in its previous state.
+ */
+void enter_ecg_collection_mode(void)
+{
+  int ret;
+
+  LOG_INF("Entering ECG collection mode");
+  blink_collection_mode_pattern();
+
+  //ret = set_usb_mass_storage_enabled(false);
+  if (ret != 0) {
+    LOG_WRN("USB disable returned %d", ret);
+  }
+
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(false);
+  #endif
+
+  ret = ecg_recorder_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start ECG recorder: %d", ret);
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+    #endif
+    //(void)set_usb_mass_storage_enabled(true);
+    return;
+  }
+
+  host_wants_collection = true;
+  collecting_data = true;
+}
+
+/**
+ * @brief Switch the device from ECG collection mode back to USB mass-storage
+ *        mode.
+ *
+ * The counterpart to enter_ecg_collection_mode(), invoked on a short button
+ * press during recording or remotely over BLE. It clears the collection
+ * flags, stops the recorder (ecg_recorder_stop() blocks until the final
+ * samples are on their way to storage), then makes the recorded data safe
+ * and visible to a PC: the ECG write buffer is flushed, the filesystem work
+ * queue is drained and unplugged, all files are closed, the NAND disk is set
+ * back to read-only, and finally the USB mass-storage interface is
+ * re-enabled.
+ *
+ * If the recorder does not confirm shutdown in time, the collection flags
+ * are restored and the function bails out without touching the filesystem —
+ * the device stays in collection mode rather than risking a USB host and
+ * the recorder writing the disk at the same time.
+ */
+void exit_ecg_collection_mode(void)
+{
+  int ret;
+
+  LOG_INF("Entering USB mass storage mode");
+  blink_usb_mode_pattern();
+
+  host_wants_collection = false;
+  collecting_data = false;
+
+  ret = ecg_recorder_stop();
+  if (ret != 0) {
+    LOG_WRN("ECG recorder stop returned %d", ret);
+    host_wants_collection = true;
+    collecting_data = true;
+    return;
+  }
+
+  flush_data_buffer(ecg);
+  if (filesystem_workqueue_started) {
+    (void)k_work_queue_drain(&my_work_q, true);
+    k_work_queue_unplug(&my_work_q);
+  }
+  close_all_files();
+
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(true);
+  #endif
+
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0) {
+    LOG_WRN("USB enable returned %d", ret);
+  }
+}
+
+static void button0_work_handler(struct k_work *work)
+{
+  int button_state;
+  int64_t pressed_duration_ms;
+
+  ARG_UNUSED(work);
+
+  button_state = gpio_pin_get_dt(&button0);
+  if (button_state < 0) {
+    LOG_WRN("button0 read failed: %d", button_state);
+    return;
+  }
+
+  if (button_state > 0) {
+    button0_pressed = true;
+    button0_pressed_time_ms = k_uptime_get();
+    return;
+  }
+
+  if (!button0_pressed) {
+    return;
+  }
+
+  button0_pressed = false;
+  pressed_duration_ms = k_uptime_get() - button0_pressed_time_ms;
+
+  if (pressed_duration_ms >= BUTTON0_LONG_PRESS_MS) {
+    LOG_WRN("Long button press detected, erasing flash");
+    reset_lock = true;
+    (void)set_usb_mass_storage_enabled(false);
+
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(false);
+    #endif
+
+    if (collecting_data) {
+      host_wants_collection = false;
+      collecting_data = false;
+      (void)ecg_recorder_stop();
+    }
+
+    shutdown_filesystem();
+    blink_flash_format_pattern();
+    reset_device(false);
+    return;
+  }
+
+  if (collecting_data) {
+    exit_ecg_collection_mode();
+  } else {
+    enter_ecg_collection_mode();
+  }
+}
+
+static void button0_pressed_handler(const struct device *port,
+                                    struct gpio_callback *cb,
+                                    uint32_t pins)
+{
+  ARG_UNUSED(port);
+  ARG_UNUSED(cb);
+  ARG_UNUSED(pins);
+
+  (void)k_work_submit(&button0_work);
+}
+
+static int button0_init(void)
+{
+  int ret;
+
+  if (!gpio_is_ready_dt(&button0)) {
+    LOG_ERR("button0 GPIO is not ready");
+    return -ENODEV;
+  }
+
+  ret = gpio_pin_configure_dt(&button0, GPIO_INPUT);
+  if (ret != 0) {
+    return ret;
+  }
+
+  gpio_init_callback(&button0_callback, button0_pressed_handler,
+                     BIT(button0.pin));
+
+  ret = gpio_add_callback(button0.port, &button0_callback);
+  if (ret != 0) {
+    return ret;
+  }
+
+  return gpio_pin_interrupt_configure_dt(&button0, GPIO_INT_EDGE_BOTH);
+}
+
 
 
 void storage_clear_led(){
@@ -463,21 +764,21 @@ int main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
   
-  usb_enable(usb_status_cb);
-  
 
   // Setup our Flash Filesystem
-  // setup_disk();
-  // k_sleep(K_SECONDS(1));
-  // #ifdef CONFIG_DEBUG  
-  // #if CONFIG_DISK_DRIVER_RAW_NAND
-  //   set_read_only(true);
-  // #endif
-  // #endif
+  setup_disk();
+  filesystem_workqueue_init();
 
-  // #ifdef CONFIG_MSENSE_USB_SECURITY
-  //   security_lock = true;
-  // #endif
+  k_work_init(&my_motionData.work, motion_notify);
+
+  k_sleep(K_SECONDS(1));
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+  #endif
+
+  #ifdef CONFIG_MSENSE_USB_SECURITY
+    security_lock = true;
+  #endif
 
 
   k_sleep(K_SECONDS(2));
@@ -498,6 +799,11 @@ int main(void)
     printk("Error: Can't initialize LED");
     // return;
   }
+  ret = button0_init();
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to initialize button0: %d", ret);
+  }
   
   // Init, verify ID and config sensors
   
@@ -510,53 +816,23 @@ int main(void)
   //ppg_sleep();
   //motion_sleep();
 
-  ret = ecg_stream_start();
-  if (ret != 0)
-  {
-    LOG_ERR("Failed to start ECG stream: %d", ret);
-  }
+  ble_init();
 
-  /*struct k_work_queue_config cfg = {
-    .name = "my_custom_workq",
-    .no_yield = false
-  };*/
-
-  // Start Threads for all our sensor tasks
-  // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
-
-  // k_work_queue_init(&my_work_q);
-  // k_work_queue_start(&my_work_q, my_stack_area,
-  //                    K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
-  // // Handles reading from the motion sensor and ppg sensor. This is the system workqueue, which zephyr creates by default
-  // // and is a different queue from the user created file system workqueue 
-  // k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
-  // k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
-  // // sends enmo and accelerometer
-  // k_work_init(&my_motionData.work, motion_notify);
-
-  // // these are our file system workqueue objects
-  // k_work_init(&ppg_work_item.work, work_write);
-  // ppg_work_item.sensor = ppg;
-
-  // k_work_init(&accel_work_item.work, work_write);
-  // accel_work_item.sensor = accelorometer;
-  
-  // k_work_init(&log_work_item.work, work_write);
-  // log_work_item.sensor = customlog;
-  // k_thread_name_set(&my_work_q.thread, "file_sys");
-  // const char *name = k_thread_name_get(&my_work_q.thread);
-  // LOG_INF("file workqueue thead: %s", name);
-  // ble_init();
-  
   //get_storage_percent_full();
-  
   
   // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
-  k_msleep(10*1000); // Wait 10 seconds for setup.
-  
+  collecting_data = false;
+  host_wants_collection = false;
+
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to enable USB mass storage: %d", ret);
+  }
+
   while (1)
   {
     

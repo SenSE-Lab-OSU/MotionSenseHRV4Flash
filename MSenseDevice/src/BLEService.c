@@ -4,6 +4,7 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/usb/usb_device.h>
 #include "drivers/jdec_nor/custom_qspi.h"
 
@@ -465,6 +466,8 @@ void start_stop_device_collection(uint8_t val){
 
 }
 
+void exit_ecg_collection_mode(void);
+void enter_ecg_collection_mode(void);
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -481,10 +484,12 @@ uint16_t offset, uint8_t flags){
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
   host_wants_collection = val;
-  if (!(battery_low && val)){
-
-    start_stop_device_collection(val);
-    
+  
+  if (collecting_data && !host_wants_collection) {
+    exit_ecg_collection_mode();
+  } 
+  else if(!collecting_data && host_wants_collection) {
+    enter_ecg_collection_mode();
   }
   return len;
 }
@@ -538,6 +543,7 @@ uint16_t offset, uint8_t flags){
 
 //function from main
 void storage_clear_led();
+void blink_led(gpio_pin_t pin);
 
 
 
@@ -718,7 +724,7 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
           //bt_enable(bt_ready);
           #ifndef CONFIG_USB_ALWAYS_ON
           if (!security_lock){
-          usb_enable(usb_status_cb);
+          usb_enable(NULL);
           }
           #endif
           
@@ -872,8 +878,8 @@ void motion_notify(struct k_work *item){
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   acc_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #else
-  uint8_t *dataPacket = the_device->dataPacket;
-  memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
+  //uint8_t *dataPacket = the_device->dataPacket;
+  //memcpy(&dataPacket[4], &global_counter, sizeof(global_counter));
   enmo_send(my_connection, the_device->dataPacket, the_device->packetLength);
   #endif
 

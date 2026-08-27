@@ -35,6 +35,8 @@ int max30001_probe(uint32_t *info);
 
 int max30001_ecg_init_512(void);
 int max30001_ecg_start(void);
+/* Masks the self-clearing 512 Hz SAMP pulse on INT2B after initial anchoring. */
+int max30001_ecg_disable_samp_interrupt(void);
 int max30001_ecg_stop(void);
 int max30001_ecg_read_fifo(struct max30001_ecg_sample *samples,
 			   size_t max_samples,

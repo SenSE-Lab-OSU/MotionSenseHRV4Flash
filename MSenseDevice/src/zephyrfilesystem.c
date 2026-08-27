@@ -155,7 +155,7 @@ MotionSenseFile ecg_file = {
 	 */
 	.max_writes = RECORDING_FILE_BYTES / 8196,
 	.sensor_string = "ecg",
-	.sensor_format = "12-byte MAX30001 ECG frames: A5 EC type flags seq_le raw24 crc8"
+	.sensor_format = "12-byte MAX30001 ECG frames: A5 EC type flags rtc_tick_le raw24 crc8"
 };
 
 MotionSenseFile log_file = {

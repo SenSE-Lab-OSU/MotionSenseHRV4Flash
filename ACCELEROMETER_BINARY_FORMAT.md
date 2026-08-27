@@ -1,13 +1,15 @@
-# Accelerometer binary recording format (v2)
+# Accelerometer binary recording format (v3)
 
 ## Purpose and scope
 
 This document specifies the fixed-size ICM-20948 accelerometer files recorded
 during an ECG collection session. The stream records raw X/Y/Z accelerometer
-counts only. It never contains ECG, gyro, magnetometer, temperature, FSYNC,
-derived motion metrics, PPG, ENMO, or BLE payloads.
+counts only. Version 3 replaces X bit 0 with a sampled FSYNC marker, so a
+consumer must clear that bit before interpreting X as an acceleration count.
+It never contains ECG, gyro, magnetometer, temperature, derived motion
+metrics, PPG, ENMO, or BLE payloads.
 
-Version 2 replaces the earlier variable-length v1 file. Every v2 file is a
+Version 3 replaces the earlier fixed-layout v2 timing semantics. Every v3 file is a
 4 MiB chunk and has a terminal record that identifies the valid encoded region
 inside the preallocated file. This preserves a short final data block without
 truncating the host-visible file.
@@ -19,14 +21,15 @@ truncating the host-visible file.
 | Sensor | InvenSense ICM-20948 |
 | Sensor data | Accelerometer only, raw counts |
 | Axis order | X, then Y, then Z |
-| Data type | Signed 16-bit two's-complement little-endian |
+| Data type | Signed 16-bit two's-complement little-endian; X bit 0 is FSYNC |
 | Full-scale range | +/-2 g |
 | Sensitivity | 16,384 counts/g |
 | Nominal output-data rate | 562.5 Hz = 1,125 / 2 Hz |
 | Sample period | 2 / 1,125 seconds |
 
-No calibration or coordinate transform is applied. Convert a raw axis to g
-with `raw_count / 16384.0` when needed.
+No calibration or coordinate transform is applied. Convert Y and Z with
+`raw_count / 16384.0`. Convert X with `(raw_x_bits & 0xfffe) / 16384.0`.
+The marker replacement contributes at most one raw count, about 61 micro-g.
 
 ## Session filenames and chunking
 
@@ -58,7 +61,7 @@ ECG chunks use the same fixed size and naming convention. Its current
 8,196-byte writer batch rotates after 511 batches (leaving unused
 preallocated capacity) so the 512th batch can never extend the 4 MiB file.
 
-## Fixed v2 layout
+## Fixed v3 layout
 
 ```text
 offset 0x000000   4,096-byte header
@@ -89,15 +92,21 @@ The header is always bytes `0..4095`.
 
 | Offset | Size | Field | Required value / meaning |
 |---:|---:|---|---|
-| 0 | 4 | `magic` | ASCII `ACF2` |
-| 4 | 2 | `format_version` | `2` |
-| 6 | 2 | `sample_format` | `1` = signed 16-bit little-endian raw X/Y/Z |
+| 0 | 4 | `magic` | ASCII `ACF3` |
+| 4 | 2 | `format_version` | `3` |
+| 6 | 2 | `sample_format` | `2` = signed 16-bit little-endian X/Y/Z with X bit 0 sampled from FSYNC |
 | 8 | 4 | `odr_numerator` | `1125` |
 | 12 | 4 | `odr_denominator` | `2` |
 | 16 | 2 | `full_scale_g` | `2` |
 | 18 | 2 | `counts_per_g` | `16384` |
 | 20 | 4 | `header_crc32` | CRC of all 4,096 header bytes |
-| 24 | 4,072 | `reserved` | Encoder writes zero; decoder ignores after CRC validation |
+| 24 | 4 | `anchor_clock_hz` | `512`, the RTC0 tick rate |
+| 28 | 4 | `fsync_edge_interval_ticks` | `32`, so edges occur every 62.5 ms |
+| 32 | 1 | `fsync_axis` | `0` = X |
+| 33 | 1 | `fsync_bit` | `0` |
+| 34 | 1 | `timestamp_algorithm` | `1` = rolling endpoint-period midpoint projection |
+| 35 | 1 | `timestamp_window` | `32` FSYNC transitions |
+| 36 | 4,060 | `reserved` | Encoder writes zero; decoder ignores after CRC validation |
 
 The header CRC is calculated with bytes `20..23` zeroed. The header is
 written and synchronized after successful 4 MiB preallocation and before IMU
@@ -110,7 +119,7 @@ A full data block is exactly 4,096 bytes.
 | Offset | Size | Field | Meaning |
 |---:|---:|---|---|
 | 0 | 4 | `magic` | ASCII `ACB1` |
-| 4 | 4 | `reserved_timer_output` | 32-bit wrap-extended RTC0 collection-counter tick read immediately before accepting this block's first FIFO sample |
+| 4 | 4 | `reserved_timer_output` | Estimated 32-bit wrap-extended RTC0 tick associated with the first payload sample |
 | 8 | 4 | `first_sample_sequence` | Modulo-2^32 sample sequence for the first payload sample |
 | 12 | 4 | `block_crc32` | CRC of this block's encoded length |
 | 16 | 4,080 | `samples` | 680 consecutive raw X/Y/Z samples |
@@ -118,7 +127,7 @@ A full data block is exactly 4,096 bytes.
 Each sample is packed without padding:
 
 ```text
-x int16 LE, y int16 LE, z int16 LE
+x int16 LE with bit 0 equal to sampled FSYNC, y int16 LE, z int16 LE
 ```
 
 The sequence value continues across chunks in one session. It begins at zero
@@ -129,9 +138,18 @@ provides continuity checking across both blocks and files.
 a 32-bit little-endian field. RTC0 runs from the 32.768 kHz LFCLK with
 prescaler 63, so one tick is 1/512 second. The firmware extends the 24-bit
 hardware counter across overflow; all 32 bits are meaningful and the derived
-value wraps only after 2^32 ticks. This software-read value is a
-block-ingestion timing anchor, not an exact hardware timestamp for the
-physical first sample; FIFO batching means samples can predate the read.
+value wraps only after 2^32 ticks.
+
+RTC0 compare channel 1 toggles FSYNC every 32 ticks through DPPI and GPIOTE.
+The ICM-20948 copies that level into X bit 0. Firmware pairs each observed
+X-bit transition with its scheduled RTC edge, estimates the IMU period from
+the oldest and newest of the latest 32 transitions, and projects the nearest
+transition midpoint to `first_sample_sequence`. The rounded 512 Hz estimate
+is stored at offset 4, so FIFO batching does not affect the anchor.
+
+The estimate includes unknown sub-sample FSYNC phase, integer-tick rounding,
+and hardware FSYNC input latency. It does not compensate accelerometer
+DLPF/analog group delay.
 
 For a short final block, the same 16-byte metadata precedes 1 through 679
 samples. Its encoded length is:
@@ -145,7 +163,7 @@ terminal record, not inferred from physical EOF.
 
 ## Terminal record
 
-The last 4 KiB sector of every cleanly closed v2 chunk, at offset
+The last 4 KiB sector of every cleanly closed v3 chunk, at offset
 `0x3ff000`, is a terminal record.
 
 | Offset | Size | Field | Meaning |
@@ -162,7 +180,7 @@ introduced. The trailer CRC covers all 4,096 terminal bytes with bytes
 
 ## Decoder procedure
 
-1. Require a 4,194,304-byte file. Validate the `ACF2` header and its CRC.
+1. Require a 4,194,304-byte file. Validate the `ACF3` header and its CRC.
 2. Read and validate the terminal record at offset `0x3ff000`. Reject its
    `valid_data_length` if it exceeds the data-region capacity.
 3. Parse exactly that many bytes beginning at `0x1000`: consecutive full
@@ -175,8 +193,9 @@ introduced. The trailer CRC covers all 4,096 terminal bytes with bytes
    the data region and discard an incomplete short tail.
 
 Version 1 files use `ACF1` and physical EOF to find a short final block.
-They remain a separate variable-length decoder path; v2 decoders must not
-interpret them as fixed-size files.
+Version 2 files use `ACF2`, sample format 1, and a delayed FIFO-ingestion
+timestamp at offset 4. They remain separate decoder paths; v3 decoders must
+not apply FSYNC semantics to them.
 
 ## Writer requirements
 
@@ -199,7 +218,7 @@ interpret them as fixed-size files.
 
 ## Non-goals
 
-Version 2 does not store gyro, magnetometer, temperature, FSYNC state,
-interrupt status, calibration values, per-sample timestamps, derived values,
-ENMO, PPG, BLE payloads, or dropped-sample records. Do not add them without a
-new format version and decoder path.
+Version 3 does not store gyro, magnetometer, temperature, separate FSYNC
+payload bytes, interrupt status, calibration values, per-sample timestamps,
+derived values, ENMO, PPG, BLE payloads, or dropped-sample records. Do not add
+them without a new format version and decoder path.

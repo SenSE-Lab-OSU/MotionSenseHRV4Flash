@@ -1,0 +1,8 @@
+tests:
+  app.ecg_record_format:
+    tags:
+      - ecg
+      - filesystem
+    platform_allow:
+      - native_sim
+      - nrf5340dk/nrf5340/cpuapp

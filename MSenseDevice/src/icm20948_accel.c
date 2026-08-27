@@ -52,6 +52,7 @@ LOG_MODULE_REGISTER(icm20948_accel, CONFIG_LOG_LEVEL_ICM20948_ACCEL);
 #define ICM20948_INT_PIN_CFG_INT1_LATCH_EN BIT(5)
 #define ICM20948_INT_ENABLE_1_RAW_DATA_RDY BIT(0)
 #define ICM20948_ACCEL_CONFIG_DLPF_ENABLE BIT(0)
+#define ICM20948_FSYNC_CONFIG_ACCEL_XOUT_L 0x05U
 #define ICM20948_FIFO_EN_2_ACCEL BIT(4)
 #define ICM20948_FIFO_RST_ALL 0x1FU
 
@@ -302,6 +303,16 @@ static int icm20948_configure_accelerometer(void)
 		return ret;
 	}
 
+	/* Sample the external hardware-timed FSYNC level into ACCEL_XOUT_L[0]. */
+	ret = icm20948_write_reg(0x52U, ICM20948_FSYNC_CONFIG_ACCEL_XOUT_L);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = icm20948_read_reg(0x52U, &who_am_i);
+	if ((ret != 0) || (who_am_i != ICM20948_FSYNC_CONFIG_ACCEL_XOUT_L)) {
+		return (ret != 0) ? ret : -EIO;
+	}
+
 	ret = icm20948_select_bank(ICM20948_BANK_0);
 	if (ret != 0) {
 		return ret;
@@ -511,11 +522,6 @@ int icm20948_accel_init(void)
 	if (!spi_is_ready_dt(&icm20948_spi) || !device_is_ready(icm20948_int.port) ||
 	    !device_is_ready(icm20948_fsync.port)) {
 		return -ENODEV;
-	}
-
-	ret = gpio_pin_configure_dt(&icm20948_fsync, GPIO_OUTPUT_INACTIVE);
-	if (ret != 0) {
-		return ret;
 	}
 
 	ret = gpio_pin_configure_dt(&icm20948_int, GPIO_INPUT);

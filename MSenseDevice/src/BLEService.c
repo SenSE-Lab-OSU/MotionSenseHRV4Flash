@@ -24,6 +24,7 @@
 #include <hal/nrf_rtc.h>
 #include <nrfx_rtc.h>
 #include "BLEService.h"
+#include "imuFsyncTiming.h"
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
@@ -42,6 +43,7 @@ LOG_MODULE_REGISTER(user_bluetooth);
 #define RTC0_COLLECTION_COUNTER_WRAP (RTC0_COLLECTION_COUNTER_MASK + 1U)
 #define RTC0_COLLECTION_NOTIFY_INTERVAL_TICKS (3U * RTC0_COLLECTION_COUNTER_HZ)
 #define RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL 0U
+#define RTC0_COLLECTION_FSYNC_COMPARE_CHANNEL 1U
 
 BUILD_ASSERT((32768U % RTC0_COLLECTION_COUNTER_HZ) == 0U,
 	     "RTC0 collection counter frequency must divide LFCLK");
@@ -114,6 +116,12 @@ static void rtc0_collection_counter_handler(nrfx_rtc_int_type_t event_type)
 		return;
 	}
 
+	if (event_type ==
+	    (nrfx_rtc_int_type_t)RTC0_COLLECTION_FSYNC_COMPARE_CHANNEL) {
+		imu_fsync_timing_rtc_compare_isr();
+		return;
+	}
+
 	if (event_type != (nrfx_rtc_int_type_t)RTC0_COLLECTION_NOTIFY_COMPARE_CHANNEL ||
 	    atomic_get(&rtc0_collection_notify_active) == 0) {
 		return;
@@ -149,6 +157,8 @@ int rtc0_collection_counter_start(void)
 	}
 
 	config.prescaler = RTC0_COLLECTION_COUNTER_PRESCALER;
+	/* Keep the nrfx peripheral priority and Zephyr vector entry in sync. */
+	config.interrupt_priority = IRQ_PRIO_LOWEST;
 	err = nrfx_rtc_init(&rtc0_collection_counter, &config,
 			    rtc0_collection_counter_handler);
 	if (err != NRFX_SUCCESS) {
@@ -164,6 +174,13 @@ int rtc0_collection_counter_start(void)
 	atomic_set(&rtc0_collection_notify_ticks, 0);
 	nrfx_rtc_overflow_enable(&rtc0_collection_counter, true);
 	nrfx_rtc_enable(&rtc0_collection_counter);
+	/*
+	 * nrfx_rtc_init() enables the NVIC line but does not populate Zephyr's
+	 * vector table. Without this connection, the first compare interrupt is
+	 * handled as a spurious IRQ and resets the application.
+	 */
+	IRQ_CONNECT(RTC0_IRQn, IRQ_PRIO_LOWEST, nrfx_rtc_0_irq_handler, NULL, 0);
+	irq_enable(RTC0_IRQn);
 	atomic_set(&rtc0_collection_counter_started, 1);
 	LOG_INF("RTC0 collection counter started at %u Hz",
 		RTC0_COLLECTION_COUNTER_HZ);

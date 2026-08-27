@@ -26,13 +26,22 @@ void accel_record_format_build_header(uint8_t *header)
 	header[0] = 'A';
 	header[1] = 'C';
 	header[2] = 'F';
-	header[3] = '2';
-	accel_record_format_put_u16_le(&header[4], 2U);
-	accel_record_format_put_u16_le(&header[6], 1U);
+	header[3] = '3';
+	accel_record_format_put_u16_le(&header[4], ACCEL_RECORD_FORMAT_VERSION);
+	accel_record_format_put_u16_le(&header[6],
+				      ACCEL_RECORD_FORMAT_SAMPLE_FORMAT_FSYNC_X_LSB);
 	accel_record_format_put_u32_le(&header[8], 1125U);
 	accel_record_format_put_u32_le(&header[12], 2U);
 	accel_record_format_put_u16_le(&header[16], 2U);
 	accel_record_format_put_u16_le(&header[18], 16384U);
+	accel_record_format_put_u32_le(&header[24],
+				      ACCEL_RECORD_FORMAT_RTC_TICKS_PER_SECOND);
+	accel_record_format_put_u32_le(&header[28],
+				      ACCEL_RECORD_FORMAT_FSYNC_EDGE_INTERVAL_TICKS);
+	header[32] = ACCEL_RECORD_FORMAT_FSYNC_AXIS_X;
+	header[33] = ACCEL_RECORD_FORMAT_FSYNC_BIT;
+	header[34] = ACCEL_RECORD_FORMAT_TIMESTAMP_ALGORITHM;
+	header[35] = ACCEL_RECORD_FORMAT_TIMESTAMP_WINDOW;
 
 	crc = crc32_ieee(header, ACCEL_RECORD_FORMAT_BLOCK_BYTES);
 	accel_record_format_put_u32_le(&header[20], crc);

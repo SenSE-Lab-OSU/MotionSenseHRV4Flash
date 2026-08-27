@@ -1,6 +1,7 @@
 #include "accelRecorder.h"
 #include "accelRecordFormat.h"
-#include "BLEService.h"
+#include "accelTimingEstimator.h"
+#include "imuFsyncTiming.h"
 #include "zephyrfilesystem.h"
 
 #include <errno.h>
@@ -47,6 +48,7 @@ struct accel_record_block {
 	atomic_t state;
 	size_t sample_count;
 	size_t write_length;
+	uint64_t first_sample_sequence;
 	uint32_t reserved_timer_output;
 	uint32_t pending_order;
 	bool sync_after_write;
@@ -68,6 +70,7 @@ static uint32_t accel_record_chunk_full_block_count;
 static uint32_t accel_record_chunk_data_bytes;
 static uint32_t accel_record_chunk_index;
 static uint64_t accel_record_session_id;
+static uint64_t accel_record_next_sample_sequence;
 static uint32_t accel_record_pending_order;
 static struct accel_record_block *accel_record_filling_block;
 static struct accel_record_block *accel_record_metadata_block;
@@ -76,6 +79,9 @@ static int accel_record_control_result;
 static char accel_record_path[ACCEL_RECORD_PATH_MAX];
 static accel_recorder_fault_handler_t accel_record_fault_handler;
 static void *accel_record_fault_context;
+static struct accel_timing_estimator accel_record_timing_estimator;
+static bool accel_record_marker_valid;
+static uint8_t accel_record_previous_marker;
 
 static void accel_record_report_fault(int error)
 {
@@ -88,18 +94,29 @@ static void accel_record_report_fault(int error)
 	}
 }
 
-static void accel_record_finalize_block(struct accel_record_block *block)
+static int accel_record_finalize_block(struct accel_record_block *block)
 {
-	uint32_t first_sample_sequence =
-		accel_record_session_full_block_count *
-		ACCEL_RECORD_FORMAT_SAMPLES_PER_BLOCK;
+	uint32_t estimated_ticks;
+	int ret;
+
+	ret = accel_timing_estimator_estimate(&accel_record_timing_estimator,
+					      block->first_sample_sequence,
+					      &estimated_ticks, NULL);
+	if (ret != 0) {
+		return ret;
+	}
+
+	block->reserved_timer_output = estimated_ticks;
 
 	block->write_length = accel_record_format_finalize_block(
-		block->data, block->sample_count, first_sample_sequence,
+		block->data, block->sample_count,
+		(uint32_t)block->first_sample_sequence,
 		block->reserved_timer_output);
 	if (block->sample_count == ACCEL_RECORD_FORMAT_SAMPLES_PER_BLOCK) {
 		accel_record_session_full_block_count++;
 	}
+
+	return 0;
 }
 
 static struct accel_record_block *accel_record_take_free_block(void)
@@ -110,6 +127,7 @@ static struct accel_record_block *accel_record_take_free_block(void)
 			       ACCEL_RECORD_BLOCK_FILLING)) {
 			accel_record_blocks[i].sample_count = 0U;
 			accel_record_blocks[i].write_length = 0U;
+			accel_record_blocks[i].first_sample_sequence = 0U;
 			accel_record_blocks[i].reserved_timer_output = 0U;
 			accel_record_blocks[i].pending_order = 0U;
 			accel_record_blocks[i].sync_after_write = false;
@@ -138,6 +156,47 @@ static int accel_record_queue_block(struct accel_record_block *block)
 		return (ret < 0) ? ret : -EALREADY;
 	}
 
+	return 0;
+}
+
+static int accel_record_consume_fsync_marker(uint8_t marker,
+					       uint64_t sample_sequence)
+{
+	struct imu_fsync_edge edge;
+	int ret;
+
+	if (!accel_record_marker_valid) {
+		/* The timing generator holds FSYNC low until after FIFO streaming starts. */
+		if (marker != 0U) {
+			return -EIO;
+		}
+		accel_record_previous_marker = marker;
+		accel_record_marker_valid = true;
+		return 0;
+	}
+
+	if (marker == accel_record_previous_marker) {
+		return 0;
+	}
+
+	ret = imu_fsync_timing_take_edge(&edge);
+	if (ret != 0) {
+		return ret;
+	}
+	if (edge.level != marker) {
+		return -EIO;
+	}
+
+	ret = accel_timing_estimator_observe(&accel_record_timing_estimator,
+		&(struct accel_timing_observation){
+			.sample_sequence = sample_sequence,
+			.rtc_ticks = edge.rtc_ticks,
+		});
+	if (ret != 0) {
+		return ret;
+	}
+
+	accel_record_previous_marker = marker;
 	return 0;
 }
 
@@ -518,8 +577,12 @@ int accel_recorder_start(uint64_t session_id)
 	accel_record_chunk_data_bytes = 0U;
 	accel_record_chunk_full = false;
 	accel_record_pending_order = 0U;
+	accel_record_next_sample_sequence = 0U;
 	accel_record_filling_block = NULL;
 	accel_record_metadata_block = NULL;
+	accel_timing_estimator_reset(&accel_record_timing_estimator);
+	accel_record_marker_valid = false;
+	accel_record_previous_marker = 0U;
 	ret = accel_record_submit_control(ACCEL_RECORD_CONTROL_OPEN);
 	if (ret != 0) {
 		return ret;
@@ -577,6 +640,7 @@ int accel_recorder_consume_fifo(const uint8_t *fifo_data, size_t fifo_bytes,
 	for (size_t offset = 0U; offset < fifo_bytes;
 	     offset += ACCEL_RECORD_FORMAT_SAMPLE_BYTES) {
 		struct accel_record_block *block;
+		uint8_t marker = fifo_data[offset + 1U] & 1U;
 		int ret;
 
 		ret = accel_record_take_next_filling_block();
@@ -587,24 +651,31 @@ int accel_recorder_consume_fifo(const uint8_t *fifo_data, size_t fifo_bytes,
 		block = accel_record_filling_block;
 
 		if (block->sample_count == 0U) {
-			ret = rtc0_collection_counter_get(
-				&block->reserved_timer_output);
-			if (ret != 0) {
-				accel_record_report_fault(ret);
-				return ret;
-			}
+			block->first_sample_sequence = accel_record_next_sample_sequence;
+		}
+
+		ret = accel_record_consume_fsync_marker(
+			marker, accel_record_next_sample_sequence);
+		if (ret != 0) {
+			accel_record_report_fault(ret);
+			return ret;
 		}
 
 		accel_record_format_store_fifo_sample(block->data,
 					      block->sample_count,
 					      &fifo_data[offset]);
 		block->sample_count++;
+		accel_record_next_sample_sequence++;
 
 		if (block->sample_count != ACCEL_RECORD_FORMAT_SAMPLES_PER_BLOCK) {
 			continue;
 		}
 
-		accel_record_finalize_block(block);
+		ret = accel_record_finalize_block(block);
+		if (ret != 0) {
+			accel_record_report_fault(ret);
+			return ret;
+		}
 		block->sync_after_write =
 			((accel_record_session_full_block_count %
 			  ACCEL_RECORD_SYNC_INTERVAL_BLOCKS) == 0U);
@@ -655,7 +726,12 @@ int accel_recorder_stop(void)
 	block = accel_record_filling_block;
 	accel_record_filling_block = NULL;
 	if (block != NULL && block->sample_count != 0U) {
-		accel_record_finalize_block(block);
+		ret = accel_record_finalize_block(block);
+		if (ret != 0) {
+			accel_record_release_block(block);
+			accel_record_report_fault(ret);
+			return ret;
+		}
 		block->sync_after_write = true;
 		ret = accel_record_queue_current_chunk_block(block);
 		if (ret != 0) {

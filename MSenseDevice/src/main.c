@@ -20,12 +20,11 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
+#include "ecgStream.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
-
-
 
 
 LOG_MODULE_REGISTER(main);
@@ -464,22 +463,21 @@ int main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
   
-  
+  usb_enable(usb_status_cb);
   
 
   // Setup our Flash Filesystem
-  setup_disk();
-  k_sleep(K_SECONDS(1));
-  //create_test_files(400);
-  #ifdef CONFIG_DEBUG  
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
-  #endif
+  // setup_disk();
+  // k_sleep(K_SECONDS(1));
+  // #ifdef CONFIG_DEBUG  
+  // #if CONFIG_DISK_DRIVER_RAW_NAND
+  //   set_read_only(true);
+  // #endif
+  // #endif
 
-  #ifdef CONFIG_MSENSE_USB_SECURITY
-    security_lock = true;
-  #endif
+  // #ifdef CONFIG_MSENSE_USB_SECURITY
+  //   security_lock = true;
+  // #endif
 
 
   k_sleep(K_SECONDS(2));
@@ -503,14 +501,20 @@ int main(void)
   
   // Init, verify ID and config sensors
   
-  spi_init();
-  spi_verify_sensor_ids();
+  //spi_init();
+  //spi_verify_sensor_ids();
 
-  i2c_init();
+  //i2c_init();
 
   // Shutdown our ppg and imu sensors until we need to get data from them
-  ppg_sleep();
-  motion_sleep();
+  //ppg_sleep();
+  //motion_sleep();
+
+  ret = ecg_stream_start();
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to start ECG stream: %d", ret);
+  }
 
   /*struct k_work_queue_config cfg = {
     .name = "my_custom_workq",
@@ -519,47 +523,44 @@ int main(void)
 
   // Start Threads for all our sensor tasks
   // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
-  k_work_queue_init(&my_work_q);
-  k_work_queue_start(&my_work_q, my_stack_area,
-                     K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
-  // Handles reading from the motion sensor and ppg sensor. This is the system workqueue, which zephyr creates by default
-  // and is a different queue from the user created file system workqueue 
-  k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
-  k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
-  // sends enmo and accelerometer
-  k_work_init(&my_motionData.work, motion_notify);
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-  // These items all handle sending data across bluetooth
 
-  k_work_init(&my_ppgDataSensor.work, ppgData_notify);
-#endif
+  // k_work_queue_init(&my_work_q);
+  // k_work_queue_start(&my_work_q, my_stack_area,
+  //                    K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
+  // // Handles reading from the motion sensor and ppg sensor. This is the system workqueue, which zephyr creates by default
+  // // and is a different queue from the user created file system workqueue 
+  // k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
+  // k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
+  // // sends enmo and accelerometer
+  // k_work_init(&my_motionData.work, motion_notify);
 
-  // these are our file system workqueue objects
-  k_work_init(&ppg_work_item.work, work_write);
-  ppg_work_item.sensor = ppg;
+  // // these are our file system workqueue objects
+  // k_work_init(&ppg_work_item.work, work_write);
+  // ppg_work_item.sensor = ppg;
 
-  k_work_init(&accel_work_item.work, work_write);
-  accel_work_item.sensor = accelorometer;
+  // k_work_init(&accel_work_item.work, work_write);
+  // accel_work_item.sensor = accelorometer;
   
-  k_work_init(&log_work_item.work, work_write);
-  log_work_item.sensor = customlog;
-  k_thread_name_set(&my_work_q.thread, "file_sys");
-  const char *name = k_thread_name_get(&my_work_q.thread);
-  LOG_INF("file workqueue thead: %s", name);
-  ble_init();
+  // k_work_init(&log_work_item.work, work_write);
+  // log_work_item.sensor = customlog;
+  // k_thread_name_set(&my_work_q.thread, "file_sys");
+  // const char *name = k_thread_name_get(&my_work_q.thread);
+  // LOG_INF("file workqueue thead: %s", name);
+  // ble_init();
   
-  get_storage_percent_full();
+  //get_storage_percent_full();
   
   
   // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
+  k_msleep(10*1000); // Wait 10 seconds for setup.
   
   while (1)
   {
     
-    printk("%d %d\n", connectedFlag, collecting_data);
+    //printk("%d %d\n", connectedFlag, collecting_data);
 
     global_update++;
     if (global_update >= 100){
@@ -567,8 +568,8 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      battery_maintenance();
-      get_current_unix_time();
+      //battery_maintenance();
+      //get_current_unix_time();
       LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
     }
 

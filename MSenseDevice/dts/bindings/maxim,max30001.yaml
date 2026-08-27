@@ -1,0 +1,17 @@
+description: MAX30001 ECG analog front-end on SPI
+
+compatible: "maxim,max30001"
+
+include: ["spi-device.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  intb-gpios:
+    type: phandle-array
+    description: MAX30001 INTB interrupt GPIO.
+
+  intb2-gpios:
+    type: phandle-array
+    description: MAX30001 INTB2 interrupt GPIO.

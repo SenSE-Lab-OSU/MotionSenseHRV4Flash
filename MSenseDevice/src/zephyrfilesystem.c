@@ -9,10 +9,12 @@
 #include <zephyr/random/random.h>
 #include <time.h>
 #include <stdio.h>
+#include <string.h>
 
 
 #include <stdlib.h>
 #include "BLEService.h"
+#include "msense_git_metadata.h"
 #include "zephyrfilesystem.h"
 
 
@@ -47,6 +49,7 @@ bool security_lock;
 bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
+#define UUID_CONTENTS_MAX_SIZE 640U
 
 //#undef GET_FATTIME
 //#define GET_FATTIME() (DWORD)get_current_unix_time()
@@ -748,48 +751,75 @@ void flush_data_buffer(enum sensor_type sensor){
 }
 
 
-int write_ble_uuid(char* uuid){
-
-	struct fs_mount_t* mp = &fs_mnt;
+int write_ble_uuid(const char *ble_address, const char *ble_name,
+			   const char *device_id_hex)
+{
+	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
+	char uuid_name[32];
+	char uuid_contents[UUID_CONTENTS_MAX_SIZE];
+	int rc;
+	int written;
+	ssize_t bytes_written;
+
+	if (ble_address == NULL || ble_name == NULL || device_id_hex == NULL) {
+		return -EINVAL;
+	}
+
+	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
+	if (written < 0 || written >= sizeof(uuid_name)) {
+		return -ENAMETOOLONG;
+	}
+
 	fs_file_t_init(&name_file);
-	int res;
-	// theoretically zephyr docs say this allows us to test whether the file exists or not?
-	char uuid_name[20] = "";
-	strcat(uuid_name, mp->mnt_point);
-	strcat(uuid_name, "/");
-	strcat(uuid_name, "uuid.txt");
-	int file_create = fs_open(&name_file, uuid_name, 0);
-	// the above function will return error -2 if file name is not present, so we can use it to check whether it gets included or not.
-	if (file_create != 0)
+	rc = fs_open(&name_file, uuid_name, FS_O_READ);
+	if (rc == 0) {
+		fs_close(&name_file);
+		return 0;
+	}
+	if (rc != -ENOENT) {
+		LOG_WRN("Unable to check uuid.txt: %d", rc);
+		return rc;
+	}
+
+	written = snprintf(uuid_contents, sizeof(uuid_contents),
+			   "%s\nName: %s\nDevice ID: %s\nVersion: %s"
+			   "\nGit Commit: %s\nGit Tree: %s"
+			   "\nppg format: %s\naccel format: ICM-20948 accel binary format v2"
+			   "\necg format: %s"
+			   "\nFor a more complete description of how this device works, please visit "
+			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
+			   ble_address, ble_name, device_id_hex, CONFIG_BT_DIS_MODEL,
+			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
+			   ppg_file.sensor_format, ecg_file.sensor_format);
+	if (written < 0 || written >= sizeof(uuid_contents)) {
+		return -ENOSPC;
+	}
+
+	rc = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
+	if (rc != 0) {
+		LOG_WRN("Unable to create uuid.txt: %d", rc);
+		return rc;
+	}
+
+	bytes_written = fs_write(&name_file, uuid_contents, written);
+	if (bytes_written < 0) {
+		rc = (int)bytes_written;
+	} else if (bytes_written != written) {
+		rc = -EIO;
+	} else {
+		rc = 1;
+	}
+
 	{
-		int file_create = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
-		if (file_create != 0)
-		{
-			LOG_WRN("Unable to create file");
-			return -1;
+		int close_rc = fs_close(&name_file);
+
+		if (rc > 0 && close_rc != 0) {
+			rc = close_rc;
 		}
-		// we write in sizes of 4096*2, so we include that in the formula
-		// max_writes
-
-		strcat(uuid, "\n ppg format: ");
-  		strcat(uuid, ppg_file.sensor_format);
-
-		strcat(uuid, "\n accel format: ICM-20948 accel binary format v2");
-		strcat(uuid, "\n ecg format: ");
-		strcat(uuid, ecg_file.sensor_format);
-		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
-		//res = f_expand(name_file.filep, 4096 * 4, 1);
-		res = fs_write(&name_file, uuid, strlen(uuid));
-		res = 1;
 	}
-	else
-	{
-		res = 0;
-	}
-	fs_close(&name_file);
-	
-	return res;
+
+	return rc;
 }
 
 int close_all_files(){

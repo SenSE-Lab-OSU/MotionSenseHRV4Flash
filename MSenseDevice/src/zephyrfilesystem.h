@@ -74,7 +74,8 @@ int get_storage_percent_full();
 
 extern uint8_t storage_percent_full;
 
-int write_ble_uuid(char* ble_string);
+int write_ble_uuid(const char *ble_address, const char *ble_name,
+		   const char *device_id_hex);
 
 //k work item
 void work_write(struct k_work* item);

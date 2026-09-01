@@ -5,7 +5,12 @@
 # Ohio State SENSE LAB
 cmake_minimum_required(VERSION 3.20.0)
 
-list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/src/drivers)
+# Preserve direct (non-sysbuild) configuration as well. Sysbuild receives the
+# same repository board root from sysbuild/CMakeLists.txt before child images
+# are configured.
+list(APPEND BOARD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../shared")
 
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
@@ -54,22 +59,31 @@ if((NOT CONFIG_DISK_DRIVER_FLASH) AND
    (NOT CONFIG_DISK_DRIVER_SDMMC))
 	message(WARNING "No disk access settings detected." )
 endif()
-#
-#we previously used GLOB_RECURSE, but that was deprecated since we want to have control over what code is included.
-FILE(GLOB_RECURSE app_sources src/*.cc)
-FILE(GLOB c_app_sources src/*.c)
-
 target_compile_options(app PRIVATE -Wno-unused-function)
-#eventually, remove the induvidual file in target_sources, and just refactor to move zephyr filesystem out.
-#OR Keep Global Recuse on.
-# also move the drivers over to a seperate folder.
-target_sources(app PRIVATE ${app_sources} 
-${c_app_sources} )
+
+target_include_directories(app PRIVATE
+	"${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/drivers/nand"
+	"${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/drivers/nor"
+)
+
+target_sources(app PRIVATE
+	src/BLEService.c
+	src/batterymonitordt.c
+	src/device_identity.c
+	src/filesystemlogging.c
+	src/imuSensor.c
+	src/main.c
+	src/ppgSensor.c
+	src/zephyrfilesystem.c
+)
+
+target_sources_ifdef(CONFIG_DISK_DRIVER_RAW_NAND app PRIVATE
+	src/drivers/nand/nand_disk.c
+	src/drivers/nand/spi_nand.c
+)
 
 #if(CONFIG_BUILD_WITH_TFM)
 #  target_include_directories(app PRIVATE
 #    $<TARGET_PROPERTY:tfm,TFM_BINARY_DIR>/install/interface/include
 #  )
 #endif()
-
-

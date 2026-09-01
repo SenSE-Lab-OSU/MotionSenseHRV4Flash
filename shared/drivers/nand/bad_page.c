@@ -1,6 +1,7 @@
+#include <zephyr/drivers/flash.h>
 #include <zephyr/logging/log.h>
-#include "spi_nand.h"
-#include "nand_disk.h"
+#include <zephyr/storage/flash_map.h>
+#include "spi_nand_bad_page_api.h"
 #include "bad_page.h"
 
 

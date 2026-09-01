@@ -5,7 +5,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
-#include "drivers/jdec_nor/custom_qspi.h"
+#include "custom_qspi.h"
 
 #include "ppgSensor.h"
 #include "imuSensor.h"

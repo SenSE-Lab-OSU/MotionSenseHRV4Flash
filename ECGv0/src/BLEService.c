@@ -11,7 +11,7 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/spinlock.h>
 #include <zephyr/usb/usb_device.h>
-#include "drivers/jdec_nor/custom_qspi.h"
+#include "custom_qspi.h"
 
 #include "ppgSensor.h"
 #include "batterymonitordt.h"

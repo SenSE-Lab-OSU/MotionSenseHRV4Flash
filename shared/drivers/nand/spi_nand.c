@@ -10,6 +10,7 @@
 
 
 #define CONFIG_NORDIC_QSPI_NOR_STACK_WRITE_BUFFER_SIZE 4
+#define DT_DRV_COMPAT senselab_nanddisk
 
 
 #include <errno.h>
@@ -81,17 +82,16 @@ int ECC_corrections = 0;
 int ECC_err = 0;
 
 
+/* The board DTS is the single source for the NAND population. */
+#define NAND_FLASH_COUNT DT_INST_PROP(0, num_flashchips)
+BUILD_ASSERT(NAND_FLASH_COUNT > 0, "NAND needs at least one package");
+
 // die select for each flash
-int current_die[4] = {0};
+int current_die[NAND_FLASH_COUNT] = {0};
 
 
 // parameter for multiple flashes.
 int current_flash = 0;
-
-// TODO: put these in device tree
-const int die_per_flash = 2;
-
-const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
 
 static int spi_nor_write_protection_set(const struct device *dev,
 					bool write_protect);
@@ -122,7 +122,7 @@ uint32_t dev_flash_size(const struct device *dev)
 
 static inline int dev_die_size(const struct device* dev){
 	const struct spi_flash_config* cfg = dev->config;
-	return dev_flash_size(dev) / (cfg->num_flashes*die_per_flash);
+	return dev_flash_size(dev) / cfg->dies_per_flash;
 }
 
 /* Get the flash device page size.  Constant for minimal, data for
@@ -130,7 +130,22 @@ static inline int dev_die_size(const struct device* dev){
 */
 uint16_t dev_page_size(const struct device *dev)
 {
-	return 4096;
+	const struct spi_flash_config* cfg = dev->config;
+	return cfg->page_size;
+}
+
+uint32_t dev_pages_per_erase_block(const struct device *dev)
+{
+	const struct spi_flash_config* cfg = dev->config;
+	return cfg->pages_per_erase_block;
+}
+
+uint32_t dev_total_sector_count(const struct device *dev)
+{
+	const struct spi_flash_config* cfg = dev->config;
+	uint64_t total_bytes = (uint64_t)cfg->flash_size * cfg->num_flashes;
+
+	return (uint32_t)(total_bytes / cfg->page_size);
 }
 
 static const struct flash_parameters flash_nor_parameters = {
@@ -189,19 +204,20 @@ uint32_t convert_block_to_page(uint32_t page, uint32_t block){
 // The pages representing a block are from block - 65.
 // 4 gigabit is 536870912 bytes / 4096 = 131072 pages (131071 is last address)
 off_t convert_page_to_address(const struct device* dev, uint32_t page) {
+	const struct spi_flash_config *cfg = dev->config;
+	uint32_t die_size = dev_die_size(dev) / dev_page_size(dev);
+	uint32_t selected_die_num = page / die_size;
+	uint32_t flash = selected_die_num / cfg->dies_per_flash;
+	uint32_t die = selected_die_num % cfg->dies_per_flash;
 
-	// total number of sectors per die. 
-	const int die_size = 131072;
-	int selected_die_num = page / die_size;
+	if ((page >= dev_total_sector_count(dev)) || (flash >= cfg->num_flashes)) {
+		return -EINVAL;
+	}
 	LOG_DBG("die/flash  number: %d", selected_die_num);
 
-	// this works because the flash goes up by 1 every 2 die
-	// and the die alternates between 0 or 1 since each flash has 2 die
-	int flash = selected_die_num / 2;
-	int die = selected_die_num % 2;
-
-	set_flash(dev, flash);
-	int die_err = set_die(dev, die);
+	if ((set_flash(dev, flash) != 0) || (set_die(dev, die) != 0)) {
+		return -EIO;
+	}
 
 	return page - (die_size * selected_die_num);
 }
@@ -259,16 +275,17 @@ static int spi_nand_access(const struct device *const dev, spi_send_request* req
 {
 	acquire_device_inner(dev);
 	const struct spi_flash_config* const driver_cfg = dev->config;
+	int ret;
+
+	if ((current_flash < 0) || (current_flash >= driver_cfg->num_flashes)) {
+		release_device_inner(dev);
+		return -EINVAL;
+	}
 
 	// get parameters needed for spi_transceive and spi_write
 	struct spi_dt_spec spi_spec = driver_cfg->spi;
 	struct spi_config spi_flash_cfg = spi_spec.config;
-	if (current_flash) {
-		gpio_pin_t flash_pin = cs_pins[current_flash];
-		spi_flash_cfg.cs.gpio.pin = flash_pin;
-	}
-	
-	int ret;
+	spi_flash_cfg.cs.gpio = driver_cfg->chip_selects[current_flash];
 	
 	uint8_t buf[5] = { 0 };
 	struct spi_buf spi_buf[2] = {
@@ -362,7 +379,12 @@ int reset(const struct device* dev){
 }
 
 int set_die(const struct device* dev, int die_select){
-	
+	const struct spi_flash_config *cfg = dev->config;
+	if ((current_flash < 0) || (current_flash >= cfg->num_flashes) ||
+	    (die_select < 0) || (die_select >= cfg->dies_per_flash)) {
+		return -EINVAL;
+	}
+
 	uint8_t feature = 0x0;
 	if (die_select == 1) {
 		feature = 0x40;
@@ -370,7 +392,8 @@ int set_die(const struct device* dev, int die_select){
 	int ret = set_features(dev, REGISTER_DIESELECT, feature);
 	if (ret == 0){
 		current_die[current_flash] = die_select;
-		LOG_DBG("flash 1 die: %d. 2 die: %d. 3 die: %d, 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
+		LOG_DBG("selected NAND package %d die %d", current_flash,
+			current_die[current_flash]);
 	}
 	else{
 		LOG_WRN("error die setting %d", ret);
@@ -383,6 +406,10 @@ int set_die(const struct device* dev, int die_select){
 
 
 int set_flash(const struct device* dev, int flash_id){
+	const struct spi_flash_config *cfg = dev->config;
+	if ((flash_id < 0) || (flash_id >= cfg->num_flashes)) {
+		return -EINVAL;
+	}
 	current_flash = flash_id;
 	return 0;
 }
@@ -423,7 +450,7 @@ int set_features(const struct device* dev, uint8_t register_select, uint8_t data
 		.data_length = 1
 	};
 
-	int res = spi_nand_access(dev, &write_features_request); 
+	int res = spi_nand_access(dev, &write_features_request);
 	if (res == 0){
 		uint8_t readback = get_features(dev, register_select);
 	if (readback == data){
@@ -659,7 +686,14 @@ int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* b
 	}
 	int non_corrupt_sector = get_sector_offset(page_number);
 	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
+	if (addr < 0) {
+		return (int)addr;
+	}
 	ret = spi_nand_page_read(dev, addr, buffer);
+	if (ret != 0) {
+		LOG_ERR("NAND read mapping: logical_page=%u mapped_page=%d rc=%d",
+			page_number, non_corrupt_sector, ret);
+	}
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
 		register_bad_sector(non_corrupt_sector);
 	}
@@ -671,6 +705,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	acquire_device(dev);
 	LOG_DBG("reading bytes at address %ld", page_addr);
 	nrfx_err_t res = 0;
+	int wait_res = 0;
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -700,7 +735,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
-	int wait_res = spi_flash_wait_until_ready(dev);
+	wait_res = spi_flash_wait_until_ready(dev);
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0 || wait_res != 0) {
@@ -710,24 +745,39 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 
 out:
 	uint8_t reg_status = spi_rdsr(dev);
-	int status = reg_status;
-	LOG_DBG("finished read! with status %i", status);
-	// get the ECC status
-	uint8_t ECC_status = reg_status >> 4;
-	if (ECC_status != 0 && reg_status != 255){
-		if (ECC_status == 2){
-			ECC_err++;
-			LOG_ERR("ECC err too high, bad block");
-			status = FLASH_TOO_MANY_ECC_ERROR;
-		}
-		else {
-			// if it's just an ECC error then we should be able to correct it and move on
-			status = 0;
-			ECC_corrections++;
-			LOG_WRN("correctable err");
-			
-		}
-		LOG_WRN("ECC stat %d, tot corrections %d an err %d", ECC_status, ECC_corrections, ECC_err);
+	uint8_t ecc_status = (reg_status >> 4) & 0x07U;
+	int status = res != 0 ? (int)res : wait_res;
+
+	LOG_DBG("finished read! with status 0x%02x", reg_status);
+	switch (ecc_status) {
+	case 0:
+		break;
+	case 1:
+	case 3:
+	case 5:
+		/* Micron M70A reports corrected bit-flip ranges with these codes. */
+		ECC_corrections++;
+		LOG_WRN("NAND ECC corrected: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status, ECC_corrections);
+		break;
+	case 2:
+		ECC_err++;
+		LOG_ERR("NAND ECC uncorrectable: cs=%d die=%d die_page=%ld die_block=%ld page_in_block=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			(long)(page_addr / NAND_PAGES_PER_ERASE_BLOCK),
+			(long)(page_addr % NAND_PAGES_PER_ERASE_BLOCK),
+			reg_status, ecc_status, ECC_err);
+		status = FLASH_TOO_MANY_ECC_ERROR;
+		break;
+	default:
+		LOG_ERR("NAND unexpected status: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u oip=%u wel=%u erase_fail=%u prog_fail=%u",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status, reg_status & BIT(0),
+			(reg_status >> 1) & BIT(0), (reg_status >> 2) & BIT(0),
+			(reg_status >> 3) & BIT(0));
+		status = -EIO;
+		break;
 	}
 
 	release_device(dev);
@@ -847,12 +897,12 @@ int spi_nand_chip_erase(const struct device* device) {
 	block_count /= NAND_PAGES_PER_ERASE_BLOCK;
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
-	for (int current_block = 0; current_block <= block_count; current_block++){
+	for (int current_block = 0; current_block < block_count; current_block++){
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
 			LOG_WRN("err block erase %d: %i", current_block, status);
-			continue;
+			return status;
 		}
 	}
 	LOG_INF("chip erase done, stat, %i", status); 
@@ -861,15 +911,24 @@ int spi_nand_chip_erase(const struct device* device) {
 
 
 int spi_nand_whole_chip_erase(const struct device* dev){
-	
-	int ret = 0;
-	ret = set_die(dev, 0);
+	int ret = set_die(dev, 0);
+	if (ret != 0) {
+		return ret;
+	}
+
 	ret = spi_nand_chip_erase(dev);
+	if (ret != 0) {
+		return ret;
+	}
+
 	ret = set_die(dev, 1);
+	if (ret != 0) {
+		return ret;
+	}
+
 	ret = spi_nand_chip_erase(dev);
-	ret = set_die(dev, 0);
-	
-	return ret;
+	int restore_ret = set_die(dev, 0);
+	return ret != 0 ? ret : restore_ret;
 }
 
 // resets the bad block storage.
@@ -884,17 +943,31 @@ int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
 
 int spi_nand_multi_chip_erase(const struct device* dev){
 	const struct spi_flash_config* cfg = dev->config;
+	int ret = 0;
 	for (int i = 0; i < cfg->num_flashes; i++) {
-		set_flash(dev, i);
-		spi_nand_whole_chip_erase(dev);
+		ret = set_flash(dev, i);
+		if (ret != 0) {
+			break;
+		}
+		ret = spi_nand_whole_chip_erase(dev);
+		if (ret != 0) {
+			break;
+		}
 		LOG_INF("chip %i erased.", i + 1);
 		k_sleep(K_MSEC(500));
 	}
-	set_flash(dev, 0);
+	int restore_ret = set_flash(dev, 0);
+	if (ret != 0) {
+		return ret;
+	}
+	if (restore_ret != 0) {
+		return restore_ret;
+	}
 	LOG_INF("erasing file table (nor)");
-	int ret = erase_file_table();
+	ret = erase_file_table();
 	if (ret != 0){
 		LOG_ERR("failed to erase file table");
+		return ret;
 	}
 	LOG_INF("all erase complete!");
 	return 0;
@@ -1066,13 +1139,18 @@ int spi_init(const struct device *dev)
 		return ret;
 	// we set the correct cs pin already via set_flash which works through spi_nand_access, so no need for a custom config struct.
 	for (int i = 1; i < cfg->num_flashes; i++) {
-		set_flash(dev, i);
+		ret = set_flash(dev, i);
+		if (ret != 0) {
+			break;
+		}
 		ret = spi_configure(dev, cfg);
-		
+		if (ret != 0) {
+			break;
+		}
 	}
 
-	set_flash(dev, 0); 
-	return ret;
+	int restore_ret = set_flash(dev, 0);
+	return ret != 0 ? ret : restore_ret;
 }
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)

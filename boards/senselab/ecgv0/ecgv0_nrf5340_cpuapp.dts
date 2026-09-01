@@ -147,9 +147,13 @@ zephyr_udc0: &usbd {
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		reg = <0>;
-		size = <2147483648>;
+		/* Two exact 8-Gbit MT29F8G01AD packages; total capacity is
+		 * derived from this per-package geometry and the SPI cs-gpios. */
 		individual-size = <1073741824>;
 		num-flashchips = <2>;
+		dies-per-flash = <2>;
+		page-size = <4096>;
+		pages-per-erase-block = <64>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];
 		status = "okay";

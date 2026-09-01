@@ -26,8 +26,8 @@
 #endif
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
-#include "drivers/nand/spi_nand.h"
-#include "drivers/nand/nand_disk.h"
+#include "spi_nand.h"
+#include "nand_disk.h"
 #endif
 
 

@@ -1,9 +1,9 @@
 
 #include <zephyr/logging/log_backend.h>
 #include <zephyr/logging/log_output.h>
+#include <zephyr/logging/log_output_dict.h>
 #include <zephyr/logging/log_backend_std.h>
-#include "zephyrfilesystem.h"
-#include "BLEService.h"
+#include "msense_storage_log_backend.h"
 
 
 #ifdef CONFIG_LOG_BACKEND_FS_BUFFER
@@ -21,20 +21,17 @@ enum backend_fs_state {
 	BACKEND_FS_OK
 };
 
-int debug_messages = 0;
-
 static uint32_t log_format_current = 0;
 
 
 
 int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 {
-	debug_messages++;
-	if (file_system_ready && !battery_low && !reset_lock && collecting_data) {
-		store_data(data, length, customlog);
-		
+	ARG_UNUSED(ctx);
+	if (!msense_storage_log_write_enabled()) {
+		return 0;
 	}
-	return length;
+	return msense_storage_log_append(data, length);
 }
 
 
@@ -55,12 +52,9 @@ static void log_backend_fs_init(const struct log_backend *const backend)
 
 static void panic(struct log_backend const *const backend)
 {
-	panic_single_thread = true;
 	// In case of panic, flush any remaining log data to the file.
 	log_backend_std_panic(&log_output);
-	//flush_data_buffer(customlog);
-	// after the messages have logged, close files.
-	close_all_files();
+	msense_storage_log_panic();
 	log_backend_deactivate(backend);
 }
 

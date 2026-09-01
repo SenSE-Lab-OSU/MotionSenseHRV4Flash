@@ -167,8 +167,15 @@ struct spi_flash_config {
 	/* Size of device in bytes, from size property */
 	uint32_t flash_size;
 
-
+	/* The storage device is a package of identical NAND dies.  The total
+	 * logical capacity is flash_size * num_flashes and deliberately uses a
+	 * 64-bit calculation in the disk layer: a four-package 8-Gbit board is
+	 * exactly 4 GiB, which does not fit in a uint32_t byte count. */
 	uint8_t num_flashes;
+	uint8_t dies_per_flash;
+	uint16_t page_size;
+	uint16_t pages_per_erase_block;
+	const struct gpio_dt_spec *chip_selects;
 
 #ifdef CONFIG_FLASH_PAGE_LAYOUT
 	/* Flash page layout can be determined from devicetree. */
@@ -257,6 +264,10 @@ void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 uint16_t dev_page_size(const struct device *dev);
 
 uint32_t dev_flash_size(const struct device* dev);
+
+uint32_t dev_pages_per_erase_block(const struct device *dev);
+
+uint32_t dev_total_sector_count(const struct device *dev);
 
 int spi_flash_wait_until_ready(const struct device *dev);
 

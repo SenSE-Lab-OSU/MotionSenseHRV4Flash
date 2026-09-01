@@ -23,8 +23,8 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #endif
 
 #if CONFIG_DISK_DRIVER_RAW_NAND
-#include "drivers/nand/spi_nand.h"
-#include "drivers/nand/nand_disk.h"
+#include "spi_nand.h"
+#include "nand_disk.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -904,7 +904,7 @@ int get_storage_percent_full(){
 
 
 
-#include "drivers/nand/nand_disk.h"
+#include "nand_disk.h"
 // The following shows how to use the nand disk driver outside of the driver file directly.
 
 

@@ -1,8 +1,9 @@
 description: |
-  Zephyr MMC disk node. A binding with this compatible present within an SD
-  host controller device node indicates that an SDMMC disk is attached to that
-  SD bus. This binding will enable that disk to be used with the disk driver
-  API and any subsystems that utilize it.
+  SenseLab raw NAND disk implemented by identical SPI NAND packages on one SPI
+  controller. The controller's cs-gpios array describes the physical package
+  population; the child properties describe one package exactly. The driver
+  derives total logical capacity from individual-size and num-flashchips, so a
+  4 GiB population never needs to be represented in a 32-bit byte property.
 
 compatible: "senselab,nanddisk"
 
@@ -15,17 +16,30 @@ properties:
   jedec-id:
     required: true
 
-  size:
-    type: int
-    description: |
-      The size of the flash in bytes.
-  
   individual-size:
     type: int
+    required: true
     description: |
-      The number of total flashes for the multi-flash driver. Used to calculate the full size of the flash. 
+      Exact capacity in bytes of one NAND package.
 
   num-flashchips:
     type: int
+    required: true
     description: |
-      How many total flashes chips are in the system. 
+      Number of populated, identical NAND packages. This must equal the parent
+      SPI controller's cs-gpios array length.
+
+  dies-per-flash:
+    type: int
+    required: true
+    description: Number of independently selected dies in each NAND package.
+
+  page-size:
+    type: int
+    required: true
+    description: Exact NAND page size in bytes; this is the raw disk sector size.
+
+  pages-per-erase-block:
+    type: int
+    required: true
+    description: Exact number of pages in one NAND erase block.

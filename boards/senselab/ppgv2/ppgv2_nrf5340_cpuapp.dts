@@ -139,11 +139,14 @@ zephyr_udc0: &usbd {
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		reg = <0>;
-		/* Preserve the imported geometry exactly. Phase 3 replaces these
-		 * legacy approximate values with one validated geometry model. */
-		size = <4294901760>;
-		individual-size = <1073725440>;
+		/* One MT29F8G01AD package is exactly 8 Gbit (1 GiB), with two
+		 * dies of 131072 4096-byte pages. The driver combines all four
+		 * packages via this bus's cs-gpios array. */
+		individual-size = <1073741824>;
 		num-flashchips = <4>;
+		dies-per-flash = <2>;
+		page-size = <4096>;
+		pages-per-erase-block = <64>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];
 		status = "okay";

@@ -156,7 +156,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
 	//sector cannot be greater than the allocated file table segment size
-	if (sector_num > file_table_sector_num){
+	if ((sector_num < 0) || (sector_num >= file_table_sector_num)){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
 		return -1;
 	}
@@ -170,7 +170,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 		if (ret != 0){
 			nor_fails++;
 			LOG_ERR("nor flash erase failure! tot %d", nor_fails);
-			
+			return ret;
 		}
 		ret = flash_write(soc_flash, address, buf, 4096);
 		if (ret != 0){
@@ -293,6 +293,9 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		else {
 			ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
 		}
+		if (ret != 0) {
+			break;
+		}
 	}
 	
 	//lol
@@ -300,7 +303,7 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		LOG_ERR("ret: %d", ret);
 	}
 	k_mutex_unlock(&disk_access_mutex);
-	return 0;
+	return ret;
 }
 
 uint8_t read_back_buffer[4096];
@@ -331,8 +334,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 			LOG_DBG("performing disk write at sector %i", sector_num);
 			if (sector_num < file_table_sector_num)
 			{
-
-				file_table_access(&buf[x * 4096], sector_num, true);
+				ret = file_table_access(&buf[x * 4096], sector_num, true);
 			}
 			else
 			{
@@ -348,13 +350,20 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				}
 
 				addr = convert_page_to_address(dev, sector_num);
-				ret = spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
+				ret = (addr < 0) ? (int)addr :
+					spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
 				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
+			}
+			if (ret != 0) {
+				break;
 			}
 			if (VerifyWrites)
 			{
 				//ret = spi_nand_page_read(dev, addr, read_back_buffer);
-				disk_nand_access_read(disk, read_back_buffer, sector_num, 1);
+				ret = disk_nand_access_read(disk, read_back_buffer, sector_num, 1);
+				if (ret != 0) {
+					break;
+				}
 				int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
 				if (equal != 0)
 				{
@@ -374,9 +383,13 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		result = ret;
 	}
 	else{
-	LOG_DBG("fs wr req sect %lu num %lu, but dev read only", sector, count);
-	
-	result = disabled_usb_write ? -2 : -1;
+	/* The firmware owns the volume while collecting. USB mass-storage writes
+	 * therefore fail explicitly with EROFS; no fake-success acknowledgement is
+	 * returned to a host, so a host cannot mistake rejected writes for durable
+	 * media changes. */
+	LOG_INF("rejecting write: sector=%lu count=%lu owner=%s", sector, count,
+		disabled_usb_write ? "usb" : "firmware-read-only");
+	result = -EROFS;
 	}
 	k_mutex_unlock(&disk_access_mutex);
 	return result;
@@ -394,7 +407,7 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 
     switch (cmd) {
 	case DISK_IOCTL_GET_SECTOR_COUNT:
-		uint32_t sectors = dev_flash_size(dev) / dev_page_size(dev);
+		uint32_t sectors = dev_total_sector_count(dev);
 		
 		LOG_INF("sect aval: %i", sectors);
 		(*(uint32_t *)buf) = sectors;
@@ -403,7 +416,9 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 		(*(uint32_t *)buf) = dev_page_size(dev); 
 		break;
 	case DISK_IOCTL_GET_ERASE_BLOCK_SZ:
-		(*(uint32_t *)buf) = NAND_PAGES_PER_ERASE_BLOCK;
+		/* Zephyr's disk API reports an erase block in logical sectors, not
+		 * bytes.  A sector is one NAND page for this raw disk. */
+		(*(uint32_t *)buf) = dev_pages_per_erase_block(dev);
 		break;
 	case DISK_IOCTL_CTRL_SYNC:
 		/* Ensure card is not busy with data write.
@@ -435,17 +450,40 @@ struct disk_info sdmmc_disk = {
 #define CONFIG_SPI_FLASH_LAYOUT_PAGE_SIZE 4096
 
 
-BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, size),
-	     "jedec,spi-nor size required for non-runtime SFDP page layout");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, individual_size),
+	     "nanddisk individual-size is required");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, num_flashchips),
+	     "nanddisk num-flashchips is required");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, dies_per_flash),
+	     "nanddisk dies-per-flash is required");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, page_size),
+	     "nanddisk page-size is required");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, pages_per_erase_block),
+	     "nanddisk pages-per-erase-block is required");
+BUILD_ASSERT(DT_INST_PROP(0, num_flashchips) <= 4,
+	     "the MT29 driver supports at most four DTS-described packages");
+BUILD_ASSERT(DT_PROP_LEN(DT_BUS(DT_DRV_INST(0)), cs_gpios) ==
+	     DT_INST_PROP(0, num_flashchips),
+	     "nanddisk num-flashchips must equal its SPI controller cs-gpios count");
+BUILD_ASSERT(DT_INST_PROP(0, page_size) == 4096,
+	     "raw NAND disk sectors must be 4096-byte NAND pages");
+BUILD_ASSERT(DT_INST_PROP(0, pages_per_erase_block) == NAND_PAGES_PER_ERASE_BLOCK,
+	     "bad-page mapping currently supports the MT29 64-page erase block");
+BUILD_ASSERT(DT_INST_PROP(0, dies_per_flash) == 2,
+	     "MT29 NAND address mapping currently supports two dies per package");
+BUILD_ASSERT((DT_INST_PROP(0, individual_size) %
+	      (DT_INST_PROP(0, page_size) * DT_INST_PROP(0, pages_per_erase_block) *
+	       DT_INST_PROP(0, dies_per_flash))) == 0,
+	     "NAND package geometry is inconsistent");
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 
 
-BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, size),
-	     "jedec,spi-nor size required for non-runtime SFDP page layout");
+BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, individual_size),
+	     "nanddisk individual-size is required for the page layout");
 
 
-#define INST_0_BYTES (DT_INST_PROP(0, size))
+#define INST_0_BYTES (DT_INST_PROP(0, individual_size))
 
 BUILD_ASSERT(SPI_NOR_IS_SECTOR_ALIGNED(CONFIG_SPI_FLASH_LAYOUT_PAGE_SIZE),
 	     "SPI_NOR_FLASH_LAYOUT_PAGE_SIZE must be multiple of 4096");
@@ -482,8 +520,23 @@ static const struct spi_flash_config spi_flash_config_0 =
 	/* Note: even though variables use dashes (-) in .yaml and devicetree, DT_INST_PROP requires them in underscores! (_)
 	 So, num-flashchips is num_flashchips.
 	*/
-	.flash_size = DT_INST_PROP(0, individual_size)*DT_INST_PROP(0, num_flashchips),
+	.flash_size = DT_INST_PROP(0, individual_size),
 	.num_flashes = DT_INST_PROP(0, num_flashchips),
+	.dies_per_flash = DT_INST_PROP(0, dies_per_flash),
+	.page_size = DT_INST_PROP(0, page_size),
+	.pages_per_erase_block = DT_INST_PROP(0, pages_per_erase_block),
+	.chip_selects = (const struct gpio_dt_spec[]) {
+		GPIO_DT_SPEC_GET_BY_IDX(DT_BUS(DT_DRV_INST(0)), cs_gpios, 0),
+	#if DT_INST_PROP(0, num_flashchips) > 1
+		GPIO_DT_SPEC_GET_BY_IDX(DT_BUS(DT_DRV_INST(0)), cs_gpios, 1),
+	#endif
+	#if DT_INST_PROP(0, num_flashchips) > 2
+		GPIO_DT_SPEC_GET_BY_IDX(DT_BUS(DT_DRV_INST(0)), cs_gpios, 2),
+	#endif
+	#if DT_INST_PROP(0, num_flashchips) > 3
+		GPIO_DT_SPEC_GET_BY_IDX(DT_BUS(DT_DRV_INST(0)), cs_gpios, 3),
+	#endif
+	},
 	.jedec_id = DT_INST_PROP(0, jedec_id),
 
 #if DT_INST_NODE_HAS_PROP(0, has_lock)

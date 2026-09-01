@@ -31,7 +31,7 @@
 #include "device_identity.h"
 #include "zephyrfilesystem.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
-#include "drivers/nand/nand_disk.h"
+#include "nand_disk.h"
 #endif
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>

@@ -32,6 +32,7 @@ static const struct gpio_dt_spec ecg_intb2 =
 	GPIO_DT_SPEC_GET(ECG_RECORD_MAX30001_NODE, intb2_gpios);
 
 static K_SEM_DEFINE(ecg_record_start_sem, 0, 1);
+static K_SEM_DEFINE(ecg_record_started_sem, 0, 1);
 static K_SEM_DEFINE(ecg_fifo_sem, 0, 1);
 static K_SEM_DEFINE(ecg_record_stopped_sem, 0, 1);
 static K_SEM_DEFINE(ecg_anchor_sem, 0, 1);
@@ -40,12 +41,23 @@ static struct gpio_callback ecg_intb_callback;
 static struct gpio_callback ecg_intb2_callback;
 static atomic_t ecg_record_requested;
 static atomic_t ecg_record_active;
+static atomic_t ecg_record_last_error;
+static atomic_t ecg_record_start_result;
+/*
+ * Set for each submitted start request and cleared only after the caller has
+ * consumed that request's terminal stopped acknowledgement.  This is not a
+ * second recorder state machine: it closes the cancellation-before-start
+ * race in the existing start/stopped semaphore protocol.
+ */
+static atomic_t ecg_record_stop_confirmation_pending;
 static bool ecg_intb_callback_added;
 static bool ecg_intb2_callback_added;
 static atomic_t ecg_anchor_state;
 static atomic_t ecg_anchor_error;
 static uint32_t ecg_anchor_rtc_tick;
 static uint32_t ecg_next_rtc_tick;
+static ecg_recorder_fault_handler_t ecg_record_fault_handler;
+static void *ecg_record_fault_context;
 
 enum ecg_record_anchor_state {
 	ECG_RECORD_ANCHOR_IDLE = 0,
@@ -253,15 +265,15 @@ static int ecg_record_wait_for_anchor(uint32_t *rtc_tick)
  * @param sample Decoded ECG sample to store.
  * @param rtc_tick Collection RTC tick associated with sample.
  */
-static void ecg_record_store_sample(const struct max30001_ecg_sample *sample,
-				    uint32_t rtc_tick)
+static int ecg_record_store_sample(const struct max30001_ecg_sample *sample,
+				   uint32_t rtc_tick)
 {
 	uint8_t frame[ECG_RECORD_FORMAT_FRAME_BYTES];
 
 	ecg_record_format_build_sample_frame(frame, sample->etag, sample->ptag,
 					 sample->raw, rtc_tick);
 
-	store_data(frame, sizeof(frame), ecg);
+	return store_data(frame, sizeof(frame), ecg);
 }
 
 /**
@@ -276,17 +288,24 @@ static void ecg_record_store_sample(const struct max30001_ecg_sample *sample,
  * @param samples Array of decoded samples.
  * @param count   Number of valid entries in samples.
  */
-static void ecg_record_process_samples(const struct max30001_ecg_sample *samples,
-				       size_t count)
+static int ecg_record_process_samples(const struct max30001_ecg_sample *samples,
+				      size_t count)
 {
+	int ret;
+
 	for (size_t i = 0; i < count; i++) {
 		if (!samples[i].time_valid) {
 			continue;
 		}
 
-		ecg_record_store_sample(&samples[i], ecg_next_rtc_tick);
+		ret = ecg_record_store_sample(&samples[i], ecg_next_rtc_tick);
+		if (ret != 0) {
+			return ret;
+		}
 		ecg_next_rtc_tick++;
 	}
+
+	return 0;
 }
 
 
@@ -327,7 +346,10 @@ static int ecg_record_drain_fifo(void)
 			return 0;
 		}
 
-		ecg_record_process_samples(samples, count);
+		ret = ecg_record_process_samples(samples, count);
+		if (ret != 0) {
+			return ret;
+		}
 
 		if (count < ARRAY_SIZE(samples) || samples[count - 1].eof) {
 			return 0;
@@ -362,22 +384,24 @@ static int ecg_record_run(void)
 	uint32_t rtc_tick;
 	bool sensor_configured = false;
 	bool anchor_ready = false;
+	bool start_reported = false;
 
 	if (!file_system_ready) {
 		LOG_ERR("Filesystem is not ready for ECG recording");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto out;
 	}
 
 	ret = ecg_record_configure_intb();
 	if (ret != 0) {
 		LOG_ERR("Failed to configure MAX30001 INTB: %d", ret);
-		return ret;
+		goto out;
 	}
 
 	ret = ecg_record_configure_intb2();
 	if (ret != 0) {
 		LOG_ERR("Failed to configure MAX30001 INT2B: %d", ret);
-		return ret;
+		goto out;
 	}
 
 	k_sem_reset(&ecg_fifo_sem);
@@ -444,6 +468,9 @@ static int ecg_record_run(void)
 	k_sem_give(&ecg_fifo_sem);
 	LOG_INF("ECG NAND recording active, first sample RTC tick=%u",
 		(unsigned int)ecg_next_rtc_tick);
+	atomic_set(&ecg_record_start_result, 0);
+	k_sem_give(&ecg_record_started_sem);
+	start_reported = true;
 
 	while (atomic_get(&ecg_record_requested) != 0) {
 		ret = k_sem_take(&ecg_fifo_sem, K_SECONDS(1));
@@ -474,8 +501,32 @@ out:
 		}
 	}
 	atomic_set(&ecg_anchor_state, ECG_RECORD_ANCHOR_IDLE);
+	if (!start_reported) {
+		atomic_set(&ecg_record_start_result, ret);
+		k_sem_give(&ecg_record_started_sem);
+	}
 
 	return ret;
+}
+
+static void ecg_record_request_stop(void)
+{
+	atomic_clear(&ecg_record_requested);
+	k_sem_give(&ecg_anchor_sem);
+	k_sem_give(&ecg_fifo_sem);
+}
+
+static int ecg_record_wait_for_stop_confirmation(void)
+{
+	int ret;
+
+	ret = k_sem_take(&ecg_record_stopped_sem, K_SECONDS(3));
+	if (ret != 0) {
+		return ret;
+	}
+
+	atomic_clear(&ecg_record_stop_confirmation_pending);
+	return 0;
 }
 
 /**
@@ -483,15 +534,14 @@ out:
  *
  * Created at boot by K_THREAD_DEFINE and never exits. It blocks on
  * ecg_record_start_sem until ecg_recorder_start() signals a session, then
- * repeatedly invokes ecg_record_run() while ecg_record_requested is set.
- * Around each run it maintains ecg_record_active (so ecg_recorder_stop() can
- * tell whether a session is in flight) and gives ecg_record_stopped_sem so
- * the stopper can synchronize with session teardown.
+ * invokes ecg_record_run() when that request is still live. Around each
+ * consumed start request it maintains ecg_record_active for diagnostics and
+ * gives ecg_record_stopped_sem, which is the sole stop-quiescence proof.
  *
  * If a session ends while a recording is still requested (i.e. it aborted on
- * error rather than being stopped), the error is logged and the session is
- * retried after a 1-second backoff, making recording self-healing across
- * transient sensor or bus failures.
+ * error rather than being stopped), the request is cleared and the optional
+ * collection fault handler is notified so the application can retain MSC
+ * medium absence rather than retrying against an uncertain filesystem state.
  *
  * @param arg1 Unused.
  * @param arg2 Unused.
@@ -506,47 +556,87 @@ static void ecg_record_thread(void *arg1, void *arg2, void *arg3)
 	for (;;) {
 		(void)k_sem_take(&ecg_record_start_sem, K_FOREVER);
 
-		while (atomic_get(&ecg_record_requested) != 0) {
-			int ret;
+		/*
+		 * Every consumed start token receives one terminal stopped
+		 * acknowledgement, including one cancelled before this thread ran.
+		 */
+		int ret = 0;
 
-			atomic_set(&ecg_record_active, 1);
+		atomic_set(&ecg_record_active, 1);
+		if (atomic_get(&ecg_record_requested) != 0) {
 			ret = ecg_record_run();
-			atomic_clear(&ecg_record_active);
-			k_sem_give(&ecg_record_stopped_sem);
-
-			if (atomic_get(&ecg_record_requested) == 0) {
-				break;
+			if (atomic_get(&ecg_record_requested) == 0 && ret == -ECANCELED) {
+				ret = 0;
 			}
-
-			LOG_ERR("ECG recording stopped after error: %d", ret);
-			k_sleep(K_SECONDS(1));
 		}
+
+		if (atomic_get(&ecg_record_requested) != 0) {
+			LOG_ERR("ECG recording stopped after error: %d", ret);
+			atomic_clear(&ecg_record_requested);
+			if (atomic_get(&ecg_record_start_result) == 0 &&
+			    ecg_record_fault_handler != NULL) {
+				ecg_record_fault_handler(ecg_record_fault_context);
+			}
+		}
+
+		atomic_set(&ecg_record_last_error, ret);
+		atomic_clear(&ecg_record_active);
+		k_sem_give(&ecg_record_stopped_sem);
 	}
 }
 
 /**
  * @brief Request that ECG recording begin (public API).
  *
- * Non-blocking entry point called from application code (e.g. when the user
- * enters ECG collection mode). After confirming the filesystem is ready, it
- * atomically transitions ecg_record_requested from 0 to 1 and wakes the
- * recorder thread, which performs all the actual sensor setup and streaming.
- * The compare-and-set makes the call idempotent: if a recording is already
- * requested, nothing happens and 0 is returned.
+ * Synchronous start-confirmation entry point called from application code
+ * (e.g. when the user enters ECG collection mode). After confirming the
+ * filesystem is ready, it wakes the recorder thread and waits for that thread
+ * to report either a configured recording path or its setup failure. A failed
+ * confirmation cancels the submitted request and requires the corresponding
+ * terminal stopped acknowledgement before it returns an ordinary setup error.
  *
- * @retval 0 if recording was started or was already running.
+ * @retval 0 if recording was started.
  * @retval -ENODEV if the filesystem is not ready.
+ * @retval -EBUSY if a prior submitted request has no consumed terminal stop
+ *         acknowledgement.
+ * @retval Other negative errno from recorder setup or start confirmation.
  */
 int ecg_recorder_start(void)
 {
+	int start_ret;
+	int stop_ret;
+	int ret;
+
 	if (!file_system_ready) {
 		return -ENODEV;
 	}
 
-	k_sem_reset(&ecg_record_stopped_sem);
+	if (atomic_get(&ecg_record_stop_confirmation_pending) != 0) {
+		return -EBUSY;
+	}
 
 	if (atomic_cas(&ecg_record_requested, 0, 1)) {
+		k_sem_reset(&ecg_record_stopped_sem);
+		k_sem_reset(&ecg_record_started_sem);
+		atomic_set(&ecg_record_stop_confirmation_pending, 1);
+		atomic_clear(&ecg_record_last_error);
+		atomic_set(&ecg_record_start_result, -EINPROGRESS);
 		k_sem_give(&ecg_record_start_sem);
+		ret = k_sem_take(&ecg_record_started_sem, K_SECONDS(3));
+		if (ret != 0) {
+			start_ret = ret;
+			ecg_record_request_stop();
+			stop_ret = ecg_record_wait_for_stop_confirmation();
+			return (stop_ret != 0) ? stop_ret : start_ret;
+		}
+
+		ret = atomic_get(&ecg_record_start_result);
+		if (ret != 0) {
+			start_ret = ret;
+			ecg_record_request_stop();
+			stop_ret = ecg_record_wait_for_stop_confirmation();
+			return (stop_ret != 0) ? stop_ret : start_ret;
+		}
 	}
 
 	return 0;
@@ -558,24 +648,41 @@ int ecg_recorder_start(void)
  *
  * Clears ecg_record_requested so the recorder thread's session loop exits,
  * and gives ecg_fifo_sem to wake the thread immediately rather than letting
- * it wait out its 1-second semaphore timeout. If no session was active the
- * call returns at once; otherwise it blocks (up to 3 seconds) on
- * ecg_record_stopped_sem until the thread has drained the final samples and
- * powered down the sensor, so callers know storage is quiescent when this
- * returns.
+ * it wait out its 1-second semaphore timeout. If no submitted session awaits
+ * a terminal acknowledgement the call returns at once; otherwise it blocks
+ * (up to 3 seconds) on ecg_record_stopped_sem until the thread has drained
+ * final samples and powered down the sensor. It does not use a sampled active
+ * flag as proof of recorder quiescence.
  *
- * @retval 0 once recording has stopped (or none was active).
- * @retval -EAGAIN if the active session did not confirm shutdown within 3 s.
+ * @retval 0 once recording has stopped (or no acknowledgement was pending).
+ * @retval -EAGAIN if the submitted session did not confirm shutdown within
+ *         3 s.
  */
 int ecg_recorder_stop(void)
 {
-	atomic_clear(&ecg_record_requested);
-	k_sem_give(&ecg_anchor_sem);
-	k_sem_give(&ecg_fifo_sem);
+	int ret;
 
-	if (atomic_get(&ecg_record_active) == 0) {
+	if (atomic_get(&ecg_record_stop_confirmation_pending) == 0) {
 		return 0;
 	}
 
-	return k_sem_take(&ecg_record_stopped_sem, K_SECONDS(3));
+	ecg_record_request_stop();
+	ret = ecg_record_wait_for_stop_confirmation();
+	if (ret != 0) {
+		return ret;
+	}
+
+	return atomic_get(&ecg_record_last_error);
+}
+
+bool ecg_recorder_shutdown_confirmed(void)
+{
+	return atomic_get(&ecg_record_stop_confirmation_pending) == 0;
+}
+
+void ecg_recorder_set_fault_handler(ecg_recorder_fault_handler_t handler,
+					     void *context)
+{
+	ecg_record_fault_handler = handler;
+	ecg_record_fault_context = context;
 }

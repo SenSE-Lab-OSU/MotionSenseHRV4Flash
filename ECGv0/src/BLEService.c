@@ -10,8 +10,6 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/spinlock.h>
-#include <zephyr/usb/usb_device.h>
-#include "custom_qspi.h"
 
 #include "ppgSensor.h"
 #include "batterymonitordt.h"
@@ -25,11 +23,6 @@
 #include <nrfx_rtc.h>
 #include "BLEService.h"
 #include "imuFsyncTiming.h"
-
-#if CONFIG_DISK_DRIVER_RAW_NAND
-#include "spi_nand.h"
-#include "nand_disk.h"
-#endif
 
 
 
@@ -567,49 +560,14 @@ void disconnected(struct bt_conn *conn, uint8_t reason){
 
 
 
-void reset_device(bool reset_bad_blocks){
-  
-  if (!IS_ENABLED(CONFIG_USB_ALWAYS_ON)){
-    usb_disable();
-  } 
-    //reset the flash memory first
-  LOG_INF("Performing Chip Erase...\n");
-  // Get the board-owned NAND device through its stable application alias.
-  const struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
-  if (device_is_ready(flash_device)){
-    LOG_INF("flash dev eraseing... \n");
-    reset_lock = true;
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    if (reset_bad_blocks){
-      LOG_WRN("Erasing bad block table...");
-      spi_nand_multi_chip_reset_bad_block(flash_device);
-    }
-    else{
-      spi_nand_multi_chip_erase(flash_device);
-    }
-    #else
-    #if !DT_NODE_HAS_PROP(DT_ALIAS(spi_flash0), size)
-    #error "flash needs size property in order to be erased"
-    #endif 
-    LOG_INF("eraseing nor flash");
-    int size = DT_PROP(DT_ALIAS(spi_flash0), size) / 8;
-    flash_erase(flash_device, 0, size);
-    #endif
-    
-    
-    LOG_INF("Chip Erase Complete! Resetting");
-    k_sleep(K_SECONDS(2));
-  }
-  else {
-    LOG_ERR("Couldn't erase flash chip, device not ready.");
-  }
-   
-  NVIC_SystemReset();
+void reset_device(bool reset_bad_blocks)
+{
+  int ret = request_ecg_storage_reset(reset_bad_blocks);
 
+  if (ret != 0) {
+    LOG_ERR("Storage reset request rejected: %d", ret);
+  }
 }
-
-void exit_ecg_collection_mode(void);
-void enter_ecg_collection_mode(void);
 
 static ssize_t write_enable_value(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
@@ -625,14 +583,7 @@ uint16_t offset, uint8_t flags){
   }
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
-  host_wants_collection = val;
-  
-  if (collecting_data && !host_wants_collection) {
-    exit_ecg_collection_mode();
-  } 
-  else if(!collecting_data && host_wants_collection) {
-    enter_ecg_collection_mode();
-  }
+  request_ecg_collection_mode(val != 0U);
   return len;
 }
 
@@ -683,14 +634,10 @@ uint16_t offset, uint8_t flags){
   return len;
 }
 
-//function from main
-void storage_clear_led();
-void blink_led(gpio_pin_t pin);
-
-
-
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
+  int ret;
+
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
 		(void *)conn, len);
 
@@ -698,6 +645,7 @@ uint16_t offset, uint8_t flags){
 	LOG_INF("Write length: %i", len);
   if (len != 1){
     LOG_WRN("invalid packet length for reset: %i", len);
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
   }
   
   if (offset != 0) {
@@ -708,29 +656,26 @@ uint16_t offset, uint8_t flags){
   // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
-  if ((val == 68 || val == 121 || val == 132) && !collecting_data){
-    LOG_INF("Correct Code Entered, Resetting Device");
-    LOG_INF("disconnecting bluetooth.. \n");
-    bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-    bt_le_adv_stop();
-    connectedFlag=false;
-    shutdown_filesystem();
-
-    
-    storage_clear_led();
-    k_sleep(K_SECONDS(1));
-    // 68 is for a whole reset, meaning we clear the flash memory of all data too.
-    if (val == 68 || val == 132){
-      reset_device(val == 132);
-    }
-    else {
-      
-      NVIC_SystemReset();
-    }
-    return NRFX_SUCCESS;  
+  if (val == 68) {
+    ret = request_ecg_storage_reset(false);
+  } else if (val == 132) {
+    ret = request_ecg_storage_reset(true);
+  } else if (val == 121) {
+    ret = request_ecg_storage_reboot();
+  } else {
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
   }
-  
-  return -1;
+
+  if (ret != 0) {
+    LOG_ERR("Reset request rejected: %d", ret);
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+  }
+
+  LOG_INF("Queued reset through ECG storage transition owner");
+  (void)bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+  (void)bt_le_adv_stop();
+  connectedFlag = false;
+  return len;
 }
 
 // Note: Currently does not work, more work is needed to allow dynamic runtime name changing.
@@ -780,15 +725,18 @@ uint16_t offset, uint8_t flags){
     printk("Advertising successfully started\n");
   }
   k_sleep(K_SECONDS(1));
-  NVIC_SystemReset();
   return 0;
   
 }
 */
 void create_test_files_through_file_workqueue(struct k_work* work){
-  storage_clear_led();
-  create_test_files(100);
-  blink_led(31);
+  int ret;
+
+  ARG_UNUSED(work);
+  ret = request_ecg_manual_test_file(130);
+  if (ret != 0) {
+    LOG_ERR("Queued test-file request rejected: %d", ret);
+  }
 
 }
 
@@ -803,12 +751,15 @@ void crash_device(){
 
 static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
   uint16_t offset, uint8_t flags){
+    int ret;
+
     LOG_INF("Attribute other settings write, handle: %u, conn: %p, length %i", attr->handle,
       (void *)conn, len);
   
     
     if (len != 1){
       LOG_WRN("invalid packet length: %i", len);
+      return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
     
     if (offset != 0) {
@@ -829,56 +780,19 @@ static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_a
         ppgConfig.green_intensity = val;
         ppgConfig.infraRed_intensity = val - 10;
       }
-      else if (val >= 122){
-        // if the value submitted to the brightness characteristic is 150 or 130, create test files, for testing the file system.
-        if ((val == 130 || val == 150) && !collecting_data){
-
-          bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-          reset_lock = true;
-          #ifndef CONFIG_USB_ALWAYS_ON
-          usb_disable();
-          #endif
-          LOG_INF("Manual file creation");
-          k_sleep(K_SECONDS(1));
-          LOG_INF("begin");
-          #if CONFIG_DISK_DRIVER_RAW_NAND
-            set_read_only(false);
-          #endif
-
-          
-          if (val == 150){
-            storage_clear_led();
-            create_test_files(500);
-            blink_led(31);
-          }
-          else{
-            LOG_INF("100 opt");
-            //struct k_work work;
-            //k_work_init(&work, create_test_files_through_file_workqueue);
-            //k_work_submit_to_queue(&my_work_q, &work);
-            create_test_files(100);
-          }
-          
-          reset_lock = false;
-          #if CONFIG_DISK_DRIVER_RAW_NAND
-          set_read_only(true);
-          #endif
-          //bt_enable(bt_ready);
-          #ifndef CONFIG_USB_ALWAYS_ON
-          if (!security_lock){
-          usb_enable(NULL);
-          }
-          #endif
-          
-          //NVIC_SystemReset();
-
+      else if (val == 130 || val == 150){
+        ret = request_ecg_manual_test_file(val);
+        if (ret != 0) {
+          LOG_ERR("Manual file creation request rejected: %d", ret);
+          return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
         }
-      }  
-      return 0;
+        LOG_INF("Queued manual file creation through ECG storage owner");
+      }
+      return len;
       
     }
     
-    return -1;
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
   }
 
 

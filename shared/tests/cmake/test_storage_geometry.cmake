@@ -15,6 +15,7 @@ endfunction()
 set(PPG_DTS "${MSENSE_SOURCE_ROOT}/boards/senselab/ppgv2/ppgv2_nrf5340_cpuapp.dts")
 set(ECG_DTS "${MSENSE_SOURCE_ROOT}/boards/senselab/ecgv0/ecgv0_nrf5340_cpuapp.dts")
 set(NAND_SOURCE "${MSENSE_SOURCE_ROOT}/shared/drivers/nand/spi_nand.c")
+set(STORAGE_LOG_SOURCE "${MSENSE_SOURCE_ROOT}/shared/storage_log_backend.c")
 
 foreach(dts IN ITEMS "${PPG_DTS}" "${ECG_DTS}")
 	require_match("${dts}" "individual-size[ \\t]*=[ \\t]*<1073741824>"
@@ -70,4 +71,31 @@ if((file_table_error_pos EQUAL -1) OR (file_table_return_pos EQUAL -1) OR
    (all_complete_pos EQUAL -1) OR NOT (file_table_error_pos LESS file_table_return_pos) OR
    NOT (file_table_return_pos LESS all_complete_pos))
 	message(FATAL_ERROR "NOR file-table erase failure must return before all-erase success is logged")
+endif()
+
+# log_output_write() retries its callback until the requested length is
+# consumed. The storage backend must therefore report intentionally discarded
+# bytes as consumed instead of returning zero and blocking later backends.
+file(READ "${STORAGE_LOG_SOURCE}" storage_log_contents)
+string(FIND "${storage_log_contents}" "int write_log_to_file" storage_write_start)
+string(FIND "${storage_log_contents}" "BUILD_ASSERT" storage_write_end)
+if((storage_write_start EQUAL -1) OR (storage_write_end EQUAL -1))
+	message(FATAL_ERROR "unable to locate storage log output callback")
+endif()
+math(EXPR storage_write_length "${storage_write_end} - ${storage_write_start}")
+string(SUBSTRING "${storage_log_contents}" ${storage_write_start} ${storage_write_length}
+	storage_write_source)
+string(FIND "${storage_write_source}" "if (!msense_storage_log_write_enabled())" disabled_write_start)
+string(FIND "${storage_write_source}" "return msense_storage_log_append" storage_append_start)
+if((disabled_write_start EQUAL -1) OR (storage_append_start EQUAL -1))
+	message(FATAL_ERROR "storage log callback must retain its policy and append paths")
+endif()
+math(EXPR disabled_write_length "${storage_append_start} - ${disabled_write_start}")
+string(SUBSTRING "${storage_write_source}" ${disabled_write_start} ${disabled_write_length}
+	disabled_write_source)
+if(disabled_write_source MATCHES "return[ \t]+0;")
+	message(FATAL_ERROR "disabled storage logging must not return zero to log_output_write")
+endif()
+if(NOT disabled_write_source MATCHES "return[ \t]+\\(int\\)length;")
+	message(FATAL_ERROR "disabled storage logging must report every discarded byte as consumed")
 endif()

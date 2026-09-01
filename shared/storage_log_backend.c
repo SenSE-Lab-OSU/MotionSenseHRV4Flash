@@ -29,7 +29,9 @@ int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 {
 	ARG_UNUSED(ctx);
 	if (!msense_storage_log_write_enabled()) {
-		return 0;
+		/* Discarded bytes must be reported as consumed so log_output_write()
+		 * does not retry this callback indefinitely. */
+		return (int)length;
 	}
 	return msense_storage_log_append(data, length);
 }

@@ -389,6 +389,10 @@ void motion_data_timeout_handler(struct k_work *item)
 {
   struct motionInfo *the_device = ((struct motionInfo *)(((char *)(item)) - offsetof(struct motionInfo, work)));
   uint16_t pktCounter = the_device->pktCounter;
+
+  if (!ppg_collection_producers_enabled()) {
+    return;
+  }
   
   uint8_t burst_tx[13] = {
       READMASTER | ACCEL_XOUT_H, SPI_FILL,
@@ -486,7 +490,10 @@ void motion_data_timeout_handler(struct k_work *item)
     uint32_t global_tick_512hz = global_counter;
     memcpy(&accel_and_gyro[11], &global_tick_512hz, sizeof(global_tick_512hz));
 
-    store_data(accel_and_gyro, sizeof(accel_and_gyro), 1);
+    if (store_data(accel_and_gyro, sizeof(accel_and_gyro), accelorometer) != 0) {
+      /* store_data() has signalled the deferred storage transition owner. */
+      return;
+    }
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 
     // this function seperately fills blePktMotion with the desired size

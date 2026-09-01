@@ -152,6 +152,15 @@ int rtc0_collection_counter_get(uint32_t *ticks);
 int rtc0_collection_notification_start(void);
 
 
+/* These APIs only signal the authoritative ECG transition owner in main.c. */
+void request_ecg_collection_mode(bool enable);
+int request_ecg_storage_reboot(void);
+int request_ecg_storage_reset(bool reset_bad_blocks);
+int request_ecg_manual_test_file(uint8_t command);
+void request_ecg_storage_fault(void);
+void ecg_filesystem_log_enable(void);
+void ecg_filesystem_log_disable(void);
+void ecg_filesystem_log_disable_and_wait(void);
 void reset_device(bool reset_bad_blocks);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES

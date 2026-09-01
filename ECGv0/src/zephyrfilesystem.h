@@ -35,30 +35,28 @@ extern struct k_work_q my_work_q;
 
 
 
-void setup_disk(void);
+int setup_disk(void);
+int shutdown_filesystem(void);
+int filesystem_drain_pending_work(void);
+int filesystem_gate_and_drain(void);
+bool filesystem_is_mounted(void);
 
-void create_test_file(int sectors);
+int create_test_file(int writes);
 
-void create_test_files(int number_of_files);
+int create_test_files(int number_of_files);
 
-void sensor_write_to_file(const void* data, size_t size, enum sensor_type);
+int sensor_write_to_file(const void* data, size_t size, enum sensor_type);
 
 int write_to_file(const void* data, size_t size);
 
 
 
-int close_all_files();
-
-void reset_log_file();
-
-void shutdown_filesystem();
-
-void submit_write(const void* data, size_t size, enum sensor_type type);
+int submit_write(const void* data, size_t size, enum sensor_type type);
 
 
-void store_data(const void* data, size_t size, enum sensor_type sensor);
+int store_data(const void* data, size_t size, enum sensor_type sensor);
 
-void flush_data_buffer(enum sensor_type sensor);
+int flush_data_buffer(enum sensor_type sensor);
 
 void filesystem_set_collection_id(uint64_t collection_id);
 void filesystem_clear_collection_id(void);
@@ -74,8 +72,8 @@ int get_storage_percent_full();
 
 extern uint8_t storage_percent_full;
 
-int write_ble_uuid(const char *ble_address, const char *ble_name,
-		   const char *device_id_hex);
+int write_device_info_file(const char *device_name,
+			   const char *device_id_hex);
 
 //k work item
 void work_write(struct k_work* item);

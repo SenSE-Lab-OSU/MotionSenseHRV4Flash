@@ -712,7 +712,10 @@ void read_ppg_fifo_buffer(struct k_work *item)
     uint32_t global_tick_512hz = global_counter;
     ppg_samples[4] = global_tick_512hz;
     
-    store_data(ppg_samples, sizeof(ppg_samples), 0);
+    if (store_data(ppg_samples, sizeof(ppg_samples), ppg) != 0) {
+      /* store_data() has signalled the deferred storage transition owner. */
+      return;
+    }
     
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};

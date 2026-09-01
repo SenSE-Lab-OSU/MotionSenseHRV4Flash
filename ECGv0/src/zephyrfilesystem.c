@@ -109,6 +109,8 @@ bool direct_write_file = true;
 
 // internally linked globals
 static struct fs_mount_t fs_mnt;
+static bool filesystem_mounted;
+static int close_all_files(void);
 static bool collection_id_valid;
 static uint64_t active_collection_id;
 //counter to serve as a amount for when the file fills up.
@@ -273,54 +275,103 @@ char test_file_arr[4096*2] = "hello world, this is a story about a man who liked
     "carrying stories in his breath and dreams in his stride.";
 
 	
-void create_test_file(int writes){
-	printk("write file...\n");
-	
+int create_test_file(int writes)
+{
 	char destination[50] = "";
-	int ID = 0;
-	struct fs_mount_t* mp = &fs_mnt;
-	char IDString[12];
-
-
+	char id_string[12];
 	struct fs_file_t test_file;
+	struct fs_mount_t *mp = &fs_mnt;
+	FRESULT expand_ret;
+	int close_ret;
+	int ret;
+	int sync_ret;
+	ssize_t write_ret;
+
+	if (!file_system_ready || !filesystem_mounted) {
+		LOG_ERR("Filesystem is unavailable for test-file creation");
+		return -EACCES;
+	}
+	if (writes < 0) {
+		return -EINVAL;
+	}
+
+	printk("write file...\n");
 	fs_file_t_init(&test_file);
 	total_test_files++;
-	//ID = sys_rand32_get() % 90000;
-	ID = total_test_files;
-	
-	snprintf(IDString, sizeof(IDString), "%d", ID);
+	ret = snprintf(id_string, sizeof(id_string), "%d", total_test_files);
+	if (ret < 0 || ret >= (int)sizeof(id_string)) {
+		return -ENAMETOOLONG;
+	}
 
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
-	strcat(destination, IDString);
+	strcat(destination, id_string);
 	strcat(destination, "testing.txt");
-	int file_create = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
-	FIL* fatfs_file_ptr = (FIL *)test_file.filep;
-	FRESULT res = f_expand(fatfs_file_ptr, 4096*max_writes*2, 1);
-	if (res != 0){
-		LOG_WRN("failed to expand test file");
+	ret = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
+	if (ret != 0) {
+		return ret;
 	}
-	if (file_create == 0)
-	{
-		
-		for (int i = 0; i < writes; i++)
-		{
-			//k_sleep(K_SECONDS(.5)); for debug purposes in case it's ever necessary to see how files write slowly
-			fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
+
+	expand_ret = f_expand((FIL *)test_file.filep, 4096 * max_writes * 2, 1);
+	if (expand_ret != FR_OK) {
+		LOG_WRN("Failed to expand test file: %d", expand_ret);
+		ret = -EIO;
+		goto close_file;
+	}
+
+	ret = 0;
+	for (int i = 0; i < writes; i++) {
+		write_ret = fs_write(&test_file, test_file_arr, sizeof(test_file_arr));
+		if (write_ret < 0) {
+			ret = (int)write_ret;
+			break;
 		}
-		printk("done write\n");
-		fs_close(&test_file);
+		if (write_ret != (ssize_t)sizeof(test_file_arr)) {
+			ret = -EIO;
+			break;
+		}
 	}
+
+close_file:
+	sync_ret = fs_sync(&test_file);
+	close_ret = fs_close(&test_file);
+	if (sync_ret != 0) {
+		LOG_ERR("Test-file sync failed: %d", sync_ret);
+	}
+	if (close_ret != 0) {
+		LOG_ERR("Test-file close failed: %d", close_ret);
+	}
+	if (ret == 0 && sync_ret != 0) {
+		ret = sync_ret;
+	}
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
+	if (ret == 0) {
+		printk("done write\n");
+	}
+
+	return ret;
 }
 
-void create_test_files(int number_of_files){
-	LOG_INF("creating test files...");
-	for (int x = 0; x < number_of_files; x++){
-		LOG_INF("file %d of %d", x, number_of_files);
-		create_test_file(512);
+int create_test_files(int number_of_files)
+{
+	int ret;
+
+	if (number_of_files < 0) {
+		return -EINVAL;
 	}
 
+	LOG_INF("creating test files...");
+	for (int x = 0; x < number_of_files; x++) {
+		LOG_INF("file %d of %d", x, number_of_files);
+		ret = create_test_file(512);
+		if (ret != 0) {
+			return ret;
+		}
+	}
 
+	return 0;
 }
 
 bool is_file_open(struct fs_file_t *zfp) {
@@ -344,40 +395,129 @@ bool file_exists(const char *path)
     return false;
 }
 
-void reset_sensor_file(MotionSenseFile* MSenseFile){
-	fs_close(&MSenseFile->self_file);
-	MSenseFile->buffer1.current_size = 0;
-	MSenseFile->buffer2.current_size = 0;
-	MSenseFile->switch_buffer = false;
-	MSenseFile->current_writes = 0;
-	MSenseFile->first_sample_init = false;
+bool filesystem_is_mounted(void)
+{
+	return filesystem_mounted;
 }
 
+int filesystem_drain_pending_work(void)
+{
+	int ret;
 
+	ret = k_work_queue_drain(&my_work_q, false);
+	if (ret < 0) {
+		return ret;
+	}
 
+	return 0;
+}
 
-void shutdown_filesystem(){
-	close_all_files();
+int filesystem_gate_and_drain(void)
+{
+	int ret;
+
+	ret = k_work_queue_drain(&my_work_q, true);
 	file_system_ready = false;
-	//struct fs_mount_t* mp = &fs_mnt;
-	//fs_unmount(mp);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
 }
 
-void reset_log_file(){
-	reset_sensor_file(&log_file);
+static int sync_and_close_file(struct fs_file_t *file_to_close)
+{
+	int sync_ret;
+	int close_ret;
+
+	if (file_to_close->mp == NULL) {
+		return 0;
+	}
+
+	sync_ret = fs_sync(file_to_close);
+	close_ret = fs_close(file_to_close);
+	if (sync_ret != 0) {
+		return sync_ret;
+	}
+
+	return close_ret;
 }
 
-void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
+static int reset_sensor_file(MotionSenseFile *msense_file)
+{
+	int ret;
+
+	ret = sync_and_close_file(&msense_file->self_file);
+	if (ret != 0) {
+		return ret;
+	}
+
+	fs_file_t_init(&msense_file->self_file);
+	msense_file->buffer1.current_size = 0;
+	msense_file->buffer2.current_size = 0;
+	msense_file->switch_buffer = false;
+	msense_file->current_writes = 0;
+	msense_file->first_sample_init = false;
+	return 0;
+}
+
+
+
+
+int shutdown_filesystem(void)
+{
+	int close_ret;
+	int unmount_ret;
+
+	file_system_ready = false;
+	if (!filesystem_mounted) {
+		return 0;
+	}
+
+	close_ret = close_all_files();
+	unmount_ret = fs_unmount(&fs_mnt);
+	if (unmount_ret == 0) {
+		filesystem_mounted = false;
+	} else {
+		LOG_ERR("Failed to unmount filesystem: %d", unmount_ret);
+	}
+
+	if (close_ret != 0) {
+		return close_ret;
+	}
+
+	return unmount_ret;
+}
+
+static int sensor_write_failure(enum sensor_type sensor, const char *operation,
+				int error)
+{
+	int ret = error < 0 ? error : -EIO;
+
+	file_system_malfunction = true;
+	status_reg_ble_notification();
+	LOG_WRN("%s failed for sensor %d: %d", operation, sensor, error);
+	return ret;
+}
+
+int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
+	int close_ret;
+	int storage_ret;
+	int sync_ret;
+	ssize_t total_written;
+	FRESULT expand_ret;
+
+	if (!file_system_ready || !filesystem_mounted) {
+		return sensor_write_failure(sensor, "Filesystem unavailable", -EACCES);
+	}
 	if (storage_percent_full >= 99){
-		LOG_WRN("Storage is getting full, aborting write");
-		return;
+		return sensor_write_failure(sensor, "Storage full", -ENOSPC);
 	}
 
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()){
-		LOG_WRN("Tried to write while in readonly mode, aborting");
-		return;
+		return sensor_write_failure(sensor, "Raw disk is read-only", -EROFS);
 	}
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
@@ -389,8 +529,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		MSenseFile = &log_file;
 	}
 	else {
-		LOG_WRN("invalid file type given");
-		return;
+		return sensor_write_failure(sensor, "Invalid sensor type", -EINVAL);
 	}
 
 
@@ -405,9 +544,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 				MSenseFile->chunk_index);
 
 			if (path_ret != 0) {
-				LOG_WRN("Unable to construct ECG recording path: %d", path_ret);
-				file_system_malfunction = true;
-				return;
+				return sensor_write_failure(sensor, "ECG recording path construction",
+							    path_ret);
 			}
 		} else {
 			uint64_t ID = 0;
@@ -456,48 +594,55 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			int stat_ret = fs_stat(MSenseFile->file_name, &entry);
 
 			if (stat_ret == 0) {
-				LOG_WRN("ECG recording chunk already exists");
-				file_system_malfunction = true;
-				return;
+				return sensor_write_failure(sensor,
+							    "ECG recording chunk already exists", -EEXIST);
 			}
 			if (stat_ret != -ENOENT) {
-				LOG_WRN("Unable to check ECG recording chunk: %d", stat_ret);
-				file_system_malfunction = true;
-				return;
+				return sensor_write_failure(sensor, "ECG recording chunk stat",
+							    stat_ret);
 			}
 		}
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
-			LOG_WRN("Unable to create file for %d", sensor);
-			file_system_malfunction = true;
-			return;
+			return sensor_write_failure(sensor, "File open", file_create);
+		}
+		if (MSenseFile->self_file.filep == NULL) {
+			close_ret = fs_close(&MSenseFile->self_file);
+			if (close_ret != 0) {
+				LOG_WRN("File close after invalid open state failed for sensor %d: %d",
+					sensor, close_ret);
+			}
+			return sensor_write_failure(sensor, "File open returned no file handle",
+						    -EIO);
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
-		FRESULT res = f_expand(MSenseFile->self_file.filep,
-					       RECORDING_FILE_BYTES, 1);
-		if (res != 0){
-			LOG_WRN("failed to expand file");
-			file_system_malfunction = true;
-			(void)fs_close(&MSenseFile->self_file);
-			return;
+		expand_ret = f_expand(MSenseFile->self_file.filep,
+					     RECORDING_FILE_BYTES, 1);
+		if (expand_ret != FR_OK){
+			close_ret = fs_close(&MSenseFile->self_file);
+			if (close_ret != 0) {
+				LOG_WRN("File close after expansion failure failed for sensor %d: %d",
+					sensor, close_ret);
+			}
+			return sensor_write_failure(sensor, "File expansion", -EIO);
 		}
 	}
 	else if (data_counter >= data_limit){
 		data_counter = 0;
 	}
 	
-	int total_written = fs_write(&MSenseFile->self_file, data, size);
-	MSenseFile->current_writes++;
-	//fs_write(&file, data, size);
-	if (total_written == size){
+	total_written = fs_write(&MSenseFile->self_file, data, size);
+	if (total_written == (ssize_t)size){
+		MSenseFile->current_writes++;
 		LOG_INF("successfully wrote to file for %d, bytes = %i, writes = %i !", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
 	else if (total_written < 0){
-		LOG_WRN("system failed %d write for %d! tot writes before: %d ", size, sensor, MSenseFile->current_writes);
-		file_system_malfunction = true;
-		status_reg_ble_notification();
+		return sensor_write_failure(sensor, "File write", (int)total_written);
+	}
+	else {
+		return sensor_write_failure(sensor, "Short file write", -EIO);
 	}
 
 	if (MSenseFile->current_writes >= MSenseFile->max_writes){
@@ -506,24 +651,34 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		//FIL* fp = &MSenseFile->self_file.filep;
 		//fp->obj.objsize = fp->fptr;
 		//fp->flag |= 0x40; // = FA_MODIFIED
-		int close_ret = fs_close(&MSenseFile->self_file);
+		sync_ret = fs_sync(&MSenseFile->self_file);
+		close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
-		if (close_ret < 0){
-			file_system_malfunction = 5;
-			status_reg_ble_notification();
-			LOG_WRN("Error on closing file");
+		if (sync_ret != 0) {
+			return sensor_write_failure(sensor, "File rollover sync", sync_ret);
+		}
+		if (close_ret != 0){
+			return sensor_write_failure(sensor, "File rollover close", close_ret);
 		}
 		MSenseFile->current_writes = 0;
 		if ((sensor == ecg) && collection_id_valid) {
 			MSenseFile->chunk_index++;
 		}
-		get_storage_percent_full();
+		storage_ret = get_storage_percent_full();
+		if (storage_ret < 0) {
+			return sensor_write_failure(sensor, "Storage capacity query", storage_ret);
+		}
 	}
+
+	return 0;
 }
 
 // writes data to a single file named 'test.txt' future TODO: make an extra string parameter so that the file name is customizable
 int write_to_file(const void* data, size_t size){
 	struct fs_mount_t* mp = &fs_mnt;
+	if (!file_system_ready || !filesystem_mounted) {
+		return -EACCES;
+	}
 	if (!first_write ){
 		
 		fs_file_t_init(&file);
@@ -581,11 +736,14 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
+	int write_ret;
+
 	LOG_INF("Processing packet %i", container->packet_num);
 	start_timer();
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
-	sensor_write_to_file(container->address, container->size, container->sensor);
+	write_ret = sensor_write_to_file(container->address, container->size,
+					 container->sensor);
 	int64_t time_value = stop_timer();
 	LOG_INF("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
@@ -596,13 +754,24 @@ void work_write(struct k_work* item){
 	last_packet_number_processed = container->packet_num;
 	LOG_DBG("writing false for container %d", container->sensor);
 	container->in_use = false;
+	if (write_ret != 0) {
+		LOG_ERR("Filesystem write failed for sensor %d: %d", container->sensor,
+			write_ret);
+		request_ecg_storage_fault();
+	}
 
 }
 
-void submit_write(const void* data, size_t size, enum sensor_type type){
+int submit_write(const void* data, size_t size, enum sensor_type type){
 	
 	//memcpy(work_item.address, data, size);
 	memory_container* work_item;
+	int ret;
+
+	if (!file_system_ready || !filesystem_mounted) {
+		return -EACCES;
+	}
+
 	if (type == ppg){
 		work_item = &ppg_work_item;
 	}
@@ -614,41 +783,43 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	}
 	else {
 		LOG_WRN("invalid file type given");
-		return;
+		return -EINVAL;
 	}
 	int work_status = k_work_busy_get(&work_item->work);
 	if (work_status != 0){
 		LOG_WRN("work state for %d not zero", type);
+		return -EBUSY;
 	}
 	LOG_DBG("state for sensor %d: %d", type, work_status);
 	
-	if (!work_item->in_use){
+	if (work_item->in_use){
+		LOG_ERR("work item attempted schedule while still running for type: %i", type);
+		return -EBUSY;
+	}
 
 	work_item->address = data;
 	work_item->size = size;
 	work_item->sensor = type;
 	packet_number++;
 	work_item->packet_num = packet_number;
-	int ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
+	ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
 	if (ret != 1){
 		upload_timeout_errors += 1;
-		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
-		
+		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret,
+			upload_timeout_errors);
+		return (ret < 0) ? ret : -EALREADY;
 	}
 	LOG_INF("ret value for %i: %i", type, ret);
-	}
-	else{
-		LOG_ERR("work item attempted schedule while still running for type: %i", type);
-	}
+	return 0;
 }
 
 
-void store_data(const void* data, size_t size, enum sensor_type sensor){
+int store_data(const void* data, size_t size, enum sensor_type sensor){
 	LOG_DBG("Store data called");
 	data_upload_buffer* current_buffer;
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
-	bool first_init = false;
+	int ret;
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
@@ -660,7 +831,8 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else{
 		LOG_WRN("sensor type unknown");
-		return;
+		request_ecg_storage_fault();
+		return -EINVAL;
 	}
 
 	if (MSenseFile->switch_buffer){
@@ -668,6 +840,17 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else {
 		current_buffer = &MSenseFile->buffer1;
+	}
+	if (current_buffer->current_size >= MSenseFile->write_size) {
+		LOG_ERR("Completed buffer for %d is still awaiting ownership", sensor);
+		request_ecg_storage_fault();
+		return -EBUSY;
+	}
+	if (size > sizeof(current_buffer->data_upload_buffer) -
+		    current_buffer->current_size) {
+		LOG_ERR("Buffer capacity exceeded for %d", sensor);
+		request_ecg_storage_fault();
+		return -ENOSPC;
 	}
 
 	if (!MSenseFile->first_sample_init){
@@ -677,32 +860,40 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 			MSenseFile->start_time = get_current_unix_time();
 		}
 		MSenseFile->first_sample_init = true;
-		first_init = true;
 	}
 
 	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
 	memcpy(address_to_write, data, size);
 	current_buffer->current_size += size;
-	if (current_buffer->current_size + size >= MSenseFile->write_size){
-		if (current_buffer->current_size + size != MSenseFile->write_size){
+	if (current_buffer->current_size >= MSenseFile->write_size){
+		if (current_buffer->current_size != MSenseFile->write_size){
 			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
+		}
+		if (panic_single_thread) {
+			LOG_ERR("Cannot verify a direct buffer write during panic mode");
+			request_ecg_storage_fault();
+			return -ENOTSUP;
+		}
+		LOG_INF("Submitting Write!");
+		ret = submit_write(current_buffer->data_upload_buffer,
+					   current_buffer->current_size, sensor);
+		if (ret != 0) {
+			LOG_ERR("Unable to submit completed buffer for %d: %d", sensor, ret);
+			request_ecg_storage_fault();
+			return ret;
 		}
 		if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
 			MSenseFile->first_sample_init = false;
 		}
-		if (!panic_single_thread){
-		LOG_INF("Submitting Write!");
-		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
-		}
-		else {
-			sensor_write_to_file(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
-		}
+		/* The worker now owns this buffer; only then may this stream switch. */
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
 	}
+
+	return 0;
 }
 
-void flush_data_buffer(enum sensor_type sensor){
+int flush_data_buffer(enum sensor_type sensor){
 	
 	LOG_DBG("Flush data called");
 	data_upload_buffer* current_buffer;
@@ -719,7 +910,7 @@ void flush_data_buffer(enum sensor_type sensor){
 	}
 	else{
 		LOG_WRN("sensor type unknown");
-		return;
+		return -EINVAL;
 	}
 
 	if (MSenseFile->switch_buffer){
@@ -735,12 +926,16 @@ void flush_data_buffer(enum sensor_type sensor){
 			if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
 				MSenseFile->first_sample_init = false;
 			}
-			if (!panic_single_thread){
-			LOG_INF("Submitting Write!");
-			submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+			if (panic_single_thread){
+				LOG_ERR("Cannot verify a direct flush during panic mode");
+				return -ENOTSUP;
 			}
-			else {
-				sensor_write_to_file(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
+			LOG_INF("Submitting Write!");
+			int ret = submit_write(current_buffer->data_upload_buffer,
+					       current_buffer->current_size, sensor);
+			if (ret != 0) {
+				LOG_ERR("Unable to submit final buffer for %d: %d", sensor, ret);
+				return ret;
 			}
 			current_buffer->current_size = 0;
 			MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
@@ -748,11 +943,13 @@ void flush_data_buffer(enum sensor_type sensor){
 	else {
 		LOG_INF("empty buffers, no flushing required");
 	}
+
+	return 0;
 }
 
 
-int write_ble_uuid(const char *ble_address, const char *ble_name,
-			   const char *device_id_hex)
+int write_device_info_file(const char *device_name,
+				   const char *device_id_hex)
 {
 	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
@@ -762,8 +959,11 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	int written;
 	ssize_t bytes_written;
 
-	if (ble_address == NULL || ble_name == NULL || device_id_hex == NULL) {
+	if (device_name == NULL || device_id_hex == NULL) {
 		return -EINVAL;
+	}
+	if (!file_system_ready || !filesystem_mounted) {
+		return -EACCES;
 	}
 
 	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
@@ -774,8 +974,7 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	fs_file_t_init(&name_file);
 	rc = fs_open(&name_file, uuid_name, FS_O_READ);
 	if (rc == 0) {
-		fs_close(&name_file);
-		return 0;
+		return fs_close(&name_file);
 	}
 	if (rc != -ENOENT) {
 		LOG_WRN("Unable to check uuid.txt: %d", rc);
@@ -783,13 +982,13 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	}
 
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
-			   "%s\nName: %s\nDevice ID: %s\nVersion: %s"
+			   "Name: %s\nDevice ID: %s\nVersion: %s"
 			   "\nGit Commit: %s\nGit Tree: %s"
 			   "\nppg format: %s\naccel format: ICM-20948 accel binary format v2"
 			   "\necg format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
-			   ble_address, ble_name, device_id_hex, CONFIG_BT_DIS_MODEL,
+			   device_name, device_id_hex, CONFIG_BT_DIS_MODEL,
 			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
 			   ppg_file.sensor_format, ecg_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
@@ -808,13 +1007,21 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	} else if (bytes_written != written) {
 		rc = -EIO;
 	} else {
-		rc = 1;
+		rc = 0;
 	}
 
 	{
-		int close_rc = fs_close(&name_file);
+		int sync_rc = 0;
+		int close_rc;
 
-		if (rc > 0 && close_rc != 0) {
+		if (rc == 0) {
+			sync_rc = fs_sync(&name_file);
+		}
+		close_rc = fs_close(&name_file);
+		if (rc == 0 && sync_rc != 0) {
+			rc = sync_rc;
+		}
+		if (rc == 0 && close_rc != 0) {
 			rc = close_rc;
 		}
 	}
@@ -822,14 +1029,37 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	return rc;
 }
 
-int close_all_files(){
+static int close_all_files(void)
+{
+	int ret = 0;
+	int close_ret;
 
-	
-	reset_sensor_file(&ppg_file);
-	reset_sensor_file(&ecg_file);
-	reset_sensor_file(&log_file);
-	return 0;
+	close_ret = reset_sensor_file(&ppg_file);
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
 
+	close_ret = reset_sensor_file(&ecg_file);
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
+
+	close_ret = reset_sensor_file(&log_file);
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
+
+	close_ret = sync_and_close_file(&file);
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
+	if (close_ret == 0) {
+		fs_file_t_init(&file);
+		first_write = false;
+		data_counter = 0;
+	}
+
+	return ret;
 }
 
 
@@ -888,43 +1118,54 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	return rc;
 }
 
-void setup_disk(void)
+int setup_disk(void)
 {
 	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_dir_t dir;
 	struct fs_statvfs sbuf;
+	bool dir_open = false;
+	int close_ret;
+	int unmount_ret;
 	int rc;
-	
+
+	if (filesystem_mounted) {
+		return file_system_ready ? 0 : -EBUSY;
+	}
+
+	file_system_ready = false;
+	total_test_files = 0;
+	total_log_files = 0;
 	fs_dir_t_init(&dir);
 
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
 		rc = setup_flash(mp);
 		if (rc < 0) {
-			LOG_ERR("Failed to setup flash area");
-			return;
+			LOG_ERR("Failed to setup flash area: %d", rc);
+			return rc;
 		}
 	}
 
 	if (!IS_ENABLED(CONFIG_FILE_SYSTEM_LITTLEFS) &&
 	    !IS_ENABLED(CONFIG_FAT_FILESYSTEM_ELM)) {
-		LOG_INF("No file system selected");
-		return;
+		LOG_ERR("No file system selected");
+		return -ENOTSUP;
 	}
 
 	rc = mount_app_fs(mp);
 	if (rc < 0) {
-		LOG_ERR("Failed to mount filesystem");
-		return;
+		LOG_ERR("Failed to mount filesystem: %d", rc);
+		return rc;
 	}
-	/* Allow log messages to flush to avoid interleaved output */
+	filesystem_mounted = true;
+	/* Allow log messages to flush to avoid interleaved output. */
 	k_sleep(K_MSEC(50));
 
 	LOG_INF("Mount %s: %d", fs_mnt.mnt_point, rc);
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
-		printk("FAIL: statvfs: %d\n", rc);
-		return;
+		LOG_ERR("statvfs failed: %d", rc);
+		goto unmount;
 	}
 
 	LOG_INF("%s: bsize = %lu ; frsize = %lu ;"
@@ -934,13 +1175,14 @@ void setup_disk(void)
 	       sbuf.f_blocks, sbuf.f_bfree);
 
 	rc = fs_opendir(&dir, mp->mnt_point);
-	LOG_INF("%s opendir: %d\n", mp->mnt_point, rc);
-
+	LOG_INF("%s opendir: %d", mp->mnt_point, rc);
 	if (rc < 0) {
 		LOG_ERR("Failed to open directory");
+		goto unmount;
 	}
+	dir_open = true;
 
-	while (rc >= 0) {
+	for (;;) {
 		struct fs_dirent ent = { 0 };
 
 		rc = fs_readdir(&dir, &ent);
@@ -949,33 +1191,68 @@ void setup_disk(void)
 			break;
 		}
 		if (ent.name[0] == 0) {
-			LOG_INF("End of files\n");
+			LOG_INF("End of files");
 			break;
 		}
-		LOG_INF("  %c %u %s\n",
+		LOG_INF("  %c %u %s",
 		       (ent.type == FS_DIR_ENTRY_FILE) ? 'F' : 'D',
 		       ent.size,
 		       ent.name);
-		
-		strstr(ent.name, "test") != NULL ? total_test_files++ : 0;
-		strstr(ent.name, "log") != NULL ? total_log_files++ : 0;
-		
 
+		if (strstr(ent.name, "test") != NULL) {
+			total_test_files++;
+		}
+		if (strstr(ent.name, "log") != NULL) {
+			total_log_files++;
+		}
 	}
-	file_system_ready = true;
-	(void)fs_closedir(&dir);
 
-	return;
+	close_ret = fs_closedir(&dir);
+	dir_open = false;
+	if (close_ret != 0 && rc == 0) {
+		rc = close_ret;
+	}
+	if (rc != 0) {
+		goto unmount;
+	}
+
+	file_system_ready = true;
+	return 0;
+
+unmount:
+	if (dir_open) {
+		close_ret = fs_closedir(&dir);
+		if (rc == 0 && close_ret != 0) {
+			rc = close_ret;
+		}
+	}
+
+	file_system_ready = false;
+	unmount_ret = fs_unmount(mp);
+	if (unmount_ret == 0) {
+		filesystem_mounted = false;
+	} else {
+		LOG_ERR("Failed to unmount filesystem after setup error: %d", unmount_ret);
+		if (rc == 0) {
+			rc = unmount_ret;
+		}
+	}
+
+	return rc;
 }
 
 
 int get_storage_percent_full(){
 	struct fs_statvfs info;
 	struct fs_mount_t* mp = &fs_mnt;
-	int rc = fs_statvfs(mp->mnt_point, &info);
-	if (rc < 0) {
+	int rc;
+	if (!file_system_ready || !filesystem_mounted) {
+		return -EACCES;
+	}
+	rc = fs_statvfs(mp->mnt_point, &info);
+	if (rc != 0) {
 		printk("FAIL: statvfs: %d\n", rc);
-		return -1;
+		return rc < 0 ? rc : -EIO;
 	}
 
 	printk("%s: bsize = %lu ; frsize = %lu ;"

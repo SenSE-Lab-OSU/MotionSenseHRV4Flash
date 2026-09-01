@@ -22,6 +22,10 @@
 #include "BLEService.h"
 #include "device_identity.h"
 #include "zephyrfilesystem.h"
+#include "msense_msc_media.h"
+#if CONFIG_DISK_DRIVER_RAW_NAND
+#include "nand_disk.h"
+#endif
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -32,6 +36,9 @@
 
 
 LOG_MODULE_REGISTER(main);
+
+BUILD_ASSERT(IS_ENABLED(CONFIG_USB_MASS_STORAGE),
+	     "PPGv2 requires legacy USB MSC support");
 
 
 
@@ -165,9 +172,28 @@ BUILD_ASSERT(AD_FLAGS_ENCODED_LEN + AD_SERVICE_DATA_ENCODED_LEN <=
 BUILD_ASSERT(SCAN_RESPONSE_NAME_ENCODED_LEN <= BT_GAP_ADV_MAX_ADV_DATA_LEN,
              "Scan response name exceeds the legacy limit");
 
+static int shell_request_ppg_reboot(const struct shell *shell, size_t argc,
+                                    char **argv)
+{
+  ARG_UNUSED(shell);
+  ARG_UNUSED(argc);
+  ARG_UNUSED(argv);
+  return request_ppg_storage_reboot();
+}
+
+static int shell_request_ppg_full_reset(const struct shell *shell, size_t argc,
+                                        char **argv)
+{
+  ARG_UNUSED(shell);
+  ARG_UNUSED(argc);
+  ARG_UNUSED(argv);
+  return request_ppg_storage_reset(false);
+}
+
 // Shell Commands for entering in the terminal, in case a bluetooth command is not avalible.
-SHELL_CMD_REGISTER(reset, NULL, "Resets Device", NVIC_SystemReset);
-SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
+SHELL_CMD_REGISTER(reset, NULL, "Queues a safe device reset", shell_request_ppg_reboot);
+SHELL_CMD_REGISTER(full_reset, NULL, "Queues a safe storage erase and reset",
+                   shell_request_ppg_full_reset);
 
 
 
@@ -193,23 +219,55 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
-static void write_uuid_file(void)
+static int enable_usb_msc_host_media(void)
 {
-  bt_addr_le_t address = {0};
-  size_t count = 1;
-  char addr_str[BT_ADDR_LE_STR_LEN];
-  int result;
+	int claim_ret;
+	int disable_ret;
+	int ret;
 
-  bt_id_get(&address, &count);
-  bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
+	ret = usb_enable(usb_status_cb);
+	if (ret != 0) {
+		/* Boot-failure containment also covers an unprovable -EALREADY state. */
+		disable_ret = usb_disable();
+		if (disable_ret == 0) {
+			ppg_collection_set_usb_msc_enabled(false);
+		} else {
+			ppg_collection_set_usb_msc_enabled(true);
+			LOG_ERR("USB disable after enable failure returned %d", disable_ret);
+		}
+		return ret;
+	}
+	ppg_collection_set_usb_msc_enabled(true);
 
-  result = write_ble_uuid(addr_str, bt_get_name(),
-                          msense_device_identity_hex());
-  if (result < 0) {
-    LOG_ERR("Unable to write uuid.txt: %d", result);
-  }
+	ret = msense_msc_media_initialize_absent();
+	if (ret != 0) {
+		LOG_ERR("MSC safe initialization failed: %d", ret);
+		goto disable_usb;
+	}
+
+	ret = msense_msc_media_publish_to_host();
+	if (ret == 0) {
+		return 0;
+	}
+
+	LOG_ERR("MSC host publication failed: %d", ret);
+	claim_ret = msense_msc_media_claim_for_firmware();
+	if (claim_ret == 0) {
+		return ret;
+	}
+	LOG_ERR("MSC absence recovery failed: %d", claim_ret);
+
+disable_usb:
+	/* Do not leave the SDK's default writable MSC policy reachable on error. */
+	disable_ret = usb_disable();
+	if (disable_ret == 0) {
+		ppg_collection_set_usb_msc_enabled(false);
+	}
+	if (disable_ret != 0) {
+		LOG_ERR("USB disable after MSC failure returned %d", disable_ret);
+	}
+	return ret;
 }
-
 
 static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
@@ -241,6 +299,7 @@ static void bt_ready(int err)
   if (err)
   {
     printk("BLE init failed with error code %d\n", err);
+    ppg_collection_latch_storage_fault();
     return;
   }
   else
@@ -257,6 +316,7 @@ static void bt_ready(int err)
   err = bt_set_name(msense_device_identity_name());
   if (err) {
     LOG_ERR("Unable to set generated BLE name: %d", err);
+    ppg_collection_latch_storage_fault();
     return;
   }
 
@@ -283,26 +343,16 @@ static void bt_ready(int err)
                 NULL); // Set to NULL for undirected advertising
   */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-  if (err)
+  if (err) {
     printk("Advertising failed to start (err %d)\n", err);
-  else
-  {
-    printk("Advertising started\n");
+    ppg_collection_latch_storage_fault();
+    return;
   }
+  printk("Advertising started\n");
 
   k_sem_give(&ble_init_ok);
 
-  write_uuid_file();
-  #ifndef CONFIG_DEBUG
-  
-    if (!security_lock){
-      usb_enable(usb_status_cb);
-    }
-    //k_sleep(K_SECONDS(10));
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
-  #endif
+  ppg_collection_enable_runtime_transitions();
 }
 
 // Initialize BLE
@@ -315,6 +365,7 @@ static void ble_init(void)
   if (err)
   {
     printk("BLE initialization failed\n");
+    ppg_collection_latch_storage_fault();
   }
 
   //err = bt_id_create(BT_ADDR_LE_ANY, NULL);
@@ -424,15 +475,7 @@ void battery_maintenance()
   } 
 
   if (collecting_data || host_wants_collection){
-        if (battery_low && collecting_data){
-            
-            start_stop_device_collection(false);
-        }
-        else if (!battery_low && host_wants_collection && !collecting_data){
-
-            start_stop_device_collection(true);
-            
-        }
+    request_ppg_collection_reconcile();
   }
   #endif
     
@@ -455,6 +498,10 @@ void storage_clear_led(){
 int main(void)
 {
 	int identity_err;
+	int ret;
+	int teardown_ret;
+	int uuid_ret = 0;
+	bool boot_storage_ready = false;
 
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
@@ -468,15 +515,16 @@ int main(void)
   
 
   // Setup our Flash Filesystem
-  setup_disk();
+  ret = setup_disk();
+  if (ret != 0) {
+    LOG_ERR("Startup filesystem setup failed: %d", ret);
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(true);
+    #endif
+    return ret;
+  }
   k_sleep(K_SECONDS(1));
   //create_test_files(400);
-  #ifdef CONFIG_DEBUG  
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
-  #endif
-
   #ifdef CONFIG_MSENSE_USB_SECURITY
     security_lock = true;
   #endif
@@ -488,7 +536,6 @@ int main(void)
   gpio0_device = DEVICE_DT_GET(GPIO0_NODE);
   gpio1_device = DEVICE_DT_GET(GPIO1_NODE);
   
-  int ret;
   // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
@@ -543,16 +590,66 @@ int main(void)
   
   k_work_init(&log_work_item.work, work_write);
   log_work_item.sensor = customlog;
+  ppg_collection_set_filesystem_workqueue_ready();
   k_thread_name_set(&my_work_q.thread, "file_sys");
   const char *name = k_thread_name_get(&my_work_q.thread);
   LOG_INF("file workqueue thead: %s", name);
-  if (identity_err == 0) {
-    ble_init();
-  } else {
-    LOG_ERR("BLE advertising disabled because device identity is unavailable");
+  ret = get_storage_percent_full();
+  if (ret < 0) {
+    LOG_ERR("Startup storage query failed: %d", ret);
   }
-  
-  get_storage_percent_full();
+
+  if (identity_err == 0) {
+    uuid_ret = write_device_info_file(msense_device_identity_name(),
+                                      msense_device_identity_hex());
+    if (uuid_ret != 0) {
+      LOG_ERR("Unable to write boot uuid.txt: %d", uuid_ret);
+    }
+  }
+
+  teardown_ret = filesystem_gate_and_drain();
+  if (teardown_ret == 0) {
+    teardown_ret = shutdown_filesystem();
+  }
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(true);
+  #endif
+
+  if (teardown_ret != 0 || filesystem_is_mounted()) {
+    if (teardown_ret == 0) {
+      teardown_ret = -EBUSY;
+    }
+    LOG_ERR("Startup filesystem teardown failed: %d", teardown_ret);
+    ppg_collection_latch_storage_fault();
+  } else if (identity_err != 0) {
+    LOG_ERR("BLE advertising disabled because device identity is unavailable");
+  } else if (uuid_ret != 0) {
+    ppg_collection_latch_storage_fault();
+  } else {
+    #ifndef CONFIG_DEBUG
+    if (!security_lock){
+      ret = enable_usb_msc_host_media();
+      if (ret != 0) {
+        LOG_ERR("Unable to publish USB MSC medium: %d", ret);
+        ppg_collection_latch_storage_fault();
+      } else {
+        boot_storage_ready = true;
+      }
+    } else {
+      boot_storage_ready = true;
+    }
+    #else
+    boot_storage_ready = true;
+    #endif
+  }
+
+  if (boot_storage_ready) {
+    ble_init();
+  } else if (identity_err == 0 && uuid_ret == 0 &&
+             teardown_ret == 0 && !filesystem_is_mounted() &&
+             ppg_collection_faulted()) {
+      LOG_ERR("BLE advertising disabled because boot storage is unavailable");
+  }
   
   
   // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.

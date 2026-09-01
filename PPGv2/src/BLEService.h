@@ -172,6 +172,19 @@ void ppgData_notify(struct k_work *item);
 
 
 void start_stop_device_collection(uint8_t val);
+void request_ppg_collection_mode(bool enable);
+void request_ppg_collection_reconcile(void);
+bool ppg_collection_producers_enabled(void);
+bool ppg_collection_faulted(void);
+void ppg_collection_set_usb_msc_enabled(bool enabled);
+void ppg_collection_set_filesystem_workqueue_ready(void);
+void ppg_collection_enable_runtime_transitions(void);
+void ppg_collection_latch_storage_fault(void);
+void ppg_filesystem_log_enable(void);
+void ppg_filesystem_log_disable_and_wait(void);
+int request_ppg_storage_reboot(void);
+int request_ppg_storage_reset(bool reset_bad_blocks);
+int request_ppg_manual_test_file(uint8_t command);
 void reset_device(bool reset_bad_blocks);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES

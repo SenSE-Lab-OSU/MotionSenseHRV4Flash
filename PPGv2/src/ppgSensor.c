@@ -603,6 +603,10 @@ void read_ppg_fifo_buffer(struct k_work *item)
 {
   struct ppgInfo *the_device = ((struct ppgInfo *)(((char *)(item)) - offsetof(struct ppgInfo, work)));
 
+  if (!ppg_collection_producers_enabled()) {
+    return;
+  }
+
   
   uint8_t cmd_array[] = {PPG_CHIP_ID_1, WRITEMASTER, SPI_FILL};
   uint8_t read_array[128 * 2 * 2 * 3] = {0};
@@ -748,7 +752,10 @@ void read_ppg_fifo_buffer(struct k_work *item)
     ppg_encode_nand_record(ppg_record,
                            led1A[i], led1B[i], led2A[i], led2B[i],
                            global_tick_512hz);
-    store_data(ppg_record, sizeof(ppg_record), ppg);
+    if (store_data(ppg_record, sizeof(ppg_record), ppg) != 0) {
+      /* store_data() has signalled the deferred storage transition owner. */
+      return;
+    }
     
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};

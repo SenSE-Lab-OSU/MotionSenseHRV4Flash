@@ -6,19 +6,19 @@
 
 #include <zephyr/kernel.h>
 #include <errno.h>
+#include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/flash.h>
 #include <zephyr/sys/atomic.h>
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
 #include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/logging/log_ctrl.h>
-#include <zephyr/sys/printk-hooks.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
 #include "ppgSensor.h"
@@ -30,8 +30,10 @@
 #include "ecgRecorder.h"
 #include "device_identity.h"
 #include "zephyrfilesystem.h"
+#include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "nand_disk.h"
+#include "spi_nand.h"
 #endif
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -41,6 +43,9 @@
 
 
 LOG_MODULE_REGISTER(main, 3);
+
+BUILD_ASSERT(IS_ENABLED(CONFIG_USB_MASS_STORAGE),
+	     "ECGv0 requires legacy USB MSC support");
 
 
 
@@ -67,6 +72,15 @@ enum ship_mode_state {
   SHIP_MODE_STARTING,
 };
 
+enum ecg_storage_action {
+	ECG_STORAGE_ACTION_NONE = 0,
+	ECG_STORAGE_ACTION_REBOOT,
+	ECG_STORAGE_ACTION_ERASE,
+	ECG_STORAGE_ACTION_RESET_BAD_BLOCKS,
+	ECG_STORAGE_ACTION_TEST_FILES_100,
+	ECG_STORAGE_ACTION_TEST_FILES_500,
+};
+
 // define our red and green leds
 #define LED_PIN DT_GPIO_PIN(LED_NODE, gpios)
 #define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
@@ -83,15 +97,22 @@ const struct device* gpio1_device;
 
 static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
 static struct gpio_callback button0_callback;
+/*
+ * True means the legacy USB/MSC instance may still be active.  It is cleared
+ * only after usb_disable() confirms containment, so fault handling reasserts
+ * MSC medium absence whenever this remains true.
+ */
 static bool usb_enabled;
-static bool usb_uart_log_backend_was_active;
-static bool usb_console_suppressed;
-static printk_hook_fn_t usb_console_printk_hook;
 static bool filesystem_workqueue_started;
+static atomic_t msc_ownership_faulted = ATOMIC_INIT(0);
+/* Runtime requests stay closed until the boot UUID ownership transaction ends. */
+static atomic_t ecg_storage_runtime_ready = ATOMIC_INIT(0);
 static bool button0_pressed;
 static int64_t button0_pressed_time_ms;
-static struct k_mutex collection_mode_lock;
-static K_SEM_DEFINE(accel_record_fault_sem, 0, 1);
+K_MUTEX_DEFINE(collection_mode_lock);
+static K_SEM_DEFINE(ecg_collection_transition_sem, 0, 1);
+static atomic_t ecg_collection_transition_requested = ATOMIC_INIT(0);
+static atomic_t ecg_storage_action_requested = ATOMIC_INIT(ECG_STORAGE_ACTION_NONE);
 static atomic_t ship_mode = ATOMIC_INIT(SHIP_MODE_WAITING_FOR_BUTTON);
 static K_SEM_DEFINE(ship_mode_exit_sem, 0, 1);
 
@@ -99,13 +120,17 @@ static void button0_work_handler(struct k_work *work);
 static void button0_pressed_handler(const struct device *port,
                                     struct gpio_callback *cb,
                                     uint32_t pins);
-void enter_ecg_collection_mode(void);
-void exit_ecg_collection_mode(void);
-static void accel_record_fault_thread(void *arg1, void *arg2, void *arg3);
+int enter_ecg_collection_mode(void);
+int exit_ecg_collection_mode(void);
+void storage_clear_led(void);
+static void ecg_storage_transition_fault(const char *operation, int error);
+static int execute_ecg_storage_action(enum ecg_storage_action action);
+static void ecg_collection_transition_thread(void *arg1, void *arg2,
+					     void *arg3);
 
 K_WORK_DEFINE(button0_work, button0_work_handler);
-K_THREAD_DEFINE(accel_record_fault_thread_id, 2048,
-		accel_record_fault_thread, NULL, NULL, NULL, 7, 0, 0);
+K_THREAD_DEFINE(ecg_collection_transition_thread_id, 2048,
+		ecg_collection_transition_thread, NULL, NULL, NULL, 7, 0, 0);
 
 
 /* SPI Definitions */
@@ -196,9 +221,28 @@ BUILD_ASSERT(AD_FLAGS_ENCODED_LEN + AD_SERVICE_DATA_ENCODED_LEN <=
 BUILD_ASSERT(SCAN_RESPONSE_NAME_ENCODED_LEN <= BT_GAP_ADV_MAX_ADV_DATA_LEN,
              "Scan response name exceeds the legacy limit");
 
-// Shell Commands for entering in the terminal, in case a bluetooth command is not avalible.
-SHELL_CMD_REGISTER(reset, NULL, "Resets Device", NVIC_SystemReset);
-SHELL_CMD_REGISTER(full_reset, NULL, "Resets Storage and Device", reset_device);
+static int shell_request_ecg_reboot(const struct shell *shell, size_t argc,
+                                    char **argv)
+{
+  ARG_UNUSED(shell);
+  ARG_UNUSED(argc);
+  ARG_UNUSED(argv);
+  return request_ecg_storage_reboot();
+}
+
+static int shell_request_ecg_full_reset(const struct shell *shell, size_t argc,
+                                        char **argv)
+{
+  ARG_UNUSED(shell);
+  ARG_UNUSED(argc);
+  ARG_UNUSED(argv);
+  return request_ecg_storage_reset(false);
+}
+
+// Shell commands queue non-normal storage work on the ECG transition owner.
+SHELL_CMD_REGISTER(reset, NULL, "Queues a safe device reset", shell_request_ecg_reboot);
+SHELL_CMD_REGISTER(full_reset, NULL, "Queues a safe storage erase and reset",
+                   shell_request_ecg_full_reset);
 
 
 
@@ -224,114 +268,97 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
-/*
- * The console and UART log backend are both routed through the USB CDC ACM
- * device.  Collection mode disables that device to remove the NAND disk from
- * the USB host, so leave neither path trying to transmit while it is down.
- * RTT and the custom filesystem log backend are separate log backends and
- * remain active.
- */
-static int usb_console_discard_char(int c)
+static int enable_usb_msc_host_media(void)
 {
-  return c;
+	int claim_ret;
+	int disable_ret;
+	int ret;
+
+	ret = usb_enable(usb_status_cb);
+	if (ret != 0) {
+		/* A nonzero result, including -EALREADY, leaves USB state unproven. */
+		usb_enabled = true;
+		disable_ret = usb_disable();
+		if (disable_ret == 0) {
+			usb_enabled = false;
+		} else {
+			LOG_ERR("USB disable after enable failure returned %d", disable_ret);
+		}
+		return ret;
+	}
+	usb_enabled = true;
+
+	ret = msense_msc_media_initialize_absent();
+	if (ret != 0) {
+		LOG_ERR("MSC safe initialization failed: %d", ret);
+		claim_ret = msense_msc_media_claim_for_firmware();
+		if (claim_ret != 0) {
+			LOG_ERR("MSC absence recovery failed: %d", claim_ret);
+		}
+		goto disable_usb;
+	}
+
+	ret = msense_msc_media_publish_to_host();
+	if (ret == 0) {
+		return 0;
+	}
+
+	LOG_ERR("MSC host publication failed: %d", ret);
+	claim_ret = msense_msc_media_claim_for_firmware();
+	if (claim_ret != 0) {
+		LOG_ERR("MSC absence recovery failed: %d", claim_ret);
+	}
+
+disable_usb:
+	/* Whole-device USB disable is boot-failure containment only. */
+	disable_ret = usb_disable();
+	if (disable_ret == 0) {
+		usb_enabled = false;
+	} else {
+		LOG_ERR("USB disable after MSC failure returned %d", disable_ret);
+	}
+	return ret;
 }
 
-static void suspend_usb_console_and_log_backend(void)
+static int publish_msc_host_media(void)
 {
-#if CONFIG_LOG_BACKEND_UART
-  const struct log_backend *backend;
+	int claim_ret;
+	int ret;
 
-  backend = log_backend_get_by_name("log_backend_uart");
-  if (backend == NULL) {
-    LOG_WRN("USB UART log backend was not found");
-  } else {
-    usb_uart_log_backend_was_active = log_backend_is_active(backend);
-    if (usb_uart_log_backend_was_active) {
-      log_backend_disable(backend);
-    }
-  }
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		return -EIO;
+	}
+	if (filesystem_is_mounted()) {
+		return -EBUSY;
+	}
+
+	ret = msense_msc_media_publish_to_host();
+	if (ret == 0) {
+		return 0;
+	}
+
+	LOG_ERR("MSC host publication failed: %d", ret);
+	claim_ret = msense_msc_media_claim_for_firmware();
+	if (claim_ret == 0) {
+		return ret;
+	}
+	LOG_ERR("MSC absence recovery failed: %d", claim_ret);
+	return ret;
+}
+
+static void set_firmware_disk_read_only(void)
+{
+#if CONFIG_DISK_DRIVER_RAW_NAND
+	set_read_only(true);
 #endif
+}
 
-#if CONFIG_UART_CONSOLE
-  if (!usb_console_suppressed) {
-    usb_console_printk_hook = __printk_get_hook();
-    __printk_hook_install(usb_console_discard_char);
-    usb_console_suppressed = true;
-  }
+static void set_firmware_disk_writable(void)
+{
+#if CONFIG_DISK_DRIVER_RAW_NAND
+	set_read_only(false);
 #endif
 }
-
-static void resume_usb_console_and_log_backend(void)
-{
-#if CONFIG_UART_CONSOLE
-  if (usb_console_suppressed) {
-    __printk_hook_install(usb_console_printk_hook);
-    usb_console_suppressed = false;
-  }
-#endif
-
-#if CONFIG_LOG_BACKEND_UART
-  if (usb_uart_log_backend_was_active) {
-    const struct log_backend *backend;
-
-    backend = log_backend_get_by_name("log_backend_uart");
-    if (backend == NULL) {
-      LOG_WRN("USB UART log backend was not found");
-    } else {
-      log_backend_enable(backend, backend->cb->ctx, CONFIG_LOG_MAX_LEVEL);
-    }
-    usb_uart_log_backend_was_active = false;
-  }
-#endif
-}
-
-static int set_usb_mass_storage_enabled(bool enable)
-{
-  int ret;
-
-  if (usb_enabled == enable) {
-    return 0;
-  }
-
-  if (!enable) {
-    suspend_usb_console_and_log_backend();
-  }
-
-  ret = enable ? usb_enable(usb_status_cb) : usb_disable();
-  if (ret == -EALREADY) {
-    ret = 0;
-  }
-
-  if (ret == 0) {
-    usb_enabled = enable;
-    if (enable) {
-      resume_usb_console_and_log_backend();
-    }
-  } else if (!enable) {
-    /* USB remains active after a failed disable, so restore its outputs. */
-    resume_usb_console_and_log_backend();
-  }
-
-  return ret;
-}
-
-static void write_uuid_file(void)
-{
-  bt_addr_le_t address = {0};
-  size_t count = 1;
-  char addr_str[BT_ADDR_LE_STR_LEN];
-  int result;
-
-  bt_id_get(&address, &count);
-  bt_addr_le_to_str(&address, addr_str, sizeof(addr_str));
-
-  result = write_ble_uuid(addr_str, bt_get_name(),
-                          msense_device_identity_hex());
-  if (result < 0) {
-    LOG_ERR("Unable to write uuid.txt: %d", result);
-  }
-}
-
 
 static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
@@ -368,6 +395,11 @@ static void bt_ready(int err)
   else
     LOG_INF("BLE initialized");
 
+  if (atomic_get(&msc_ownership_faulted) != 0) {
+    LOG_ERR("Storage ownership fault; BLE advertising remains disabled");
+    return;
+  }
+
   #if CONFIG_BT_SETTINGS
     settings_load();
   #endif
@@ -387,7 +419,7 @@ static void bt_ready(int err)
   sd[0].data = msense_device_identity_name();
   sd[0].data_len = MSENSE_BLE_NAME_LEN;
 
-  // Start advertising
+  // Boot storage ownership is complete before Bluetooth is initialized.
   const struct bt_le_adv_param v = {
       .id = BT_ID_DEFAULT,
       .sid = 0,
@@ -405,29 +437,15 @@ static void bt_ready(int err)
                 NULL); // Set to NULL for undirected advertising
   */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-  if (err)
+  if (err) {
     LOG_ERR("BLE advertising failed to start: %d", err);
-  else
-  {
-    LOG_INF("BLE advertising started");
+    ecg_storage_transition_fault("BLE advertising start", err);
+    return;
   }
 
+  atomic_set(&ecg_storage_runtime_ready, 1);
   k_sem_give(&ble_init_ok);
-
-  write_uuid_file();
-  #ifndef CONFIG_DEBUG
-  
-    if (!security_lock){
-      err = set_usb_mass_storage_enabled(true);
-      if (err != 0) {
-        LOG_WRN("USB enable returned %d", err);
-      }
-    }
-    //k_sleep(K_SECONDS(10));
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
-  #endif
+  LOG_INF("BLE advertising started");
 }
 
 // Initialize BLE
@@ -445,7 +463,7 @@ static void ble_init(void)
 
 // Timer handler that periodically executes commands with a period,
 // which is defined by the macro-variable TIMER_MS
-static void spi_init(void)
+static void app_spi_init(void)
 {
   
   // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
@@ -500,9 +518,6 @@ void battery_maintenance()
       battery_low = true;
       LOG_WRN("battery low, turning off file logs and data collection.");
       LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15 percent)");
-      if (!collecting_data){
-        reset_log_file();
-      }
     }
     
   }
@@ -517,11 +532,11 @@ void battery_maintenance()
   if (collecting_data || host_wants_collection){
         if (battery_low && collecting_data){
             
-            exit_ecg_collection_mode();
+            request_ecg_collection_mode(false);
         }
         else if (!battery_low && host_wants_collection && !collecting_data){
 
-            enter_ecg_collection_mode();
+            request_ecg_collection_mode(true);
             
         }
   }
@@ -623,245 +638,760 @@ static uint64_t collection_session_id(void)
 static void accel_record_fault_handler(void *context)
 {
 	ARG_UNUSED(context);
-	k_sem_give(&accel_record_fault_sem);
+	request_ecg_storage_fault();
 }
 
-static void accel_record_fault_thread(void *arg1, void *arg2, void *arg3)
+void request_ecg_storage_fault(void)
 {
+	/* Safe from producer and log callbacks: only latch, gate, and wake. */
+	atomic_set(&msc_ownership_faulted, 1);
+	atomic_clear(&ecg_storage_runtime_ready);
+	atomic_clear(&ecg_collection_transition_requested);
+	k_sem_give(&ecg_collection_transition_sem);
+}
+
+void request_ecg_collection_mode(bool enable)
+{
+	if (atomic_get(&ecg_storage_runtime_ready) == 0) {
+		LOG_WRN("Rejecting ECG collection request before storage readiness");
+		return;
+	}
+	if (enable && (atomic_get(&msc_ownership_faulted) != 0 ||
+		       atomic_get(&ecg_storage_action_requested) !=
+			       ECG_STORAGE_ACTION_NONE)) {
+		LOG_ERR("Rejecting ECG collection restart while storage is unavailable");
+		return;
+	}
+
+	atomic_set(&ecg_collection_transition_requested, enable ? 1 : 0);
+	k_sem_give(&ecg_collection_transition_sem);
+}
+
+static int request_ecg_storage_action(enum ecg_storage_action action)
+{
+	if (atomic_get(&ecg_storage_runtime_ready) == 0) {
+		return -EAGAIN;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		return -EIO;
+	}
+	/* Actions require initialized MSC so absence can be established explicitly. */
+	if (!usb_enabled || !filesystem_workqueue_started) {
+		return -EAGAIN;
+	}
+	if (collecting_data || host_wants_collection ||
+	    atomic_get(&ecg_collection_transition_requested) != 0) {
+		return -EBUSY;
+	}
+	if (!atomic_cas(&ecg_storage_action_requested,
+			ECG_STORAGE_ACTION_NONE, action)) {
+		return -EBUSY;
+	}
+
+	k_sem_give(&ecg_collection_transition_sem);
+	return 0;
+}
+
+int request_ecg_storage_reboot(void)
+{
+	return request_ecg_storage_action(ECG_STORAGE_ACTION_REBOOT);
+}
+
+int request_ecg_storage_reset(bool reset_bad_blocks)
+{
+	return request_ecg_storage_action(
+		reset_bad_blocks ? ECG_STORAGE_ACTION_RESET_BAD_BLOCKS :
+				   ECG_STORAGE_ACTION_ERASE);
+}
+
+int request_ecg_manual_test_file(uint8_t command)
+{
+	enum ecg_storage_action action;
+
+	switch (command) {
+	case 130:
+		action = ECG_STORAGE_ACTION_TEST_FILES_100;
+		break;
+	case 150:
+		action = ECG_STORAGE_ACTION_TEST_FILES_500;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return request_ecg_storage_action(action);
+}
+
+static void ecg_collection_transition_thread(void *arg1, void *arg2,
+					     void *arg3)
+{
+	enum ecg_storage_action action;
+	int ret;
+
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
 	for (;;) {
-		(void)k_sem_take(&accel_record_fault_sem, K_FOREVER);
-		exit_ecg_collection_mode();
+		(void)k_sem_take(&ecg_collection_transition_sem, K_FOREVER);
+		if (atomic_get(&msc_ownership_faulted) == 0 &&
+		    atomic_get(&ecg_storage_runtime_ready) == 0) {
+			continue;
+		}
+		action = (enum ecg_storage_action)atomic_get(
+			&ecg_storage_action_requested);
+		if (action != ECG_STORAGE_ACTION_NONE) {
+			ret = execute_ecg_storage_action(action);
+			atomic_set(&ecg_storage_action_requested,
+				   ECG_STORAGE_ACTION_NONE);
+			if (ret != 0) {
+				LOG_ERR("ECG non-normal storage action failed: %d", ret);
+			}
+		}
+
+		if (atomic_get(&msc_ownership_faulted) != 0) {
+			if (collecting_data) {
+				(void)exit_ecg_collection_mode();
+			} else {
+				k_mutex_lock(&collection_mode_lock, K_FOREVER);
+				ecg_storage_transition_fault("ECG deferred storage fault", -EIO);
+				k_mutex_unlock(&collection_mode_lock);
+			}
+		} else if (atomic_get(&ecg_collection_transition_requested) == 0) {
+			(void)exit_ecg_collection_mode();
+		} else {
+			(void)enter_ecg_collection_mode();
+		}
 	}
 }
 
-/**
- * @brief Switch the device from USB mass-storage mode into ECG collection
- *        mode.
- *
- * Invoked by the button handler (short press while idle) and exposed to the
- * BLE service so a connected host can start a recording remotely. It blinks
- * the collection-mode LED pattern, removes the NAND filesystem from USB mass
- * storage, makes it writable, and starts the ECG recorder thread via
- * ecg_recorder_start().
- *
- * On success the global collecting_data / host_wants_collection flags are
- * set so the rest of the firmware (button logic, BLE status) knows a
- * recording is in progress. If the recorder fails to start, the filesystem
- * is returned to read-only and the mode change is abandoned, leaving the
- * device in its previous state.
- */
-void enter_ecg_collection_mode(void)
+static int finalize_ecg_filesystem_for_host(void)
 {
-  int ret = 0;
-  uint64_t session_id;
-  bool usb_was_enabled;
-  bool icm_started = false;
-  bool fsync_started = false;
+	int ret;
 
-  k_mutex_lock(&collection_mode_lock, K_FOREVER);
-  if (collecting_data) {
-    k_mutex_unlock(&collection_mode_lock);
-    return;
-  }
+	if (!filesystem_workqueue_started) {
+		return -ENODEV;
+	}
 
-  LOG_INF("Entering ECG collection mode");
-  blink_collection_mode_pattern();
+	ret = filesystem_drain_pending_work();
+	if (ret != 0) {
+		return ret;
+	}
 
-  usb_was_enabled = usb_enabled;
-  if (usb_was_enabled) {
-    ret = set_usb_mass_storage_enabled(false);
-  }
-  if (ret != 0) {
-    LOG_ERR("USB disable returned %d", ret);
-    goto start_failed;
-  }
+	ret = flush_data_buffer(ecg);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = flush_data_buffer(customlog);
+	if (ret != 0) {
+		return ret;
+	}
 
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-  set_read_only(false);
-  #endif
+	ret = filesystem_gate_and_drain();
+	if (ret != 0) {
+		return ret;
+	}
 
-  session_id = collection_session_id();
-  filesystem_set_collection_id(session_id);
+	ret = shutdown_filesystem();
+	if (ret != 0) {
+		return ret;
+	}
 
-  ret = rtc0_collection_counter_start();
-  if (ret != 0) {
-    LOG_ERR("Failed to start RTC0 collection counter: %d", ret);
-    goto start_failed;
-  }
-
-  ret = ecg_recorder_start();
-  if (ret != 0) {
-    LOG_ERR("Failed to start ECG recorder: %d", ret);
-    goto start_failed;
-  }
-
-  ret = accel_recorder_start(session_id);
-  if (ret != 0) {
-    LOG_ERR("Failed to start accelerometer recorder: %d", ret);
-    goto start_ecg_failed;
-  }
-
-  ret = icm20948_accel_set_fifo_consumer(accel_recorder_consume_fifo, NULL);
-  if (ret != 0) {
-    LOG_ERR("Failed to register ICM-20948 FIFO consumer: %d", ret);
-    goto start_accel_failed;
-  }
-
-  ret = icm20948_accel_start();
-  if (ret != 0) {
-    LOG_ERR("Failed to start ICM-20948 accelerometer: %d", ret);
-    goto start_accel_failed;
-  }
-  icm_started = true;
-
-  ret = imu_fsync_timing_start();
-  if (ret != 0) {
-    LOG_ERR("Failed to start IMU FSYNC timing: %d", ret);
-    goto start_accel_failed;
-  }
-  fsync_started = true;
-
-  ret = rtc0_collection_notification_start();
-  if (ret != 0) {
-    LOG_ERR("Failed to start RTC0 BLE timing notifications: %d", ret);
-    goto start_accel_failed;
-  }
-
-  host_wants_collection = true;
-  collecting_data = true;
-  k_mutex_unlock(&collection_mode_lock);
-  return;
-
- start_accel_failed:
-  if (fsync_started) {
-    imu_fsync_timing_stop();
-  }
-  if (icm_started) {
-    (void)icm20948_accel_stop();
-  }
-  (void)icm20948_accel_set_fifo_consumer(NULL, NULL);
-  (void)accel_recorder_abort();
-start_ecg_failed:
-  (void)ecg_recorder_stop();
-start_failed:
-  rtc0_collection_counter_stop();
-  filesystem_clear_collection_id();
-  host_wants_collection = false;
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-  set_read_only(true);
-  #endif
-  if (usb_was_enabled) {
-    ret = set_usb_mass_storage_enabled(true);
-    if (ret != 0) {
-      LOG_WRN("USB restore returned %d", ret);
-    }
-  }
-  k_mutex_unlock(&collection_mode_lock);
+	return filesystem_is_mounted() ? -EBUSY : 0;
 }
 
-/**
- * @brief Switch the device from ECG collection mode back to USB mass-storage
- *        mode.
- *
- * The counterpart to enter_ecg_collection_mode(), invoked on a short button
- * press during recording or remotely over BLE. It first disables and drains
- * the IMU FIFO, finalizes the accelerometer file, then stops ECG recording.
- * After both streams are queued, the shared filesystem work queue is drained,
- * all files are closed, the NAND disk is set back to read-only, and USB
- * mass-storage is re-enabled.
- *
- * If the recorder does not confirm shutdown in time, the collection flags
- * are restored and the function bails out without touching the filesystem —
- * the device stays in collection mode rather than risking a USB host and
- * the recorder writing the disk at the same time.
- */
-void exit_ecg_collection_mode(void)
+static int shutdown_ecg_filesystem_after_start_failure(bool collection_mount_ready)
 {
-  int ret;
-  uint32_t fsync_edge_count;
+	int ret;
 
-  k_mutex_lock(&collection_mode_lock, K_FOREVER);
-  if (!collecting_data) {
-    k_mutex_unlock(&collection_mode_lock);
-    return;
-  }
+	if (collection_mount_ready) {
+		return finalize_ecg_filesystem_for_host();
+	}
+	if (!filesystem_workqueue_started) {
+		return -ENODEV;
+	}
 
-  LOG_INF("Entering USB mass storage mode");
-  blink_usb_mode_pattern();
+	ret = filesystem_gate_and_drain();
+	if (ret != 0) {
+		return ret;
+	}
+	if (filesystem_is_mounted()) {
+		ret = shutdown_filesystem();
+		if (ret != 0) {
+			return ret;
+		}
+	}
 
-  host_wants_collection = false;
-  collecting_data = false;
+	return filesystem_is_mounted() ? -EBUSY : 0;
+}
 
-  /*
-   * A very short recording may not yet have enough transitions to estimate
-   * the IMU period. Keep the stream alive until the second hardware marker
-   * edge, then leave more than one worst-case sample period for it to enter
-   * the FIFO before the final drain.
-   */
-  while (imu_fsync_timing_edge_count_get() < 2U) {
-    fsync_edge_count = imu_fsync_timing_edge_count_get();
-    ret = imu_fsync_timing_wait_for_edge_after(fsync_edge_count,
-                                                K_MSEC(500));
-    if (ret != 0) {
-      LOG_WRN("Timed out waiting for IMU FSYNC startup edges: %d", ret);
-      break;
-    }
-  }
-  if (imu_fsync_timing_edge_count_get() >= 2U) {
-    k_sleep(K_MSEC(4));
-  }
+static void ecg_storage_transition_fault(const char *operation, int error)
+{
+	int claim_ret;
+	int gate_ret;
 
-  ret = icm20948_accel_stop();
-  if (ret != 0) {
-    LOG_WRN("ICM-20948 accelerometer stop returned %d", ret);
-  }
-  imu_fsync_timing_stop();
-  ret = icm20948_accel_set_fifo_consumer(NULL, NULL);
-  if (ret != 0) {
-    LOG_WRN("ICM-20948 FIFO consumer clear returned %d", ret);
-  }
+	/*
+	 * Reassert the ownership boundary even when the operation that was meant
+	 * to establish it returned an error.  A failure here cannot be recovered
+	 * by publishing or restarting; the latched fault keeps the collection
+	 * state unavailable until an explicit recovery path is established.
+	 */
+	if (usb_enabled) {
+		claim_ret = msense_msc_media_claim_for_firmware();
+		if (claim_ret != 0) {
+			LOG_ERR("MSC absence recovery returned %d after %s", claim_ret,
+				operation);
+		}
+	}
 
-  ret = accel_recorder_stop();
-  if (ret != 0) {
-    LOG_WRN("Accelerometer recorder stop returned %d", ret);
-  }
+	ecg_filesystem_log_disable_and_wait();
+	if (filesystem_workqueue_started) {
+		gate_ret = filesystem_gate_and_drain();
+		if (gate_ret != 0) {
+			LOG_ERR("Filesystem fault gate returned %d after %s", gate_ret,
+				operation);
+		}
+	}
+	set_firmware_disk_read_only();
+	atomic_set(&msc_ownership_faulted, 1);
+	atomic_clear(&ecg_storage_runtime_ready);
+	atomic_clear(&ecg_collection_transition_requested);
+	LOG_ERR("%s failed: %d; keeping MSC medium absent", operation, error);
+}
 
-  ret = ecg_recorder_stop();
-  if (ret != 0) {
-    LOG_WRN("ECG recorder stop returned %d", ret);
-    host_wants_collection = true;
-    collecting_data = true;
-    k_mutex_unlock(&collection_mode_lock);
-    return;
-  }
+/* Called only by the ECG transition owner while collection_mode_lock is held. */
+static int teardown_ecg_filesystem_for_storage_action(void)
+{
+	int ret;
 
-  rtc0_collection_counter_stop();
-  flush_data_buffer(ecg);
-  if (filesystem_workqueue_started) {
-    (void)k_work_queue_drain(&my_work_q, true);
-    k_work_queue_unplug(&my_work_q);
-  }
-  close_all_files();
-  filesystem_clear_collection_id();
+	if (!filesystem_workqueue_started) {
+		return -ENODEV;
+	}
 
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-  set_read_only(true);
-  #endif
+	ret = filesystem_gate_and_drain();
+	if (ret != 0) {
+		return ret;
+	}
+	if (filesystem_is_mounted()) {
+		ret = shutdown_filesystem();
+		if (ret != 0) {
+			return ret;
+		}
+	}
 
-  ret = set_usb_mass_storage_enabled(true);
-  if (ret != 0) {
-    LOG_WRN("USB enable returned %d", ret);
-  }
-  k_mutex_unlock(&collection_mode_lock);
+	return filesystem_is_mounted() ? -EBUSY : 0;
+}
+
+/* Called only by the ECG transition owner while collection_mode_lock is held. */
+static int prepare_ecg_storage_action(void)
+{
+	int ret;
+	int stop_ret;
+
+	if (collecting_data || host_wants_collection ||
+	    atomic_get(&ecg_collection_transition_requested) != 0) {
+		return -EBUSY;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		return -EIO;
+	}
+
+	reset_lock = true;
+	ecg_filesystem_log_disable_and_wait();
+
+	/* Rejoin any stale recorder sessions before changing storage ownership. */
+	stop_ret = ecg_recorder_stop();
+	ret = accel_recorder_stop();
+	if (stop_ret == 0 && ret != 0) {
+		stop_ret = ret;
+	}
+	if (stop_ret != 0) {
+		ecg_storage_transition_fault("ECG non-normal producer stop", stop_ret);
+		return stop_ret;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ecg_storage_transition_fault("ECG non-normal producer fault", -EIO);
+		return -EIO;
+	}
+
+	/* The request precondition guarantees that legacy MSC is initialized. */
+	ret = msense_msc_media_claim_for_firmware();
+	if (ret != 0) {
+		ecg_storage_transition_fault("ECG non-normal MSC firmware claim", ret);
+		return ret;
+	}
+
+	ret = teardown_ecg_filesystem_for_storage_action();
+	if (ret != 0) {
+		set_firmware_disk_read_only();
+		ecg_storage_transition_fault("ECG non-normal storage teardown", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+/* Called only by the ECG transition owner after prepare_ecg_storage_action(). */
+static int reset_ecg_storage_and_reboot(bool reset_bad_blocks)
+{
+	const struct device *flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+	int ret;
+
+	if (!device_is_ready(flash_device)) {
+		ret = -ENODEV;
+		goto erase_failed;
+	}
+
+	blink_flash_format_pattern();
+	set_firmware_disk_writable();
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto erase_failed;
+	}
+#if CONFIG_DISK_DRIVER_RAW_NAND
+	if (reset_bad_blocks) {
+		LOG_WRN("Erasing bad block table");
+		ret = spi_nand_multi_chip_reset_bad_block(flash_device);
+	} else {
+		LOG_INF("Performing chip erase");
+		ret = spi_nand_multi_chip_erase(flash_device);
+	}
+#else
+#if !DT_NODE_HAS_PROP(DT_ALIAS(spi_flash0), size)
+#error "flash needs size property in order to be erased"
+#endif
+	ret = flash_erase(flash_device, 0,
+			  DT_PROP(DT_ALIAS(spi_flash0), size) / 8);
+#endif
+	if (ret != 0) {
+		goto erase_failed;
+	}
+
+	set_firmware_disk_read_only();
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto erase_failed;
+	}
+	LOG_INF("Storage erase complete; resetting while MSC remains absent");
+	NVIC_SystemReset();
+	ret = -EIO;
+
+erase_failed:
+	set_firmware_disk_read_only();
+	ecg_storage_transition_fault("ECG storage erase/reset", ret);
+	return ret;
+}
+
+/* Called only by the ECG transition owner after prepare_ecg_storage_action(). */
+static int reboot_ecg_after_storage_teardown(void)
+{
+	set_firmware_disk_read_only();
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ecg_storage_transition_fault("ECG reboot", -EIO);
+		return -EIO;
+	}
+	LOG_INF("Resetting while MSC remains absent");
+	NVIC_SystemReset();
+	ecg_storage_transition_fault("ECG reboot", -EIO);
+	return -EIO;
+}
+
+/* Called only by the ECG transition owner after prepare_ecg_storage_action(). */
+static int run_ecg_manual_test_file_action(enum ecg_storage_action action)
+{
+	int ret;
+	int teardown_ret;
+
+	set_firmware_disk_writable();
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto test_failed;
+	}
+	ret = setup_disk();
+	if (ret != 0) {
+		if (filesystem_is_mounted()) {
+			teardown_ret = teardown_ecg_filesystem_for_storage_action();
+			if (teardown_ret != 0) {
+				LOG_ERR("Test setup teardown failed: %d", teardown_ret);
+			}
+		}
+		goto test_failed;
+	}
+
+	storage_clear_led();
+	switch (action) {
+	case ECG_STORAGE_ACTION_TEST_FILES_100:
+		ret = create_test_files(100);
+		break;
+	case ECG_STORAGE_ACTION_TEST_FILES_500:
+		ret = create_test_files(500);
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+	/* Always attempt the checked close/unmount sequence after a mounted test. */
+	teardown_ret = teardown_ecg_filesystem_for_storage_action();
+	if (ret == 0 && teardown_ret != 0) {
+		ret = teardown_ret;
+	}
+	if (ret != 0) {
+		goto test_failed;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto test_failed;
+	}
+
+	set_firmware_disk_read_only();
+	ret = publish_msc_host_media();
+	if (ret != 0) {
+		goto test_failed;
+	}
+
+	filesystem_clear_collection_id();
+	reset_lock = false;
+	collecting_data = false;
+	host_wants_collection = false;
+	return 0;
+
+test_failed:
+	set_firmware_disk_read_only();
+	ecg_storage_transition_fault("ECG manual test-file operation", ret);
+	return ret;
+}
+
+static int execute_ecg_storage_action(enum ecg_storage_action action)
+{
+	int ret;
+
+	k_mutex_lock(&collection_mode_lock, K_FOREVER);
+	if (atomic_get(&ecg_storage_runtime_ready) == 0) {
+		ret = -EAGAIN;
+		goto out;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto out;
+	}
+
+	ret = prepare_ecg_storage_action();
+	if (ret != 0) {
+		goto out;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		ecg_storage_transition_fault("ECG non-normal storage action", ret);
+		goto out;
+	}
+
+	switch (action) {
+	case ECG_STORAGE_ACTION_REBOOT:
+		ret = reboot_ecg_after_storage_teardown();
+		break;
+	case ECG_STORAGE_ACTION_ERASE:
+		ret = reset_ecg_storage_and_reboot(false);
+		break;
+	case ECG_STORAGE_ACTION_RESET_BAD_BLOCKS:
+		ret = reset_ecg_storage_and_reboot(true);
+		break;
+	case ECG_STORAGE_ACTION_TEST_FILES_100:
+	case ECG_STORAGE_ACTION_TEST_FILES_500:
+		ret = run_ecg_manual_test_file_action(action);
+		break;
+	default:
+		ret = -EINVAL;
+		break;
+	}
+
+out:
+	k_mutex_unlock(&collection_mode_lock);
+	return ret;
+}
+
+int enter_ecg_collection_mode(void)
+{
+	int cleanup_ret;
+	int ret;
+	int start_ret;
+	uint64_t session_id;
+	bool accel_started = false;
+	bool collection_mount_ready = false;
+	bool ecg_start_submitted = false;
+	bool ecg_started = false;
+	bool fsync_started = false;
+	bool icm_started = false;
+	bool rtc_started = false;
+
+	k_mutex_lock(&collection_mode_lock, K_FOREVER);
+	if (atomic_get(&ecg_storage_runtime_ready) == 0) {
+		k_mutex_unlock(&collection_mode_lock);
+		return -EAGAIN;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		k_mutex_unlock(&collection_mode_lock);
+		return -EIO;
+	}
+	if (collecting_data) {
+		k_mutex_unlock(&collection_mode_lock);
+		return 0;
+	}
+
+	LOG_INF("Entering ECG collection mode");
+	blink_collection_mode_pattern();
+
+	if (usb_enabled) {
+		ret = msense_msc_media_claim_for_firmware();
+		if (ret != 0) {
+			ecg_storage_transition_fault("MSC firmware claim", ret);
+			k_mutex_unlock(&collection_mode_lock);
+			return ret;
+		}
+	}
+
+	set_firmware_disk_writable();
+	ret = setup_disk();
+	if (ret != 0) {
+		LOG_ERR("Failed to mount ECG filesystem: %d", ret);
+		goto start_failed;
+	}
+	collection_mount_ready = true;
+	session_id = collection_session_id();
+	filesystem_set_collection_id(session_id);
+	if (!filesystem_workqueue_started) {
+		ret = -ENODEV;
+		goto start_failed;
+	}
+	k_work_queue_unplug(&my_work_q);
+
+	ret = rtc0_collection_counter_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start RTC0 collection counter: %d", ret);
+		goto start_failed;
+	}
+	rtc_started = true;
+
+	ecg_start_submitted = true;
+	ret = ecg_recorder_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start ECG recorder: %d", ret);
+		goto start_failed;
+	}
+	ecg_started = true;
+
+	ret = accel_recorder_start(session_id);
+	if (ret != 0) {
+		LOG_ERR("Failed to start accelerometer recorder: %d", ret);
+		goto start_failed;
+	}
+	accel_started = true;
+
+	ret = icm20948_accel_set_fifo_consumer(accel_recorder_consume_fifo, NULL);
+	if (ret != 0) {
+		LOG_ERR("Failed to register ICM-20948 FIFO consumer: %d", ret);
+		goto start_failed;
+	}
+
+	ret = icm20948_accel_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start ICM-20948 accelerometer: %d", ret);
+		goto start_failed;
+	}
+	icm_started = true;
+
+	ret = imu_fsync_timing_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start IMU FSYNC timing: %d", ret);
+		goto start_failed;
+	}
+	fsync_started = true;
+
+	ret = rtc0_collection_notification_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start RTC0 BLE timing notifications: %d", ret);
+		goto start_failed;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ret = -EIO;
+		goto start_failed;
+	}
+
+	collecting_data = true;
+	host_wants_collection = true;
+	ecg_filesystem_log_enable();
+	k_mutex_unlock(&collection_mode_lock);
+	return 0;
+
+start_failed:
+	start_ret = ret;
+	ecg_filesystem_log_disable_and_wait();
+	cleanup_ret = 0;
+	if (fsync_started) {
+		imu_fsync_timing_stop();
+	}
+	if (icm_started) {
+		ret = icm20948_accel_stop();
+		if (cleanup_ret == 0 && ret != 0) {
+			cleanup_ret = ret;
+		}
+	}
+	if (accel_started) {
+		ret = icm20948_accel_set_fifo_consumer(NULL, NULL);
+		if (cleanup_ret == 0 && ret != 0) {
+			cleanup_ret = ret;
+		}
+		ret = accel_recorder_stop();
+		if (cleanup_ret == 0 && ret != 0) {
+			cleanup_ret = ret;
+		}
+	}
+	if (ecg_started) {
+		ret = ecg_recorder_stop();
+		if (cleanup_ret == 0 && ret != 0) {
+			cleanup_ret = ret;
+		}
+	}
+	/*
+	 * A failed ecg_recorder_start() may have submitted a start token even
+	 * though it never returned success.  Its failure path must consume the
+	 * terminal stopped acknowledgement; otherwise no filesystem teardown is
+	 * safe.  Do not infer this from ecg_record_active.
+	 */
+	if (ecg_start_submitted && !ecg_recorder_shutdown_confirmed()) {
+		if (cleanup_ret == 0) {
+			cleanup_ret = (start_ret != 0) ? start_ret : -EIO;
+		}
+	}
+	if (rtc_started) {
+		rtc0_collection_counter_stop();
+	}
+	if (cleanup_ret == 0) {
+		cleanup_ret = shutdown_ecg_filesystem_after_start_failure(
+			collection_mount_ready);
+	}
+
+	set_firmware_disk_read_only();
+	host_wants_collection = false;
+	collecting_data = false;
+	if (cleanup_ret == 0 && !filesystem_is_mounted()) {
+		filesystem_clear_collection_id();
+		if (usb_enabled) {
+			cleanup_ret = publish_msc_host_media();
+		}
+	}
+	if (cleanup_ret != 0) {
+		ecg_storage_transition_fault("ECG collection start unwind", cleanup_ret);
+		ret = cleanup_ret;
+	} else {
+		ret = start_ret;
+	}
+
+	k_mutex_unlock(&collection_mode_lock);
+	return ret;
+}
+
+int exit_ecg_collection_mode(void)
+{
+	int ret;
+	int stop_ret = 0;
+	uint32_t fsync_edge_count;
+
+	k_mutex_lock(&collection_mode_lock, K_FOREVER);
+	if (!collecting_data) {
+		ret = (atomic_get(&msc_ownership_faulted) != 0) ? -EIO : 0;
+		k_mutex_unlock(&collection_mode_lock);
+		return ret;
+	}
+
+	LOG_INF("Leaving ECG collection mode");
+	host_wants_collection = false;
+	ecg_filesystem_log_disable_and_wait();
+
+	/* Keep the stream alive until its second marker, then stop all producers. */
+	while (imu_fsync_timing_edge_count_get() < 2U) {
+		fsync_edge_count = imu_fsync_timing_edge_count_get();
+		ret = imu_fsync_timing_wait_for_edge_after(fsync_edge_count,
+							K_MSEC(500));
+		if (ret != 0) {
+			LOG_WRN("Timed out waiting for IMU FSYNC startup edges: %d", ret);
+			break;
+		}
+	}
+	if (imu_fsync_timing_edge_count_get() >= 2U) {
+		k_sleep(K_MSEC(4));
+	}
+
+	ret = icm20948_accel_stop();
+	if (ret != 0) {
+		LOG_WRN("ICM-20948 accelerometer stop returned %d", ret);
+		stop_ret = ret;
+	}
+	imu_fsync_timing_stop();
+	ret = icm20948_accel_set_fifo_consumer(NULL, NULL);
+	if (ret != 0) {
+		LOG_WRN("ICM-20948 FIFO consumer clear returned %d", ret);
+		if (stop_ret == 0) {
+			stop_ret = ret;
+		}
+	}
+
+	ret = accel_recorder_stop();
+	if (ret != 0) {
+		LOG_WRN("Accelerometer recorder stop returned %d", ret);
+		if (stop_ret == 0) {
+			stop_ret = ret;
+		}
+	}
+
+	ret = ecg_recorder_stop();
+	if (ret != 0) {
+		LOG_WRN("ECG recorder stop returned %d", ret);
+		if (stop_ret == 0) {
+			stop_ret = ret;
+		}
+	}
+	rtc0_collection_counter_stop();
+
+	if (stop_ret != 0) {
+		ecg_storage_transition_fault("ECG producer stop", stop_ret);
+		k_mutex_unlock(&collection_mode_lock);
+		return stop_ret;
+	}
+	if (atomic_get(&msc_ownership_faulted) != 0) {
+		ecg_storage_transition_fault("ECG recorder fault", -EIO);
+		k_mutex_unlock(&collection_mode_lock);
+		return -EIO;
+	}
+
+	ret = finalize_ecg_filesystem_for_host();
+	if (ret != 0) {
+		ecg_storage_transition_fault("ECG filesystem teardown", ret);
+		k_mutex_unlock(&collection_mode_lock);
+		return ret;
+	}
+
+	set_firmware_disk_read_only();
+	if (usb_enabled) {
+		ret = publish_msc_host_media();
+		if (ret != 0) {
+			ecg_storage_transition_fault("ECG MSC publication", ret);
+			k_mutex_unlock(&collection_mode_lock);
+			return ret;
+		}
+	}
+
+	filesystem_clear_collection_id();
+	collecting_data = false;
+	blink_usb_mode_pattern();
+	k_mutex_unlock(&collection_mode_lock);
+	return 0;
 }
 
 static void button0_work_handler(struct k_work *work)
 {
   int button_state;
+  int ret;
   int64_t pressed_duration_ms;
 
   ARG_UNUSED(work);
@@ -895,32 +1425,19 @@ static void button0_work_handler(struct k_work *work)
   }
 
   if (pressed_duration_ms >= BUTTON0_LONG_PRESS_MS) {
-    LOG_WRN("Long button press detected, erasing flash");
-    if (collecting_data) {
-      exit_ecg_collection_mode();
-      if (collecting_data) {
-        LOG_ERR("Collection did not stop; refusing to erase active storage");
-        return;
-      }
+    ret = request_ecg_storage_reset(false);
+    if (ret != 0) {
+      LOG_ERR("Long-press storage erase request rejected: %d", ret);
+    } else {
+      LOG_WRN("Long-press storage erase queued through ECG transition owner");
     }
-
-    reset_lock = true;
-    (void)set_usb_mass_storage_enabled(false);
-
-    #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(false);
-    #endif
-
-    shutdown_filesystem();
-    blink_flash_format_pattern();
-    reset_device(false);
     return;
   }
 
   if (collecting_data) {
-    exit_ecg_collection_mode();
+    request_ecg_collection_mode(false);
   } else {
-    enter_ecg_collection_mode();
+    request_ecg_collection_mode(true);
   }
 }
 
@@ -974,6 +1491,8 @@ int main(void)
 {
   int ret;
   int identity_err;
+	int uuid_ret = 0;
+	bool uuid_write_ready = false;
   uint32_t reset_reason = nrfx_reset_reason_get();
 
   /* RESETREAS is cumulative until acknowledged. Capture this boot's reason
@@ -998,22 +1517,53 @@ int main(void)
   
 
   // Setup our Flash Filesystem
-  setup_disk();
+  ret = setup_disk();
+  if (ret != 0) {
+    LOG_ERR("Startup filesystem setup failed: %d", ret);
+    set_firmware_disk_read_only();
+    return ret;
+  }
   filesystem_workqueue_init();
 
+	if (identity_err == 0) {
+		uuid_ret = write_device_info_file(msense_device_identity_name(),
+						  msense_device_identity_hex());
+		if (uuid_ret == 0) {
+			uuid_write_ready = true;
+		} else {
+			LOG_ERR("Unable to write boot uuid.txt: %d", uuid_ret);
+		}
+	}
+
   k_sleep(K_SECONDS(1));
-  #if CONFIG_DISK_DRIVER_RAW_NAND
-    set_read_only(true);
-  #endif
 
   #ifdef CONFIG_MSENSE_USB_SECURITY
     security_lock = true;
   #endif
 
-  ret = set_usb_mass_storage_enabled(true);
-  if (ret != 0)
-  {
-    LOG_ERR("Failed to enable USB mass storage: %d", ret);
+  ret = filesystem_gate_and_drain();
+  if (ret == 0) {
+    ret = shutdown_filesystem();
+  }
+  set_firmware_disk_read_only();
+  if (ret != 0 || filesystem_is_mounted()) {
+    if (ret == 0) {
+      ret = -EBUSY;
+    }
+    ecg_storage_transition_fault("Startup filesystem teardown", ret);
+    LOG_ERR("Startup filesystem teardown failed: %d", ret);
+  } else if (identity_err != 0) {
+    LOG_ERR("Factory identity is unavailable; keeping MSC medium absent");
+  } else if (!uuid_write_ready) {
+    ecg_storage_transition_fault("Startup uuid.txt write", uuid_ret);
+  } else if (atomic_get(&msc_ownership_faulted) != 0) {
+    LOG_ERR("Startup storage ownership fault; keeping MSC medium absent");
+  } else if (!security_lock) {
+    ret = enable_usb_msc_host_media();
+    if (ret != 0) {
+      ecg_storage_transition_fault("Startup USB MSC publication", ret);
+      LOG_ERR("Failed to publish USB MSC medium: %d", ret);
+    }
   }
 
   k_sleep(K_SECONDS(2));
@@ -1037,10 +1587,11 @@ int main(void)
     LOG_ERR("IMU FSYNC timing initialization failed: %d", ret);
   }
   accel_recorder_set_fault_handler(accel_record_fault_handler, NULL);
+  ecg_recorder_set_fault_handler(accel_record_fault_handler, NULL);
   
   // Init, verify ID and config sensors
   
-  //spi_init();
+  //app_spi_init();
   //spi_verify_sensor_ids();
 
   //i2c_init();

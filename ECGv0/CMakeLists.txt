@@ -14,7 +14,7 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../shared")
 
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(MotionSenseHrv)
+project(ECGv0)
 
 include("${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/cmake/msense_git_metadata.cmake")
 msense_add_git_metadata("${CMAKE_CURRENT_SOURCE_DIR}")

@@ -69,7 +69,7 @@ run_git("${test_repository}" config user.email "metadata-test@example.com")
 run_git("${test_repository}" config user.name "Git Metadata Test")
 file(WRITE "${test_repository}/tracked.txt" "base\n")
 run_git("${test_repository}" add tracked.txt)
-run_git("${test_repository}" commit -m initial)
+run_git("${test_repository}" -c commit.gpgsign=false commit -m initial)
 run_git("${test_repository}" rev-parse --verify HEAD)
 set(expected_commit "${RUN_GIT_OUTPUT}")
 

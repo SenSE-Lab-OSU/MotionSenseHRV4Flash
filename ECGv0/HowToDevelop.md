@@ -1,3 +1,24 @@
+# ECGv0 development note (Phase 5 draft)
+
+The reproducible local build is the shared wrapper, not the legacy
+`ECGv0/tools` scripts. Use the managed NCS 2.9.3 workspace and run this command
+by itself; do not overlap it with a PPGv2 or VS Code build:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\senselab-tools\vscode-wrapper\ncs-build.ps1 `
+  -ApplicationRoot 'D:\MotionSenseHRV4Flash\ECGv0' `
+  -Board 'ecgv0/nrf5340/cpuapp' `
+  -BuildDirectory 'D:\MotionSenseHRV4Flash\ECGv0\build-phase5'
+```
+
+The sysbuild artifacts are under `build-phase5\ECGv0`, `build-phase5\mcuboot`,
+`build-phase5\hci_ipc`, and `build-phase5\merged.hex`. ECGv0 owns its
+MAX30001 acquisition, separate ICM-20948/timing implementation, ECG record
+formats, BLE contract, and button-driven ship mode. Do not infer any of those
+contracts from the CMake project name.
+
+The remaining background material follows.
+
 Welcome to the MSense4 Development guide! For those that not yet developed with Zephyr or the NrfConnect Sdk, this guide exists as a tool to help you find your ropes around this project, as our build system has become very complex. This is partly due to the way that Zephyr wants software to be built, and partly because our embedded software in it of itself is complex, requiring multiple partitions, dual core functionality for bluetooth low energy, and lots of other sensors.
 
 
@@ -9,7 +30,7 @@ Overview of files:
 
 **My Tips and Tricks**
 
-First off: nrfconnect routes many things through two major systems: devicetree, and KConfig. Both of them can use parameters from each other, and can be used (and are supposed to be used) in C code to reference global variables and hardware abstracted code. DeviceTree specifically is very important, because it is the full code link to any hardware. It is a nodebased system that has it's own language where you can build hiearichal nodes representing the hardware components of your device. Thankfully, the nrf5r340 devkit device tree setup covers just about all the nodes we have on our board, but we did have to make some specific modifications to account for some of the customized hardware we did differently fromt the dk (see nrf5340dk_nrf5340_cpuapp.overlay).  I recommend studying both of these systems, and their interactions, very extensively, in order to understand what may be going on in the code.
+First off: nrfconnect routes many things through two major systems: devicetree, and KConfig. Both of them can use parameters from each other, and can be used (and are supposed to be used) in C code to reference global variables and hardware abstracted code. DeviceTree specifically is very important, because it is the full code link to any hardware. ECGv0 now owns its hardware description in `../boards/senselab/ecgv0/`, rather than adapting an nRF5340 DK application overlay. Application code should use the board aliases for sensors, buses, storage, the user button, and GPIO controllers instead of relying on DK-oriented node labels. I recommend studying both of these systems, and their interactions, very extensively, in order to understand what may be going on in the code.
 
 KConfigs are a way of creating settings that can be utilized within all the different systems of zephyr. They can be used anywhere in code almost like a preprocessor headings, and can also control device tree, and what gets compiled via CMakeLists. There are a bunch of KConfigs created by Nrf and Zephyr, and we additionally have our own KConfigs that we define both in the drivers folder and main src folder. KConfigs can be set mainly in the prj.conf file, though they are not always determined this way. KConfigs can also be set in device tree internally, and can also be set in underlying KConfigs that get included when you choose to include certain drivers in your project (in somewhat of a recursive manner, as the drivers you decide to include in your project are based upon KConfigs). KConfigs in the device tree or CMakeLists typically tend to override their value that's set in prj.conf, but if that happens the terminal will warn you during the configuration stage. The warning will usually look something like this: 
 
@@ -43,6 +64,4 @@ Due to the way zephyr sets up it's device driver model, There are 5 locations fo
 4. src/drivers/zephyr/module.yml: tells zephyr where all the above^ files are
 
 5. dts/...: defines the device tree settings for the driver. Is used by the c file that defines the driver. Note that when using these parameters in code, dashes (-) are converted to underscores (_). So if you want to access property-1 in code, you do property_1.
-
-
 

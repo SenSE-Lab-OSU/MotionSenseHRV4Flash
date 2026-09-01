@@ -44,4 +44,4 @@ The sync bytes are not included in the CRC.
   alone; host software must use firmware or collection provenance.
 - `raw24` is preserved directly from the MAX30001 ECG FIFO so host-side tools can decode the ECG sample and tag bits using the datasheet rules.
 
-Current firmware implementation: `MSenseDevice/src/ecgRecorder.c`.
+Current firmware implementation: `ECGv0/src/ecgRecorder.c`.

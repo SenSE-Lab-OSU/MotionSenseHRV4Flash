@@ -1,0 +1,30 @@
+ECGv0 history rewrite range-diff record
+========================================
+
+Recorded command (run from the repository root):
+
+git range-diff --no-color --no-patch 68967d2d31b7ca308877b0c9e644ce5e0feb2a27..070793f51ce01262724812d73e3ed47b3c2a6bd9 68967d2d31b7ca308877b0c9e644ce5e0feb2a27..7aac128a5b2c2e028aebd6ea5b076680cc1cbc4b
+
+Result: exit status 0.
+
+The comparison reports the expected structural differences:
+
+- 41 source-side commits, including historical merge `1db2cacd`, are replaced
+  by 11 linear review commits.
+- Source commits in each subsystem group appear as removed/unpaired entries
+  next to their squashed rewritten commit; this is expected for a compact
+  series and is completely enumerated in `ecgv0-history-rewrite-map.md`.
+- `eaccc6b` is intentionally represented by both the recording/transport and
+  ship-mode entries because its button electrical hunk belongs with the latter.
+- The source merge is flattened into its already-mapped parent-side changes;
+  no merge topology is retained.
+- The LTO helper patch is deliberately ordered with the NAND ECC/geometry
+  commit instead of its original chronological position so storage reviewers
+  receive one coherent change.
+
+The local Git text-conversion configuration emitted a warning that `pdftotext`
+was unavailable for the tracked ICM-20948 PDF. The range-diff itself completed
+with exit status 0. This did not affect the decisive verification, which used a
+full binary and file-mode-aware Git diff and exact tree-object comparison.
+
+For a detailed patch presentation, use the same command without `--no-patch`.

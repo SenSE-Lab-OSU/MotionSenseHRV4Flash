@@ -18,6 +18,8 @@ __pycache__/
 datasheets/
 nathan_ignore/
 .codex/
+AGENTS.md
+docs/
 
 # C extensions
 *.so

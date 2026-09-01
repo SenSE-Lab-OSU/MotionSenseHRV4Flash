@@ -183,7 +183,10 @@ void ppg_config()
   {
     LOG_INF("configuring ppg...");
     uint32_t ppg_intensity = (((uint32_t)ppgConfig.green_intensity) << 8) + ((uint32_t)ppgConfig.infraRed_intensity);
-    printk("intensity = %d,%d,%d\n", ppg_intensity, ((uint32_t)ppgConfig.green_intensity) << 8, (uint32_t)ppgConfig.infraRed_intensity);
+    LOG_DBG("PPG LED intensity: combined=%u, green=%u, infrared=%u",
+            (unsigned int)ppg_intensity,
+            (unsigned int)(((uint32_t)ppgConfig.green_intensity) << 8),
+            (unsigned int)ppgConfig.infraRed_intensity);
 
     ppg_apply_fixed_sampling_rate();
     // fileOpen();

@@ -292,7 +292,8 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
       enmo /= IMU_FIXED_OUTPUT_HZ;
       currentAccData.ENMO = enmo;
       // floats are cast to double in print calls
-      LOG_INF("%d, %d, %d", (int)(accelX*1000), (int)(accelY*1000), (int)(accelZ*1000));
+      LOG_DBG("IMU acceleration: x=%d, y=%d, z=%d", (int)(accelX*1000),
+              (int)(accelY*1000), (int)(accelZ*1000));
       LOG_DBG("Enmo: %d", (int)(enmo*1000));
       //currentAccData.time = get_current_unix_time();
 
@@ -318,7 +319,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %d", (int)(currentAccData.ENMO*1000));
+      LOG_DBG("ENMO BLE update: %d", (int)(currentAccData.ENMO*1000));
       // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
       }

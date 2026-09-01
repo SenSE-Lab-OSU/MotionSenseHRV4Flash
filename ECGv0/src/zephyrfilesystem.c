@@ -60,8 +60,6 @@ bool panic_single_thread;
 
 struct k_work_q my_work_q;
 
-memory_container ppg_work_item;
-
 memory_container ecg_work_item;
 
 memory_container log_work_item;
@@ -144,13 +142,6 @@ typedef struct MotionSenseFile {
 //File Objects
 //static MotionSenseFile current_file;
 
-MotionSenseFile ppg_file = {
-	.write_size = 8192,
-	.max_writes = 512,
-	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 global_tick_512hz"
-};
-
 /* store_data checks one sample ahead; this flushes 8184-byte ECG chunks. */
 MotionSenseFile ecg_file = {
 	.write_size = 8196,
@@ -188,7 +179,6 @@ void enable_read_only(bool enable){
 
 const char* sensor_enum_to_string(enum sensor_type sensor) {
     switch (sensor) {
-        case ppg:    return "ppg";
         case ecg: return "ecg";
         case customlog: return "log";
         default:           return "undefined";
@@ -519,10 +509,7 @@ int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor)
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()){
 		return sensor_write_failure(sensor, "Raw disk is read-only", -EROFS);
 	}
-	if (sensor == ppg){
-		MSenseFile = &ppg_file;
-	}
-	else if (sensor == ecg){
+	if (sensor == ecg){
 		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
@@ -772,10 +759,7 @@ int submit_write(const void* data, size_t size, enum sensor_type type){
 		return -EACCES;
 	}
 
-	if (type == ppg){
-		work_item = &ppg_work_item;
-	}
-	else if (type == ecg){
+	if (type == ecg){
 		work_item = &ecg_work_item;
 	}
 	else if (type == customlog){
@@ -820,10 +804,7 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
 	int ret;
-	if (sensor == ppg){
-		MSenseFile = &ppg_file;
-	}
-	else if (sensor == ecg){
+	if (sensor == ecg){
 		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
@@ -899,10 +880,7 @@ int flush_data_buffer(enum sensor_type sensor){
 	data_upload_buffer* current_buffer;
 	//int16_t arr[6];
 	MotionSenseFile* MSenseFile;
-	if (sensor == ppg){
-		MSenseFile = &ppg_file;
-	}
-	else if (sensor == ecg){
+	if (sensor == ecg){
 		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
@@ -984,13 +962,12 @@ int write_device_info_file(const char *device_name,
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
 			   "Name: %s\nDevice ID: %s\nVersion: %s"
 			   "\nGit Commit: %s\nGit Tree: %s"
-			   "\nppg format: %s\naccel format: ICM-20948 accel binary format v2"
+			   "\naccel format: ICM-20948 accel binary format v2"
 			   "\necg format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
 			   device_name, device_id_hex, CONFIG_BT_DIS_MODEL,
-			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
-			   ppg_file.sensor_format, ecg_file.sensor_format);
+			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE, ecg_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;
 	}
@@ -1033,11 +1010,6 @@ static int close_all_files(void)
 {
 	int ret = 0;
 	int close_ret;
-
-	close_ret = reset_sensor_file(&ppg_file);
-	if (ret == 0 && close_ret != 0) {
-		ret = close_ret;
-	}
 
 	close_ret = reset_sensor_file(&ecg_file);
 	if (ret == 0 && close_ret != 0) {

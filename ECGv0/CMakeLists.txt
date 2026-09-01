@@ -72,7 +72,6 @@ target_sources(app PRIVATE
 	src/accelRecorder.c
 	src/accelTimingEstimator.c
 	src/batterymonitordt.c
-	src/ble_ppg_compat.c
 	src/device_identity.c
 	src/ecgRecordFormat.c
 	src/ecgRecorder.c

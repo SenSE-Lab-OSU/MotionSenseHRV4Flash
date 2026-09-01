@@ -21,11 +21,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
-#include "ppgSensor.h"
 #include "accelRecorder.h"
 #include "imuFsyncTiming.h"
 #include "icm20948_accel.h"
-#include "common.h"
 #include "BLEService.h"
 #include "ecgRecorder.h"
 #include "device_identity.h"
@@ -56,14 +54,11 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_USB_MASS_STORAGE),
 /* The devicetree node identifier for the "led0" alias. */
 #define LED_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
-#define PPG_POWER_NODE DT_ALIAS(led2) 
+#define LED_POWER_NODE DT_ALIAS(led2)
 #define BUTTON0_NODE DT_ALIAS(user_button)
-#define ECG_NODE DT_ALIAS(ecg)
-#define ECG_BUS_NODE DT_ALIAS(ecg_bus)
 #define BATTERY_GAUGE_NODE DT_ALIAS(battery_gauge)
 #define BATTERY_BUS_NODE DT_ALIAS(battery_bus)
 #define GPIO0_NODE DT_ALIAS(gpio0)
-#define GPIO1_NODE DT_ALIAS(gpio1)
 #define BUTTON0_LONG_PRESS_MS 5000
 
 enum ship_mode_state {
@@ -89,12 +84,9 @@ enum ecg_storage_action {
 
 
 
-#define PPG_POWER_PIN DT_GPIO_PIN(PPG_POWER_NODE, gpios)
-#define PPG_POWER_FLAGS DT_GPIO_FLAGS(PPG_POWER_NODE, gpios)
-
 const struct device* gpio0_device;
-const struct device* gpio1_device;
 
+static const struct gpio_dt_spec led_power = GPIO_DT_SPEC_GET(LED_POWER_NODE, gpios);
 static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
 static struct gpio_callback button0_callback;
 /*
@@ -128,42 +120,13 @@ static int execute_ecg_storage_action(enum ecg_storage_action action);
 static void ecg_collection_transition_thread(void *arg1, void *arg2,
 					     void *arg3);
 
+#define ECG_COLLECTION_TRANSITION_STACK_SIZE 8192
+
 K_WORK_DEFINE(button0_work, button0_work_handler);
-K_THREAD_DEFINE(ecg_collection_transition_thread_id, 2048,
+K_THREAD_DEFINE(ecg_collection_transition_thread_id, ECG_COLLECTION_TRANSITION_STACK_SIZE,
 		ecg_collection_transition_thread, NULL, NULL, NULL, 7, 0, 0);
 
 
-/* SPI Definitions */
-
-
-/*
-------------------------------------------------------------------------------------
-SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
-                                in Idle State 	Sample and/or Shift the Data
-------------------------------------------------------------------------------------
-0               0         0 	Logic low 	Data sampled on rising edge and
-                                                shifted out on the falling edge
-1               0         1 	Logic low 	Data sampled on the falling edge and
-                                                shifted out on the rising edge
-2               1         1 	Logic high 	Data sampled on the falling edge and
-                                                shifted out on the rising edge
-3               1         0 	Logic high 	Data sampled on the rising edge and
-                                                shifted out on the falling edge
--------------------------------------------------------------------------------------
-*/
-// SPI Mode-3 PPG
-struct spi_config spi_cfg_ppg = {
-    .frequency = DT_PROP(ECG_NODE, spi_max_frequency),
-    .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
-                 SPI_MODE_CPOL | SPI_MODE_CPHA,
-    .slave = DT_REG_ADDR(ECG_NODE),
-    .cs = SPI_CS_CONTROL_INIT(ECG_NODE, 0),
-};
-
-
-
-
-const struct device *spi_dev_ppg;
 const struct device *i2c_dev;
 
 
@@ -184,8 +147,6 @@ const struct device *i2c_dev;
 
 
 static K_SEM_DEFINE(ble_init_ok, 0, 1);
-
-uint32_t global_counter;
 
 #define AD_FIELD_OVERHEAD 2U
 #define AD_FLAGS_ENCODED_LEN (AD_FIELD_OVERHEAD + 1U)
@@ -461,25 +422,6 @@ static void ble_init(void)
   }
 }
 
-// Timer handler that periodically executes commands with a period,
-// which is defined by the macro-variable TIMER_MS
-static void app_spi_init(void)
-{
-  
-  // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
-  const char *const spiName_ppg = "spi@c000";
-
-  spi_dev_ppg = DEVICE_DT_GET(ECG_BUS_NODE);
-  //spi_dev_ppg = device_get_binding(spiName_ppg);
-
-  if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
-  {
-    printk("Could not get %s \n", spiName_ppg);
-    return;
-  }
-  
-}
-
 static void i2c_init(void)
 {
 
@@ -511,7 +453,6 @@ void battery_maintenance()
   dt_update_battery(dev, log_summary);
   
   //battery_lvl = bt_bas_get_battery_level();
-  #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
   if (battery_level < 5){
     // if this is our first time
     if (!battery_low){
@@ -540,7 +481,6 @@ void battery_maintenance()
             
         }
   }
-  #endif
     
 }
 
@@ -615,9 +555,6 @@ static void filesystem_workqueue_init(void)
   k_work_queue_init(&my_work_q);
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, &cfg);
-
-  k_work_init(&ppg_work_item.work, work_write);
-  ppg_work_item.sensor = ppg;
 
   k_work_init(&ecg_work_item.work, work_write);
   ecg_work_item.sensor = ecg;
@@ -1570,12 +1507,41 @@ int main(void)
   
 
   gpio0_device = DEVICE_DT_GET(GPIO0_NODE);
-  gpio1_device = DEVICE_DT_GET(GPIO1_NODE);
-  
-  // Initialize our 2 LED pins and 5V PPG Power Pin
+
+  if (!device_is_ready(gpio0_device))
+  {
+    LOG_ERR("GPIO0 status LED controller is not ready");
+    return -ENODEV;
+  }
+
+  // Initialize our two status LED pins.
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to configure status LED0: %d", ret);
+    return ret;
+  }
+
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
-  ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to configure status LED1: %d", ret);
+    return ret;
+  }
+
+  if (!gpio_is_ready_dt(&led_power))
+  {
+    LOG_ERR("LED power GPIO controller is not ready");
+    return -ENODEV;
+  }
+
+  ret = gpio_pin_configure_dt(&led_power, GPIO_OUTPUT_ACTIVE);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to configure LED power rail: %d", ret);
+    return ret;
+  }
+
   ret = icm20948_accel_init();
   if (ret != 0)
   {
@@ -1589,15 +1555,7 @@ int main(void)
   accel_recorder_set_fault_handler(accel_record_fault_handler, NULL);
   ecg_recorder_set_fault_handler(accel_record_fault_handler, NULL);
   
-  // Init, verify ID and config sensors
-  
-  //app_spi_init();
-  //spi_verify_sensor_ids();
-
   //i2c_init();
-
-  // Shutdown our PPG sensor until we need to get data from it
-  //ppg_sleep();
 
   LOG_INF("Ship mode active; press button0 to enable BLE and status LEDs");
   ret = k_sem_take(&ship_mode_exit_sem, K_FOREVER);

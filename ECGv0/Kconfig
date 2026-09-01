@@ -68,15 +68,6 @@ endif # NORDIC_QSPI_NOR
 
 endif # DISK_DRIVER_FLASH
 
-config MSENSE3_BLUETOOTH_DATA_UPDATES
-	bool "Use MotionSenseHRV3Updates"
-	default n
-	help 
-		Enables the Previous MSense3 mode of data collection, which starts collection as soon as the device connects to usb
-		and sends data all through bluetooth
-		
-
-
 menuconfig COLLECTION_REQUIRES_DATE_ID
 	bool "Allows sensor collection only if the date time and id characteristics have been filled out by the central."
 	default n
@@ -107,15 +98,11 @@ config LOG_BACKEND_FS_BUFFER
     depends on LOG
     select LOG_OUTPUT
     help
-      When enabled, the double buffered filesystem backend (normally for ppg and accel) will be used for logging.
+      When enabled, the double buffered filesystem backend is used for logging.
 
 
 config LOG_LEVEL_ICM20948_ACCEL
 	int "ICM-20948 accelerometer log level"
-	default 3
-
-config LOG_LEVEL_PPG_COLLECTION
-	int "level at which data from ppg is printed in logs"
 	default 3
 
 config LOG_LEVEL_MAX30001

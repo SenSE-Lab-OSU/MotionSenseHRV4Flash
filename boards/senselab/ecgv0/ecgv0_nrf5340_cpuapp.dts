@@ -27,7 +27,7 @@
 	aliases {
 		led0 = &led0;
 		led1 = &led1;
-		led2 = &ppg_power;
+		led2 = &led_power;
 		user-button = &button0;
 		ecg = &max30001;
 		ecg-bus = &spi3;
@@ -56,9 +56,9 @@
 			label = "Status LED 1";
 		};
 
-		ppg_power: ppg_power {
+		led_power: led_power {
 			gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
-			label = "Sensor power enable";
+			label = "LED power enable";
 		};
 	};
 

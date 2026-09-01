@@ -11,7 +11,6 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/spinlock.h>
 
-#include "ppgSensor.h"
 #include "batterymonitordt.h"
 #include "zephyrfilesystem.h"
 #include <zephyr/bluetooth/hci.h>
@@ -285,7 +284,7 @@ static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, c
 uint16_t offset, uint8_t flags);
 static ssize_t bt_change_name(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags);
-static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
+static ssize_t bt_request_manual_test_file(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len,
   uint16_t offset, uint8_t flags);
 
 
@@ -311,19 +310,8 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
 }
 
 
-/* Later, we should just delete these and move the defining bluetooth to the bottom. */
- struct bt_uuid_128 bt_uuid_data = BT_UUID_INIT_128(UPDATE3_SERVICE_UUID);
- struct bt_uuid_128 bt_uuid_config_rx = BT_UUID_INIT_128(RX_CHARACTERISTIC_UUID);
- struct bt_uuid_128 bt_uuid_ppg_tx = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
- 
- struct bt_uuid_128 bt_uuid_ppg_quality = BT_UUID_INIT_128(PPG_QUALITY_CHARACTERISTIC_UUID);
-#define BT_UUID_DATA_SERVICE      (struct bt_uuid_128 *)(&bt_uuid_data)
-
-#define BT_UUID_PPG_TX   (struct bt_uuid_128 *)(&bt_uuid_ppg_tx)
-#define BT_UUID_PPG_QUALITY   (struct bt_uuid_128 *)(&bt_uuid_ppg_quality)
 // control service characteristics
 struct bt_uuid_128 bt_uuid_control = BT_UUID_INIT_128(CONTROL_SERVICE_UUID);
-struct bt_uuid_128 bt_enabledisable = BT_UUID_INIT_128(PPG_TX_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_write_enable = BT_UUID_INIT_128(WRITE_ENABLE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_datetime = BT_UUID_INIT_128(WRITE_DATE_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_patientnum = BT_UUID_INIT_128(WRITE_PATIENT_CHARACTERISTIC_UUID);
@@ -338,27 +326,6 @@ static struct bt_uuid_128 bt_uuid_timing_update_service =
 	BT_UUID_INIT_128(TIMING_UPDATE_SERVICE_UUID);
 static struct bt_uuid_128 bt_uuid_timing_update =
 	BT_UUID_INIT_128(TIMING_UPDATE_CHARACTERISTIC_UUID);
-
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-/* TF micro Button Service Declaration and Registration */
-BT_GATT_SERVICE_DEFINE(data_service, // 0
-  BT_GATT_PRIMARY_SERVICE(BT_UUID_DATA_SERVICE), // 1 
-  BT_GATT_CHARACTERISTIC(BT_UUID_PPG_TX, //2
-    BT_GATT_CHRC_NOTIFY,BT_GATT_PERM_READ,
-    NULL, NULL, NULL),
-  BT_GATT_CCC(on_cccd_changed, //3
-    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-  BT_GATT_DESCRIPTOR(BT_UUID_PPG_QUALITY,//4
-    BT_GATT_PERM_READ, read_ppg_quality,
-    NULL, ppgQuality),
-  BT_GATT_CUD(PPG_NAME, BT_GATT_PERM_READ)
-);
-
-#define BLE_ATTR_PRIMARY_SERVICE 0
-#define BLE_ATTR_CONFIG_CHARACTERISTIC 1
-#define BLE_ATTR_PPG_CHARACTERISTIC 2
-
-#endif
 
 /* See bas.c for more information, but essentially, the battery service in configured in this exact same way as here,
  with the same macros and everything.
@@ -379,7 +346,7 @@ BT_GATT_SERVICE_DEFINE(control_service,
   BT_GATT_CHARACTERISTIC(&bt_uuid_reset.uuid, 
     BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, 
     NULL, bt_reset, NULL),
-  BT_GATT_CHARACTERISTIC(&bt_uuid_name.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_change_brightness, NULL),
+  BT_GATT_CHARACTERISTIC(&bt_uuid_name.uuid, BT_GATT_CHRC_WRITE, BT_GATT_PERM_WRITE, NULL, bt_request_manual_test_file, NULL),
 ); 
 
 /* status service: read storage capacity, potentially battery later on*/
@@ -462,10 +429,7 @@ static void rtc0_collection_notify_work_handler(struct k_work *work)
 
 
 
-struct ppgInfo my_ppgSensor;
 struct ble_battery_info my_battery ;  // work-queue instance for batter level
-
-struct bleDataPacket my_ppgDataSensor;
 
 
 void write_status_register(bool value, int position){
@@ -749,51 +713,45 @@ void crash_device(){
 }
 
 
-static ssize_t bt_change_brightness(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
-  uint16_t offset, uint8_t flags){
-    int ret;
+static ssize_t bt_request_manual_test_file(struct bt_conn* conn,
+  const struct bt_gatt_attr* attr, const void* buff, uint16_t len,
+  uint16_t offset, uint8_t flags)
+{
+  uint8_t command;
+  int ret;
 
-    LOG_INF("Attribute other settings write, handle: %u, conn: %p, length %i", attr->handle,
-      (void *)conn, len);
-  
-    
-    if (len != 1){
-      LOG_WRN("invalid packet length: %i", len);
-      return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
-    }
-    
-    if (offset != 0) {
-      LOG_INF("Write: Incorrect data offset");
-      return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
-    }
-  
-    uint8_t val = *((uint8_t *)buff);
-    LOG_INF("entered value: %i", val);
-    if (!collecting_data){
-      if (val == 0){
-        LOG_INF("Turning on auto brightness");
-        use_fixed_ppg_brightness = false;
-      }
-      else if (val > 0 && val < 121){
-        LOG_INF("Turning on manual brightness");
-        use_fixed_ppg_brightness = true;
-        ppgConfig.green_intensity = val;
-        ppgConfig.infraRed_intensity = val - 10;
-      }
-      else if (val == 130 || val == 150){
-        ret = request_ecg_manual_test_file(val);
-        if (ret != 0) {
-          LOG_ERR("Manual file creation request rejected: %d", ret);
-          return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
-        }
-        LOG_INF("Queued manual file creation through ECG storage owner");
-      }
-      return len;
-      
-    }
-    
+  ARG_UNUSED(flags);
+  LOG_INF("Manual test-file command, handle: %u, conn: %p, length %i",
+    attr->handle, (void *)conn, len);
+
+  if (len != 1) {
+    LOG_WRN("Invalid manual test-file command length: %i", len);
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+  }
+  if (offset != 0) {
+    LOG_WRN("Manual test-file command has nonzero offset");
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+  }
+  if (collecting_data) {
+    LOG_WRN("Manual test-file command rejected while collecting");
     return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
   }
+
+  command = *((const uint8_t *)buff);
+  if (command != 130U && command != 150U) {
+    LOG_WRN("Unsupported manual test-file command: %u", command);
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+  }
+
+  ret = request_ecg_manual_test_file(command);
+  if (ret != 0) {
+    LOG_ERR("Manual file creation request rejected: %d", ret);
+    return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+  }
+
+  LOG_INF("Queued manual file creation through ECG storage owner");
+  return len;
+}
 
 
 static ssize_t read_generic_one(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
@@ -875,136 +833,3 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
   }
   return ret; 
 }
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-
-uint8_t configRead[6] = {0,0,0,0,0,0};
-uint8_t ppgQuality[4] = {0};
-
-void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
-  const struct bt_gatt_attr *attr = &data_service.attrs[2]; 
-  struct bt_gatt_notify_params params = {
-    .uuid   = BT_UUID_PPG_TX,
-    .attr   = attr,
-    .data   = data,
-    .len    = len,
-    .func   = on_sent
-  };
-  
-  // Check whether notifications are enabled or not
-  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
-    // Send the notification
-    if(bt_gatt_notify_cb(conn, &params)){
-            LOG_WRN("Error, unable to send notification\n");
-    }
-  }
-  else{
-        //printk("Warning, notification not enabled on the selected attribute\n");
-  }
-}
-
-
-
-void ppgData_notify(struct k_work *item){
-  struct bleDataPacket* the_device=  ((struct bleDataPacket *)(((char *)(item)) - offsetof(struct bleDataPacket, work)));
-
-  ////printk("data LED =%u, Data counter1=%u, Data counter2=%u,pk=%u\n", dataPacket[0],dataPacket[1],dataPacket[2],packetLength);
-  ppg_send(my_connection, the_device->dataPacket, PPG_DATA_UNFILTER_LEN);
-}
-
-
-
-static ssize_t read_ppg_quality(struct bt_conn *conn,const struct bt_gatt_attr *attr, void *buf,
-  uint16_t len, uint16_t offset){
-  uint8_t *value1 = (uint8_t *)attr->user_data;
-  uint8_t *rsp;
-
-  rsp = value1;
-
-  return bt_gatt_attr_read(conn, attr, buf, len, offset, rsp,PPGQUALITY_DATA_LEN);
-}
-/* This function is called whenever the RX Characteristic has been written to by a Client */
-ssize_t legacy_on_settings_change(struct bt_conn *conn,
-			  const struct bt_gatt_attr *attr,
-			  const void *buf,
-			  uint16_t len,
-			  uint16_t offset,
-			  uint8_t flags){
-  const uint8_t * buffer =(const uint8_t*) buf;
-  
-  printk("Received data, handle %d, conn %p, data: 0x", attr->handle, conn);
-  for(uint8_t i = 0; i < len; i++){
-        printk("%02X,", buffer[i]);
-  }
-  printk("\n");
-
-  switch(buffer[0]){
-    case BLE_CONFIG_SENSOR_ENABLE:
-      // Enabling or disabling sensors
-      if((buffer[1] & PPG_ENABLE) == PPG_ENABLE){
-        ppgConfig.isEnabled = true;
-        configRead[1] = configRead[1] | 0x01; 
-      }
-      else if((buffer[1] & PPG_ENABLE) == 0x00){
-        ppgConfig.isEnabled = false;
-        configRead[1] = configRead[1] & 0xFE; 
-      }     
-      if((buffer[2] & PPG_BLE_ENABLE) == PPG_BLE_ENABLE){
-        ppgConfig.txPacketEnable = true;
-        configRead[0] = configRead[0] | 0x01; 
-      }
-      else if((buffer[2] & PPG_BLE_ENABLE) == 0x00){
-        ppgConfig.txPacketEnable = false;
-        configRead[0] = configRead[0] & 0xFE; 
-      }
-      break;
-    case BLE_CONFIG_LED_INTENSITY_GREEN:
-      // configuring PPG Green intensity
-      ppgConfig.green_intensity = buffer[1];
-      configRead[2] = ppgConfig.green_intensity;
-      ppg_changeIntensity();
-      break;
-    case BLE_CONFIG_LED_INTENSITY_IR:
-      // configuring PPG IR intensity
-      ppgConfig.infraRed_intensity = buffer[1];
-      configRead[3] = ppgConfig.infraRed_intensity;
-      ppg_changeIntensity();
-      break;
-    case BLE_CONFIG_SAMPLING_RATE_PPG:
-      // PPG sampling is fixed at 512 sps with 2-sample averaging.
-      // Ignore host rate selections so the firmware has a single PPG cadence.
-      ppg_changeSamplingRate();
-      configRead[5] = PPG_FIXED_256HZ_STATUS | (configRead[5]&0x0F);
-      break;
-    default: 
-      printk("Error, CCCD has been set to an invalid value");        
-  }
-  return len;
-}
-
-void legacy_initialize_settings(){
-  configRead[0] = PPG_BLE_ENABLE;
-  configRead[1] = PPG_ENABLE;
-  configRead[2] = ppgConfig.green_intensity;
-  configRead[3] = ppgConfig.infraRed_intensity;
-  configRead[4] = 0U;
-  configRead[5] = PPG_FIXED_256HZ_STATUS;
-}
-
-/* This function is called whenever a Notification has been sent by the TX Characteristic */
-static void on_sent(struct bt_conn* conn, void* user_data){
-  ARG_UNUSED(user_data);
-  //const bt_addr_le_t * addr = bt_conn_get_dst(conn);
-    /*    
-	//printk("Data sent to Address 0x %02X %02X %02X %02X %02X %02X \n", addr->a.val[0]
-                                                                    , addr->a.val[1]
-                                                                    , addr->a.val[2]
-                                                                    , addr->a.val[3]
-                                                                    , addr->a.val[4]
-                                                                    , addr->a.val[5]);*/
-}
-
-
-
-
-
-#endif

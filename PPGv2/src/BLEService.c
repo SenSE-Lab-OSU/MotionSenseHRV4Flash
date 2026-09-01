@@ -122,7 +122,9 @@ static int request_ppg_storage_action(enum ppg_storage_action action);
 static int execute_ppg_storage_action(enum ppg_storage_action action);
 void storage_clear_led(void);
 
-K_THREAD_DEFINE(ppg_collection_transition_thread_id, 2048,
+#define PPG_COLLECTION_TRANSITION_STACK_SIZE 8192
+
+K_THREAD_DEFINE(ppg_collection_transition_thread_id, PPG_COLLECTION_TRANSITION_STACK_SIZE,
 		ppg_collection_transition_thread, NULL, NULL, NULL, 7, 0, 0);
 
 

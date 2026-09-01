@@ -72,7 +72,7 @@ int get_storage_percent_full();
 extern uint8_t storage_percent_full;
 
 int write_device_info_file(const char *device_name,
-			   const char *device_id_hex);
+			   const char *device_id_hex, const char *dis_model);
 
 //k work item
 void work_write(struct k_work* item);

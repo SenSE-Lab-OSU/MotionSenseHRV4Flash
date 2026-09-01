@@ -16,40 +16,16 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../shared")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(MotionSenseHrv)
 
-find_package(Git QUIET)
-
-set(MSENSE_GIT_EXECUTABLE "")
-if(GIT_FOUND)
-	set(MSENSE_GIT_EXECUTABLE "${GIT_EXECUTABLE}")
-endif()
-
-set(MSENSE_GIT_METADATA_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(MSENSE_GIT_METADATA_HEADER
-	"${MSENSE_GIT_METADATA_DIR}/msense_git_metadata.h")
-
-add_custom_target(msense_git_metadata ALL
-	COMMAND ${CMAKE_COMMAND}
-		"-DOUTPUT_FILE=${MSENSE_GIT_METADATA_HEADER}"
-		"-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
-		"-DGIT_EXECUTABLE=${MSENSE_GIT_EXECUTABLE}"
-		-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_git_metadata.cmake"
-	BYPRODUCTS "${MSENSE_GIT_METADATA_HEADER}"
-	COMMENT "Generating Git build metadata"
-	VERBATIM
-)
-
-add_dependencies(app msense_git_metadata)
-target_include_directories(app PRIVATE "${MSENSE_GIT_METADATA_DIR}")
+include("${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/cmake/msense_git_metadata.cmake")
+msense_add_git_metadata("${CMAKE_CURRENT_SOURCE_DIR}")
 
 include(CTest)
-if(BUILD_TESTING AND GIT_FOUND)
+if(BUILD_TESTING)
 	add_test(
-		NAME msense_git_metadata
+		NAME msense_storage_geometry
 		COMMAND ${CMAKE_COMMAND}
-			"-DGENERATOR_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_git_metadata.cmake"
-			"-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
-			"-DTEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/tests/git_metadata"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_git_metadata.cmake"
+			"-DMSENSE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/../shared/tests/cmake/test_storage_geometry.cmake"
 	)
 endif()
 
@@ -62,6 +38,7 @@ endif()
 target_compile_options(app PRIVATE -Wno-unused-function)
 
 target_include_directories(app PRIVATE
+	"${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/include"
 	"${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/drivers/nand"
 	"${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/drivers/nor"
 )
@@ -69,17 +46,11 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
 	src/BLEService.c
 	src/batterymonitordt.c
-	src/device_identity.c
-	src/filesystemlogging.c
+	src/filesystemlogging_policy.c
 	src/imuSensor.c
 	src/main.c
 	src/ppgSensor.c
 	src/zephyrfilesystem.c
-)
-
-target_sources_ifdef(CONFIG_DISK_DRIVER_RAW_NAND app PRIVATE
-	src/drivers/nand/nand_disk.c
-	src/drivers/nand/spi_nand.c
 )
 
 #if(CONFIG_BUILD_WITH_TFM)

@@ -20,7 +20,7 @@
 #include "imuSensor.h"
 #include "common.h"
 #include "BLEService.h"
-#include "device_identity.h"
+#include "msense_device_identity.h"
 #include "zephyrfilesystem.h"
 #include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -138,11 +138,22 @@ static K_SEM_DEFINE(ble_init_ok, 0, 1);
 
 uint32_t global_counter;
 
+#define MSENSE_PRODUCT_BLE_NAME_PREFIX "MSense4PPG-"
+#define MSENSE_PRODUCT_BLE_NAME_LEN 16U
+
+static struct msense_device_identity device_identity;
+static const struct msense_device_identity_config device_identity_config = {
+	.ble_name_prefix = MSENSE_PRODUCT_BLE_NAME_PREFIX,
+	.ble_name_prefix_len = sizeof(MSENSE_PRODUCT_BLE_NAME_PREFIX) - 1U,
+	.ble_name_len = MSENSE_PRODUCT_BLE_NAME_LEN,
+	.dis_model = CONFIG_BT_DIS_MODEL,
+};
+
 #define AD_FIELD_OVERHEAD 2U
 #define AD_FLAGS_ENCODED_LEN (AD_FIELD_OVERHEAD + 1U)
 #define AD_SERVICE_DATA_LEN (BT_UUID_SIZE_128 + MSENSE_DEVICE_ID_LEN)
 #define AD_SERVICE_DATA_ENCODED_LEN (AD_FIELD_OVERHEAD + AD_SERVICE_DATA_LEN)
-#define SCAN_RESPONSE_NAME_ENCODED_LEN (AD_FIELD_OVERHEAD + MSENSE_BLE_NAME_LEN)
+#define SCAN_RESPONSE_NAME_ENCODED_LEN (AD_FIELD_OVERHEAD + MSENSE_PRODUCT_BLE_NAME_LEN)
 
 static uint8_t advertising_service_data[AD_SERVICE_DATA_LEN] = {
     CONTROL_SERVICE_UUID,
@@ -163,7 +174,13 @@ static struct bt_data sd[] = {
 };
 
 BUILD_ASSERT(MSENSE_DEVICE_ID_LEN == 8U, "Device ID must be 64 bits");
-BUILD_ASSERT(MSENSE_BLE_NAME_LEN == 16U, "BLE name length changed unexpectedly");
+BUILD_ASSERT(sizeof(MSENSE_PRODUCT_BLE_NAME_PREFIX) - 1U +
+		     MSENSE_DEVICE_NAME_SUFFIX_LEN == MSENSE_PRODUCT_BLE_NAME_LEN,
+		     "BLE name prefix and suffix lengths must match");
+BUILD_ASSERT(MSENSE_PRODUCT_BLE_NAME_LEN <= MSENSE_DEVICE_NAME_MAX_LEN,
+		     "BLE name exceeds shared identity storage");
+BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) == sizeof(MSENSE_PRODUCT_BLE_NAME_PREFIX),
+		     "Configured BLE prefix length changed unexpectedly");
 BUILD_ASSERT(sizeof(advertising_service_data) == 24U,
              "Service data must contain UUID and device ID");
 BUILD_ASSERT(AD_FLAGS_ENCODED_LEN + AD_SERVICE_DATA_ENCODED_LEN <=
@@ -313,7 +330,7 @@ static void bt_ready(int err)
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
 
-  err = bt_set_name(msense_device_identity_name());
+  err = bt_set_name(msense_device_identity_name(&device_identity));
   if (err) {
     LOG_ERR("Unable to set generated BLE name: %d", err);
     ppg_collection_latch_storage_fault();
@@ -321,9 +338,9 @@ static void bt_ready(int err)
   }
 
   memcpy(&advertising_service_data[BT_UUID_SIZE_128],
-         msense_device_identity_bytes(), MSENSE_DEVICE_ID_LEN);
-  sd[0].data = msense_device_identity_name();
-  sd[0].data_len = MSENSE_BLE_NAME_LEN;
+         msense_device_identity_bytes(&device_identity), MSENSE_DEVICE_ID_LEN);
+  sd[0].data = msense_device_identity_name(&device_identity);
+  sd[0].data_len = msense_device_identity_name_len(&device_identity);
 
   // Start advertising
   const struct bt_le_adv_param v = {
@@ -506,7 +523,8 @@ int main(void)
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
 
-	identity_err = msense_device_identity_init();
+	identity_err = msense_device_identity_init(&device_identity,
+						   &device_identity_config);
 	if (identity_err) {
 		LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
 	}
@@ -600,8 +618,9 @@ int main(void)
   }
 
   if (identity_err == 0) {
-    uuid_ret = write_device_info_file(msense_device_identity_name(),
-                                      msense_device_identity_hex());
+    uuid_ret = write_device_info_file(msense_device_identity_name(&device_identity),
+                                      msense_device_identity_hex(&device_identity),
+                                      msense_device_identity_model(&device_identity));
     if (uuid_ret != 0) {
       LOG_ERR("Unable to write boot uuid.txt: %d", uuid_ret);
     }

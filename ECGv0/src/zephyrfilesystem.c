@@ -927,7 +927,7 @@ int flush_data_buffer(enum sensor_type sensor){
 
 
 int write_device_info_file(const char *device_name,
-				   const char *device_id_hex)
+				   const char *device_id_hex, const char *dis_model)
 {
 	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
@@ -937,7 +937,7 @@ int write_device_info_file(const char *device_name,
 	int written;
 	ssize_t bytes_written;
 
-	if (device_name == NULL || device_id_hex == NULL) {
+	if (device_name == NULL || device_id_hex == NULL || dis_model == NULL) {
 		return -EINVAL;
 	}
 	if (!file_system_ready || !filesystem_mounted) {
@@ -966,7 +966,7 @@ int write_device_info_file(const char *device_name,
 			   "\necg format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
-			   device_name, device_id_hex, CONFIG_BT_DIS_MODEL,
+			   device_name, device_id_hex, dis_model,
 			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE, ecg_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;

@@ -1,0 +1,55 @@
+diff --git a/zephyr/soc/nordic/nrf53/Kconfig b/zephyr/soc/nordic/nrf53/Kconfig
+index f696ab95478f0bb132e696917c19478327f084e2..28d7fd3c99e595b2027add9e1a40aba412de8750 100644
+--- a/zephyr/soc/nordic/nrf53/Kconfig
++++ b/zephyr/soc/nordic/nrf53/Kconfig
+@@ -229,6 +229,15 @@ config SOC_ENABLE_LFXO
+ 	  to use the LFXO. Otherwise, XL1 and XL2 pins will behave as regular
+ 	  GPIOs.
+ 
++config SOC_LFXO_BYPASS
++	bool "LFXO bypass mode"
++	depends on SOC_ENABLE_LFXO
++	default n
++	help
++	  Use the LFXO in bypass mode with a rail-to-rail external clock
++	  source. XL1 remains controlled by the LFXO peripheral and XL2 is
++	  assigned to the application core.
++
+ choice SOC_LFXO_LOAD_CAPACITANCE
+ 	prompt "LFXO load capacitance"
+ 	depends on SOC_ENABLE_LFXO
+diff --git a/zephyr/soc/nordic/nrf53/soc.c b/zephyr/soc/nordic/nrf53/soc.c
+index 67eb5dfb67b7b1de4c2016339ea2fe6838afe51f..d9875ceec991072e0ad012a0de60f2758a872039 100644
+--- a/zephyr/soc/nordic/nrf53/soc.c
++++ b/zephyr/soc/nordic/nrf53/soc.c
+@@ -473,6 +473,11 @@ static int nordicsemi_nrf53_init(void)
+ #endif
+ 
+ #if defined(CONFIG_SOC_ENABLE_LFXO)
++#if defined(CONFIG_SOC_LFXO_BYPASS)
++	nrf_oscillators_lfxo_cap_set(NRF_OSCILLATORS,
++		NRF_OSCILLATORS_LFXO_CAP_EXTERNAL);
++	nrf_oscillators_lfxo_bypass_set(NRF_OSCILLATORS, true);
++#else
+ 	nrf_oscillators_lfxo_cap_set(NRF_OSCILLATORS,
+ 		IS_ENABLED(CONFIG_SOC_LFXO_CAP_INT_6PF) ?
+ 			NRF_OSCILLATORS_LFXO_CAP_6PF :
+@@ -481,13 +486,18 @@ static int nordicsemi_nrf53_init(void)
+ 		IS_ENABLED(CONFIG_SOC_LFXO_CAP_INT_9PF) ?
+ 			NRF_OSCILLATORS_LFXO_CAP_9PF :
+ 			NRF_OSCILLATORS_LFXO_CAP_EXTERNAL);
++#endif
+ #if !defined(CONFIG_BUILD_WITH_TFM)
+ 	/* This can only be done from secure code.
+ 	 * This is handled by the TF-M platform so we skip it when TF-M is
+ 	 * enabled.
+ 	 */
+ 	nrf_gpio_pin_control_select(PIN_XL1, NRF_GPIO_PIN_SEL_PERIPHERAL);
++#if defined(CONFIG_SOC_LFXO_BYPASS)
++	nrf_gpio_pin_control_select(PIN_XL2, NRF_GPIO_PIN_SEL_APP);
++#else
+ 	nrf_gpio_pin_control_select(PIN_XL2, NRF_GPIO_PIN_SEL_PERIPHERAL);
++#endif
+ #endif /* !defined(CONFIG_BUILD_WITH_TFM) */
+ #endif /* defined(CONFIG_SOC_ENABLE_LFXO) */
+ #if defined(CONFIG_SOC_HFXO_CAP_INTERNAL)

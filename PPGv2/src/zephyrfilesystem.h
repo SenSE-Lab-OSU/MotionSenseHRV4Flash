@@ -1,0 +1,90 @@
+
+extern bool reset_lock;
+
+extern bool file_system_ready;
+
+extern bool panic_single_thread;
+
+
+extern bool file_system_ready;
+
+enum sensor_type {ppg, 
+accelorometer, passthrough, customlog};
+
+typedef struct memory_container {
+	const void* address;
+	size_t size;
+	enum sensor_type sensor;
+	int packet_num;
+	bool in_use;
+	struct k_work work;
+
+} memory_container;
+
+extern struct k_work_q my_work_q;
+
+
+
+void setup_disk(void);
+
+void create_test_file(int sectors);
+
+void create_test_files(int number_of_files);
+
+void sensor_write_to_file(const void* data, size_t size, enum sensor_type);
+
+int write_to_file(const void* data, size_t size);
+
+
+
+int close_all_files();
+
+void reset_log_file();
+
+void shutdown_filesystem();
+
+void submit_write(const void* data, size_t size, enum sensor_type type);
+
+
+void store_data(const void* data, size_t size, enum sensor_type sensor);
+
+void flush_data_buffer(enum sensor_type sensor);
+
+int get_storage_percent_full();
+
+extern uint8_t storage_percent_full;
+
+int write_ble_uuid(const char *ble_address, const char *ble_name,
+		   const char *device_id_hex);
+
+//k work item
+void work_write(struct k_work* item);
+
+uint64_t get_current_unix_time();
+
+uint64_t get_current_unix_time_ms();
+
+/* Accepts Unix time in milliseconds. */
+void set_date_time_bt(uint64_t value);
+
+void start_timer(int64_t* start_time_ref);
+
+int64_t stop_timer(int64_t* start_time_ref);
+
+void print_out_page(int page_num);
+
+void enable_read_only(bool enable);
+
+const char* sensor_enum_to_string(enum sensor_type sensor);
+
+extern bool security_lock;
+
+extern int64_t start_time;
+
+extern int patient_num;
+
+extern uint64_t set_date_time;
+
+extern memory_container ppg_work_item;
+extern memory_container accel_work_item;
+extern memory_container log_work_item;

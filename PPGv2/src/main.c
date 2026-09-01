@@ -44,6 +44,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_USB_MASS_STORAGE),
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS 6000
+#define BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES 4U
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED_NODE DT_ALIAS(led0)
@@ -471,8 +472,12 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 void battery_maintenance()
 {
+  static uint8_t maintenance_cycles;
   const struct device *const dev = DEVICE_DT_GET(BATTERY_GAUGE_NODE);
-  dt_update_battery(dev, true);
+  bool log_summary = (maintenance_cycles % BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES) == 0U;
+
+  maintenance_cycles++;
+  dt_update_battery(dev, log_summary);
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES

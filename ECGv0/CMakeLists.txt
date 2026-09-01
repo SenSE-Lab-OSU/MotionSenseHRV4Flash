@@ -27,6 +27,14 @@ if(BUILD_TESTING)
 			"-DMSENSE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/../shared/tests/cmake/test_storage_geometry.cmake"
 	)
+	add_test(
+		NAME msense_phase4_contracts
+		COMMAND ${CMAKE_COMMAND}
+			"-DMSENSE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+			"-DMSENSE_PRODUCT=ECGv0"
+			"-DMSENSE_APP_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/../shared/tests/cmake/test_phase4_contracts.cmake"
+	)
 endif()
 
 set(CMAKE_OBJECT_PATH_MAX 380)

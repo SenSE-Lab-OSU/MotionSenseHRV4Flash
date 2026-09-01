@@ -158,6 +158,8 @@ static const struct msense_device_identity_config device_identity_config = {
 	.ble_name_len = MSENSE_PRODUCT_BLE_NAME_LEN,
 	.dis_model = CONFIG_BT_DIS_MODEL,
 };
+static bool uuid_ble_address_update_needed;
+static bool uuid_ble_address_msc_deferred;
 
 #define AD_FIELD_OVERHEAD 2U
 #define AD_FLAGS_ENCODED_LEN (AD_FIELD_OVERHEAD + 1U)
@@ -353,6 +355,58 @@ static void set_firmware_disk_writable(void)
 #endif
 }
 
+static int complete_pending_uuid_ble_address(void)
+{
+	bt_addr_le_t identity_address;
+	char ble_address[BT_ADDR_LE_STR_LEN];
+	size_t address_count = 1U;
+	int teardown_ret;
+	int ret;
+
+	bt_id_get(&identity_address, &address_count);
+	if (address_count != 1U || identity_address.type != BT_ADDR_LE_RANDOM ||
+	    !BT_ADDR_IS_STATIC(&identity_address.a)) {
+		return -ENODEV;
+	}
+
+	ret = bt_addr_le_to_str(&identity_address, ble_address, sizeof(ble_address));
+	if (ret < 0 || (size_t)ret >= sizeof(ble_address)) {
+		return -ENOSPC;
+	}
+	if (filesystem_is_mounted()) {
+		return -EBUSY;
+	}
+
+	set_firmware_disk_writable();
+	ret = setup_disk();
+	if (ret == 0) {
+		ret = write_device_info_ble_address(ble_address);
+	}
+	if (filesystem_is_mounted()) {
+		teardown_ret = filesystem_gate_and_drain();
+		if (teardown_ret == 0) {
+			teardown_ret = shutdown_filesystem();
+		}
+		if (ret == 0 && teardown_ret != 0) {
+			ret = teardown_ret;
+		}
+	}
+	set_firmware_disk_read_only();
+	if (ret != 0 || filesystem_is_mounted()) {
+		return ret != 0 ? ret : -EBUSY;
+	}
+
+	if (uuid_ble_address_msc_deferred) {
+		ret = enable_usb_msc_host_media();
+		if (ret != 0) {
+			return ret;
+		}
+		uuid_ble_address_msc_deferred = false;
+	}
+
+	return 0;
+}
+
 static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
   struct bt_conn_info info;
@@ -397,6 +451,15 @@ static void bt_ready(int err)
     settings_load();
   #endif
 
+  if (uuid_ble_address_update_needed) {
+    err = complete_pending_uuid_ble_address();
+    if (err) {
+      ecg_storage_transition_fault("BLE uuid.txt update", err);
+      return;
+    }
+    uuid_ble_address_update_needed = false;
+  }
+
 
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
@@ -412,7 +475,7 @@ static void bt_ready(int err)
   sd[0].data = msense_device_identity_name(&device_identity);
   sd[0].data_len = msense_device_identity_name_len(&device_identity);
 
-  // Boot storage ownership is complete before Bluetooth is initialized.
+  // A missing uuid.txt BLE address is persisted before advertising.
   const struct bt_le_adv_param v = {
       .id = BT_ID_DEFAULT,
       .sid = 0,
@@ -1459,9 +1522,10 @@ void storage_clear_led(){
 int main(void)
 {
   int ret;
-  int identity_err;
+	int identity_err;
 	int uuid_ret = 0;
 	bool uuid_write_ready = false;
+	bool uuid_address_present = false;
   uint32_t reset_reason = nrfx_reset_reason_get();
 
   /* RESETREAS is cumulative until acknowledged. Capture this boot's reason
@@ -1498,9 +1562,11 @@ int main(void)
 	if (identity_err == 0) {
 		uuid_ret = write_device_info_file(msense_device_identity_name(&device_identity),
 						  msense_device_identity_hex(&device_identity),
-						  msense_device_identity_model(&device_identity));
+						  msense_device_identity_model(&device_identity),
+						  &uuid_address_present);
 		if (uuid_ret == 0) {
 			uuid_write_ready = true;
+			uuid_ble_address_update_needed = !uuid_address_present;
 		} else {
 			LOG_ERR("Unable to write boot uuid.txt: %d", uuid_ret);
 		}
@@ -1530,10 +1596,14 @@ int main(void)
   } else if (atomic_get(&msc_ownership_faulted) != 0) {
     LOG_ERR("Startup storage ownership fault; keeping MSC medium absent");
   } else if (!security_lock) {
-    ret = enable_usb_msc_host_media();
-    if (ret != 0) {
-      ecg_storage_transition_fault("Startup USB MSC publication", ret);
-      LOG_ERR("Failed to publish USB MSC medium: %d", ret);
+    if (uuid_ble_address_update_needed) {
+      uuid_ble_address_msc_deferred = true;
+    } else {
+      ret = enable_usb_msc_host_media();
+      if (ret != 0) {
+        ecg_storage_transition_fault("Startup USB MSC publication", ret);
+        LOG_ERR("Failed to publish USB MSC medium: %d", ret);
+      }
     }
   }
 

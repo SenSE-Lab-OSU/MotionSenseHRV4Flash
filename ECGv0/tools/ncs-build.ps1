@@ -39,11 +39,10 @@ if ($Pristine) {
 }
 
 $westArgs += @(
-    '--board', 'nrf5340dk/nrf5340/cpuapp'
+    '--board', 'ecgv0/nrf5340/cpuapp'
     '--'
     '-DNCS_TOOLCHAIN_VERSION=NONE'
     '-DCONF_FILE=prj.conf'
-    '-DDTC_OVERLAY_FILE=nrf5340dk_nrf5340_cpuapp.overlay'
 )
 
 & $west @westArgs

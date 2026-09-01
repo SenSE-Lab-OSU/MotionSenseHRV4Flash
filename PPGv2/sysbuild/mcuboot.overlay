@@ -1,14 +1,15 @@
-&vregmain {
-	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
-};
-
-&vregradio {
-	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
-};
-
-&vregh {
-	status = "disabled";
-};
-
-
-
+/*
+ * The PPGv2 board DTS supplies the physical regulator and clock configuration
+ * for all CPUAPP images. MCUboot only needs internal flash, so keep
+ * application-only peripheral drivers out of the bootloader image.
+ */
+&usbd { status = "disabled"; };
+&spi0 { status = "disabled"; };
+&spi2 { status = "disabled"; };
+&spi3 { status = "disabled"; };
+&spi4 { status = "disabled"; };
+&i2c1 { status = "disabled"; };
+&mx25u80 { status = "disabled"; };
+&mt29 { status = "disabled"; };
+&icm20948 { status = "disabled"; };
+&max86141 { status = "disabled"; };

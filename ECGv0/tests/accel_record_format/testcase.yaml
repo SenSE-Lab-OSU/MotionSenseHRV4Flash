@@ -4,4 +4,4 @@ tests:
       - accel
       - filesystem
     platform_allow:
-      - nrf5340dk/nrf5340/cpuapp
+      - ecgv0/nrf5340/cpuapp

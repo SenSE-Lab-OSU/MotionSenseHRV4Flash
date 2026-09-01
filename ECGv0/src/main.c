@@ -52,7 +52,13 @@ LOG_MODULE_REGISTER(main, 3);
 #define LED_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 #define PPG_POWER_NODE DT_ALIAS(led2) 
-#define BUTTON0_NODE DT_NODELABEL(button0)
+#define BUTTON0_NODE DT_ALIAS(user_button)
+#define ECG_NODE DT_ALIAS(ecg)
+#define ECG_BUS_NODE DT_ALIAS(ecg_bus)
+#define BATTERY_GAUGE_NODE DT_ALIAS(battery_gauge)
+#define BATTERY_BUS_NODE DT_ALIAS(battery_bus)
+#define GPIO0_NODE DT_ALIAS(gpio0)
+#define GPIO1_NODE DT_ALIAS(gpio1)
 #define BUTTON0_LONG_PRESS_MS 5000
 
 enum ship_mode_state {
@@ -122,25 +128,12 @@ SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
 */
 // SPI Mode-3 PPG
 struct spi_config spi_cfg_ppg = {
-    .frequency = 4000000,
+    .frequency = DT_PROP(ECG_NODE, spi_max_frequency),
     .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
                  SPI_MODE_CPOL | SPI_MODE_CPHA,
-    .slave = 0,
-    /* only in version 2.5: .cs= {
-  .delay = 0,
-  .gpio = {.pin = 15, .dt_flags=GPIO_ACTIVE_LOW, }
-  },
-  */
+    .slave = DT_REG_ADDR(ECG_NODE),
+    .cs = SPI_CS_CONTROL_INIT(ECG_NODE, 0),
 };
-
-// Now we define the cs pins
-
-struct spi_cs_control ppg_cs = {
-    .delay = 0,
-    .gpio = {
-        .pin = 9,
-        .dt_flags = GPIO_ACTIVE_LOW,
-    }};
 
 
 
@@ -458,24 +451,14 @@ static void spi_init(void)
   // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
   const char *const spiName_ppg = "spi@c000";
 
-  spi_dev_ppg = DEVICE_DT_GET(DT_NODELABEL(spi3));
+  spi_dev_ppg = DEVICE_DT_GET(ECG_BUS_NODE);
   //spi_dev_ppg = device_get_binding(spiName_ppg);
 
-  if (!device_is_ready(gpio1_device))
-  {
-    printk("Could not get GPIO_1\n");
-    return;
-  }
   if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
   {
     printk("Could not get %s \n", spiName_ppg);
     return;
   }
-  
-  ppg_cs.gpio.port = gpio1_device;
-  
-  
-  spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
   
 }
 
@@ -483,7 +466,7 @@ static void i2c_init(void)
 {
 
   printk("The I2C Init started\n");
-  i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+  i2c_dev = DEVICE_DT_GET(BATTERY_BUS_NODE);
   if (!device_is_ready(i2c_dev))
   {
     printk("Binding failed to i2c.");
@@ -503,7 +486,7 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 void battery_maintenance()
 {
   static uint8_t maintenance_cycles;
-  const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
+  const struct device *const dev = DEVICE_DT_GET(BATTERY_GAUGE_NODE);
   bool log_summary = (maintenance_cycles % BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES) == 0U;
 
   maintenance_cycles++;
@@ -1036,8 +1019,8 @@ int main(void)
   k_sleep(K_SECONDS(2));
   
 
-  gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-  gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
+  gpio0_device = DEVICE_DT_GET(GPIO0_NODE);
+  gpio1_device = DEVICE_DT_GET(GPIO1_NODE);
   
   // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);

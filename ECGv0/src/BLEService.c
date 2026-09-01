@@ -574,7 +574,7 @@ void reset_device(bool reset_bad_blocks){
   } 
     //reset the flash memory first
   LOG_INF("Performing Chip Erase...\n");
-  // get our flash device from device tree, which is defined in nrf5340dk_nrf5340_cpuapp.overlay
+  // Get the board-owned NAND device through its stable application alias.
   const struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");

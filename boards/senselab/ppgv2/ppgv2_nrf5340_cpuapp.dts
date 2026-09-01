@@ -1,0 +1,178 @@
+/dts-v1/;
+
+#include <nordic/nrf5340_cpuapp_qkaa.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/regulator/nrf5x.h>
+#include "ppgv2_nrf5340-pinctrl.dtsi"
+#include "../common/nrf5340-icm20948.dtsi"
+
+/ {
+	model = "SenseLab PPGv2 nRF5340 application core";
+	compatible = "senselab,ppgv2-nrf5340-cpuapp";
+
+	chosen {
+		zephyr,console = &cdc_acm_uart0;
+		zephyr,shell-uart = &cdc_acm_uart0;
+		zephyr,bt-hci = &bt_hci_ipc0;
+		nordic,802154-spinel-ipc = &ipc0;
+		zephyr,ieee802154 = &ieee802154;
+		zephyr,flash = &flash0;
+		zephyr,sram = &sram0_image;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,sram-secure-partition = &sram0_s;
+		zephyr,sram-non-secure-partition = &sram0_ns;
+	};
+
+	aliases {
+		led0 = &led0;
+		led1 = &led1;
+		led2 = &ppg_power;
+		ppg = &max86141;
+		ppg-bus = &spi3;
+		imu = &icm20948;
+		imu-bus = &spi2;
+		battery-gauge = &bq27441;
+		battery-bus = &i2c1;
+		storage-nand = &mt29;
+		storage-nor = &mx25u80;
+		spi-flash0 = &mt29;
+		spi-flash1 = &mx25u80;
+		gpio0 = &gpio0;
+		gpio1 = &gpio1;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led_0 {
+			gpios = <&gpio0 30 GPIO_ACTIVE_HIGH>;
+			label = "Status LED 0";
+		};
+
+		led1: led_1 {
+			gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
+			label = "Status LED 1";
+		};
+
+		ppg_power: ppg_power {
+			gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+			label = "PPG power enable";
+		};
+	};
+};
+
+&adc { status = "okay"; };
+&gpiote { status = "okay"; };
+&gpio0 { status = "okay"; };
+&gpio1 { status = "okay"; };
+&timer0 { status = "okay"; };
+&timer1 { status = "okay"; };
+
+&uicr { nfct-pins-as-gpios; };
+&vregmain { regulator-initial-mode = <NRF5X_REG_MODE_LDO>; };
+&vregradio { regulator-initial-mode = <NRF5X_REG_MODE_LDO>; };
+&vregh { status = "disabled"; };
+
+&uart0 { status = "disabled"; };
+zephyr_udc0: &usbd {
+	compatible = "nordic,nrf-usbd";
+	status = "okay";
+
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+&usbreg { status = "okay"; };
+
+&ipc0 { status = "okay"; };
+&ieee802154 { status = "okay"; };
+
+&spi0 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&storage_spi_default>;
+	pinctrl-1 = <&storage_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	mx25u80: mx25u8035f@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		size = <8388608>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [c2 25 34];
+		status = "okay";
+	};
+};
+
+&spi1 { status = "disabled"; };
+
+/* The common ICM-20948 fragment describes physical wiring only. PPGv2 keeps
+ * its direct-SPI IMU implementation and enables no competing Zephyr driver. */
+
+&spi3 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&ppg_spi_default>;
+	pinctrl-1 = <&ppg_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	max86141: max86141@0 {
+		compatible = "senselab,max86141";
+		reg = <0>;
+		spi-max-frequency = <4000000>;
+		status = "okay";
+	};
+};
+
+&spi4 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>,
+		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&storage_spi_default>;
+	pinctrl-1 = <&storage_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	mt29: mt29f8g01ad@0 {
+		compatible = "senselab,nanddisk";
+		reg = <0>;
+		/* Preserve the imported geometry exactly. Phase 3 replaces these
+		 * legacy approximate values with one validated geometry model. */
+		size = <4294901760>;
+		individual-size = <1073725440>;
+		num-flashchips = <4>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [ff 2c 47];
+		status = "okay";
+	};
+};
+
+&qspi { status = "disabled"; };
+
+&i2c1 {
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&battery_i2c_default>;
+	pinctrl-1 = <&battery_i2c_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	bq27441: bq27441@55 {
+		compatible = "ti,bq274xx";
+		reg = <0x55>;
+		design-voltage = <3700>;
+		design-capacity = <300>;
+		/* BQ25060 context: 30 mA is above the 25.2 mA worst-case
+		 * charge-complete threshold for the fitted 5.9 kOhm ISET. */
+		taper-current = <30>;
+		terminate-voltage = <3000>;
+		chemistry-id = <0x0128>;
+	};
+};
+
+/* MCUboot and the application image use the standard nRF5340 CPUAPP
+ * flash/SRAM partition layout. This is logical SoC memory, not DK wiring. */
+#include "../common/nrf5340_cpuapp_partition.dtsi"

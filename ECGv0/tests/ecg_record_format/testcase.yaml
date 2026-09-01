@@ -5,4 +5,4 @@ tests:
       - filesystem
     platform_allow:
       - native_sim
-      - nrf5340dk/nrf5340/cpuapp
+      - ecgv0/nrf5340/cpuapp

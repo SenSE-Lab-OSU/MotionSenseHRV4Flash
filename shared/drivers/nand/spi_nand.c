@@ -1003,9 +1003,8 @@ static int flash_reset_and_unlock(const struct device* dev){
 	uint8_t status = spi_rdsr(dev);
 	uint8_t configuration = get_features(dev, REGISTER_CONFIGURATION);
 	uint8_t blocklock = get_features(dev, REGISTER_BLOCKLOCK);
-	LOG_INF("status register: %d", status);
-	LOG_INF("Configuration: %i", configuration);
-	LOG_INF("BlockLock: %i", blocklock);
+	LOG_DBG("NAND registers: status=%d configuration=%i blocklock=%i",
+		status, configuration, blocklock);
 	release_device(dev);
 	
 	return ret;
@@ -1069,9 +1068,6 @@ static int spi_configure(const struct device *dev, const struct spi_flash_config
 			jedec_id[0], jedec_id[1], jedec_id[2],
 			cfg->jedec_id[0], cfg->jedec_id[1], cfg->jedec_id[2]);
 		return -EINVAL;
-	}
-	else {
-		LOG_INF("ID %02x %02x %02x correct!", jedec_id[0], jedec_id[1], jedec_id[2]);
 	}
 
 	flash_reset_and_unlock(dev); 
@@ -1150,6 +1146,11 @@ int spi_init(const struct device *dev)
 	}
 
 	int restore_ret = set_flash(dev, 0);
+	if ((ret == 0) && (restore_ret == 0)) {
+		LOG_INF("NAND initialized: %d packages, JEDEC %02x %02x %02x",
+			cfg->num_flashes, cfg->jedec_id[0], cfg->jedec_id[1],
+			cfg->jedec_id[2]);
+	}
 	return ret != 0 ? ret : restore_ret;
 }
 

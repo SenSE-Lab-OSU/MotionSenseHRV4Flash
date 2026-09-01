@@ -352,7 +352,7 @@ static void icm20948_store_sample(const uint8_t *data)
 	k_mutex_unlock(&icm20948_sample_lock);
 
 	if ((sample.sequence % ICM20948_ACCEL_LOG_INTERVAL_SAMPLES) == 0U) {
-		LOG_INF("ICM-20948 accel sample %u: x=%d y=%d z=%d", sample.sequence,
+		LOG_DBG("ICM-20948 accel sample %u: x=%d y=%d z=%d", sample.sequence,
 			sample.x, sample.y, sample.z);
 	}
 }

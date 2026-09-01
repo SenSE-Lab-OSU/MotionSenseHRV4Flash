@@ -241,9 +241,24 @@ static int settings_runtime_load(void)
 
 
 void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
-    
-  LOG_INF("USB Status: %d", status);
+	ARG_UNUSED(param);
 
+	switch (status) {
+	case USB_DC_CONNECTED:
+		LOG_INF("USB connected");
+		break;
+	case USB_DC_CONFIGURED:
+		LOG_INF("USB configured");
+		break;
+	case USB_DC_DISCONNECTED:
+		LOG_INF("USB disconnected");
+		break;
+	case USB_DC_ERROR:
+		LOG_ERR("USB controller error");
+		break;
+	default:
+		break;
+	}
 }
 
 static int enable_usb_msc_host_media(void)

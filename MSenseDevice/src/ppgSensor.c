@@ -76,6 +76,39 @@ uint8_t binarySteps = 0;
 bool use_fixed_ppg_brightness = false;
 static bool ppg_fifo_alignment_check_pending = false;
 
+#define PPG_NAND_RECORD_SIZE 16U
+#define PPG_SAMPLE_MASK 0x7FFFFU
+
+BUILD_ASSERT(PPG_NAND_RECORD_SIZE == 16U, "PPG NAND record must be 16 bytes");
+
+static void ppg_put_u24_le(uint8_t *dst, uint32_t value)
+{
+  value &= PPG_SAMPLE_MASK;
+  dst[0] = (uint8_t)value;
+  dst[1] = (uint8_t)(value >> 8);
+  dst[2] = (uint8_t)(value >> 16);
+}
+
+static void ppg_put_u32_le(uint8_t *dst, uint32_t value)
+{
+  dst[0] = (uint8_t)value;
+  dst[1] = (uint8_t)(value >> 8);
+  dst[2] = (uint8_t)(value >> 16);
+  dst[3] = (uint8_t)(value >> 24);
+}
+
+static void ppg_encode_nand_record(uint8_t record[PPG_NAND_RECORD_SIZE],
+                                   uint32_t ir1, uint32_t ir2,
+                                   uint32_t green1, uint32_t green2,
+                                   uint32_t global_tick_512hz)
+{
+  ppg_put_u24_le(&record[0], ir1);
+  ppg_put_u24_le(&record[3], ir2);
+  ppg_put_u24_le(&record[6], green1);
+  ppg_put_u24_le(&record[9], green2);
+  ppg_put_u32_le(&record[12], global_tick_512hz);
+}
+
 static void ppg_apply_fixed_sampling_rate(void)
 {
   ppgConfig.sample_avg = PPG_FIXED_SAMPLE_AVG;
@@ -563,7 +596,6 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
   blePktPPG_noFilter[11] = (pktCounter & 0x00FF);
 }
 
-uint32_t ppg_samples[5] = {0};
 uint32_t ppg_packet_counter = 0;
 
 
@@ -709,15 +741,14 @@ void read_ppg_fifo_buffer(struct k_work *item)
   #endif
   // We divide by 4 because it represents the number of channels, 4, so we're reading 4 at a time.
   for (int i = 0; i < number_of_samples; i++){
-    ppg_packet_counter++;
-    ppg_samples[0] = led1A[i];
-    ppg_samples[1] = led1B[i];
-    ppg_samples[2] = led2A[i];
-    ppg_samples[3] = led2B[i];
+    uint8_t ppg_record[PPG_NAND_RECORD_SIZE];
     uint32_t global_tick_512hz = global_counter;
-    ppg_samples[4] = global_tick_512hz;
-    
-    store_data(ppg_samples, sizeof(ppg_samples), 0);
+
+    ppg_packet_counter++;
+    ppg_encode_nand_record(ppg_record,
+                           led1A[i], led1B[i], led2A[i], led2B[i],
+                           global_tick_512hz);
+    store_data(ppg_record, sizeof(ppg_record), ppg);
     
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};

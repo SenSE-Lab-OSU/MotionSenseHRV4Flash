@@ -54,18 +54,24 @@ int get_storage_percent_full();
 
 extern uint8_t storage_percent_full;
 
-int write_ble_uuid(char* ble_string);
+int write_ble_uuid(const char *ble_address, const char *ble_name,
+		   const char *device_id_hex);
 
 //k work item
 void work_write(struct k_work* item);
 
 uint64_t get_current_unix_time();
 
+uint64_t get_current_unix_time_ms();
+
+/* Accepts Unix time in milliseconds. */
 void set_date_time_bt(uint64_t value);
 
 void start_timer(int64_t* start_time_ref);
 
 int64_t stop_timer(int64_t* start_time_ref);
+
+void print_out_page(int page_num);
 
 void enable_read_only(bool enable);
 
@@ -82,4 +88,3 @@ extern uint64_t set_date_time;
 extern memory_container ppg_work_item;
 extern memory_container accel_work_item;
 extern memory_container log_work_item;
-

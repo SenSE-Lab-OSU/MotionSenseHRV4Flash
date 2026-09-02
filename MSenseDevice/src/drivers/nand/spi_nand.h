@@ -18,6 +18,7 @@
 #define SPI_MAX_ID_LEN	3
 
 #define SPI_BLOCK_COUNT 4
+#define NAND_PAGES_PER_ERASE_BLOCK 64U
 
 //Page Program
 #define SPI_NAND_PL 0x02
@@ -251,7 +252,7 @@ extern int current_reads;
 extern int current_erases;
 
 extern int ECC_corrections;
-
+extern int ECC_err;
 
 void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 

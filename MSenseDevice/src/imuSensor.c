@@ -237,7 +237,7 @@ static void prepare_gyros(float* quaternionResult){
   current_gyro_data.quaternion_4_val = quaternionResult[3];
 }
 
-float enmo_store[32];
+float enmo_store[IMU_FIXED_OUTPUT_HZ];
 // our global variables needed for enmo calculation
 #define enmo_samples_size 600
 float second_enmo_arr[enmo_samples_size] = {0.0};
@@ -278,22 +278,22 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
     arm_sqrt_f32(AccelX2+AccelY2+AccelZ2,&enmo);
     enmo = enmo-1;
     if(enmo < 0 ) enmo=0;
-    // when we send the enmo, we send as an average of 30
+    // when we send the enmo, we send as an second average
     enmo_store[counterAcc] = enmo;
     counterAcc++;
-    if (counterAcc >= 32){
+    if (counterAcc >= IMU_FIXED_OUTPUT_HZ){
       
       counterAcc = 0;
-      //calculate the enmo as an average of 30 samples
+      //calculate the enmo as an average of the output samples accumulated for 1 sec
       enmo = 0;
-      for (int x = 0; x <= 31; x++){
+      for (int x = 0; x < IMU_FIXED_OUTPUT_HZ; x++){
           enmo += enmo_store[x];
       }
-      enmo /= 32;
+      enmo /= IMU_FIXED_OUTPUT_HZ;
       currentAccData.ENMO = enmo;
       // floats are cast to double in print calls
-      LOG_INF("%f, %f, %f", (double)accelX, (double)accelY, (double)accelZ);
-      LOG_DBG("Enmo: %f", (double)enmo*1000);
+      LOG_INF("%d, %d, %d", (int)(accelX*1000), (int)(accelY*1000), (int)(accelZ*1000));
+      LOG_DBG("Enmo: %d", (int)(enmo*1000));
       //currentAccData.time = get_current_unix_time();
 
       update_enmo_arr[enmo_sample_counter % enmo_update_rate] = enmo;
@@ -318,7 +318,7 @@ void calculate_enmo(float accelX, float accelY, float accelZ){
         sizeof(global_counter));
       my_motionData.dataPacket = enmo_packet;
       my_motionData.packetLength = sizeof(enmo_packet);
-      LOG_INF("ENMO ble update: %f", (double)currentAccData.ENMO);
+      LOG_INF("ENMO ble update: %d", (int)(currentAccData.ENMO*1000));
       // Submit our data to the bluetooth work thread.
       k_work_submit(&my_motionData.work);
       }
@@ -364,7 +364,7 @@ void enmo_threshold_evaluation(float enmo_number)
       }
       */
 
-      uint64_t current_time = get_current_unix_time();
+      uint64_t current_time = get_current_unix_time_ms();
       memcpy(&enmo_threshold_packet[1], &current_time, sizeof(current_time));
       enmoThreshold.dataPacket = &currentAccData.ENMO;
       enmoThreshold.packetLength = sizeof(currentAccData.ENMO);
@@ -397,15 +397,10 @@ void motion_data_timeout_handler(struct k_work *item)
       SPI_FILL, SPI_FILL, SPI_FILL}; // Burst read acc & gyro regs (0x3B-0x48).
                                        /**< RX buffer. */
 
-  
-
-    
   uint8_t burst_rx[23];                                           // SPI burst read holders.
-  uint8_t m_tx_buf[2] = {REG_BANK_SEL | WRITEMASTER, REG_BANK_0}; /**< TX buffer. */
-  uint8_t m_rx_buf[15];      
-
-  // Point to register bank 0 for reading the data from sensors.
-  spiReadWriteIMU(m_tx_buf, 2, m_rx_buf, 2);
+  // motion_config() and motionSensitivitySampling_config() leave the IMU in
+  // bank 0, which is where the acquisition registers reside. Do not issue a
+  // redundant REG_BANK_SEL transfer on every 512 Hz acquisition tick.
   
   if (the_device->gyro_first_read == 0)
   {
@@ -595,7 +590,7 @@ void motionSensitivitySampling_config(void){
     static uint8_t m_rx_buf[sizeof(m_tx_buf)];  /**< RX buffer. */
     static const uint8_t m_length = sizeof(m_tx_buf); /**< Transfer length. */
 
-    uint8_t imu_config[12] = {
+    uint8_t imu_config[] = {
       REG_BANK_SEL,REG_BANK_2, // changing the register bank to 2
       GYRO_SMPLRT_DIV,IMU_FIXED_GYRO_SMPLRT_DIV, // 1125/(1+1) = 562.5 Hz
       GYRO_CONFIG_1,IMU_FIXED_GYRO_DLPFCFG,
@@ -603,6 +598,9 @@ void motionSensitivitySampling_config(void){
       ACCEL_CONFIG,ACCEL_FCHOICE_DLPF_ENABLE   , // accel full scale =4g, LPF = 246 Hz
       ACCEL_SMPLRT_DIV_1,IMU_FIXED_ACCEL_SMPLRT_DIV_MSB,
       ACCEL_SMPLRT_DIV_2,IMU_FIXED_ACCEL_SMPLRT_DIV_LSB,
+      // All runtime acquisition reads use bank 0. Restore it once after a
+      // sensitivity update instead of selecting it in every IMU work item.
+      REG_BANK_SEL,REG_BANK_0,
     };
     imu_config[5] = imu_config[5] | gyroConfig.sensitivity;
     imu_config[7] = ACCEL_FCHOICE_DLPF_ENABLE | IMU_FIXED_ACCEL_DLPFCFG

@@ -5,11 +5,14 @@
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/random/random.h>
+#include <errno.h>
+#include <stdio.h>
 #include <time.h>
 
 
 #include <stdlib.h>
 #include "BLEService.h"
+#include "msense_git_metadata.h"
 #include "zephyrfilesystem.h"
 
 
@@ -44,6 +47,7 @@ bool security_lock;
 bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
+#define UUID_CONTENTS_MAX_SIZE 640U
 
 //#undef GET_FATTIME
 //#define GET_FATTIME() (DWORD)get_current_unix_time()
@@ -73,7 +77,7 @@ int upload_timeout_errors;
 
 bool reset_lock;
 
-uint64_t last_time_update_sent;
+uint64_t last_time_update_uptime_ms;
 
 uint64_t set_date_time = 0;
 
@@ -135,7 +139,7 @@ typedef struct MotionSenseFile {
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
 	.sensor_string = "ppg",
-	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 global_tick_512hz"
+	.sensor_format = "uint24_le ir1, uint24_le ir2, uint24_le g1, uint24_le g2, uint32_le global_tick_512hz"
 };
 
 MotionSenseFile accel_file = {
@@ -397,7 +401,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_INF("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
+		LOG_DBG("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -486,13 +490,13 @@ void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	LOG_INF("Processing packet %i", container->packet_num);
+	LOG_DBG("Processing packet %i", container->packet_num);
 	start_timer(&file_system_timer);
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
 	int64_t time_value = stop_timer(&file_system_timer);
-	LOG_INF("write timer: %lli", time_value);
+	LOG_DBG("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -540,7 +544,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
 		
 	}
-	LOG_INF("ret value for %i: %i", type, ret);
+	LOG_DBG("ret value for %i: %i", type, ret);
 	}
 	else{
 		LOG_ERR("work item attempted schedule while still running for type: %i", type);
@@ -592,7 +596,7 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 			MSenseFile->first_sample_init = false;
 		}
 		if (!panic_single_thread){
-		LOG_INF("Submitting Write!");
+		LOG_DBG("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		}
 		else {
@@ -637,7 +641,7 @@ void flush_data_buffer(enum sensor_type sensor){
 				MSenseFile->first_sample_init = false;
 			}
 			if (!panic_single_thread){
-			LOG_INF("Submitting Write!");
+			LOG_DBG("Submitting Write!");
 			submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 			}
 			else {
@@ -652,47 +656,74 @@ void flush_data_buffer(enum sensor_type sensor){
 }
 
 
-int write_ble_uuid(char* uuid){
-
-	struct fs_mount_t* mp = &fs_mnt;
+int write_ble_uuid(const char *ble_address, const char *ble_name,
+		   const char *device_id_hex)
+{
+	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
+	char uuid_name[32];
+	char uuid_contents[UUID_CONTENTS_MAX_SIZE];
+	int rc;
+	int written;
+	ssize_t bytes_written;
+
+	if (ble_address == NULL || ble_name == NULL || device_id_hex == NULL) {
+		return -EINVAL;
+	}
+
+	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
+	if (written < 0 || written >= sizeof(uuid_name)) {
+		return -ENAMETOOLONG;
+	}
+
 	fs_file_t_init(&name_file);
-	int res;
-	// theoretically zephyr docs say this allows us to test whether the file exists or not?
-	char uuid_name[20] = "";
-	strcat(uuid_name, mp->mnt_point);
-	strcat(uuid_name, "/");
-	strcat(uuid_name, "uuid.txt");
-	int file_create = fs_open(&name_file, uuid_name, 0);
-	// the above function will return error -2 if file name is not present, so we can use it to check whether it gets included or not.
-	if (file_create != 0)
+	rc = fs_open(&name_file, uuid_name, FS_O_READ);
+	if (rc == 0) {
+		fs_close(&name_file);
+		return 0;
+	}
+	if (rc != -ENOENT) {
+		LOG_WRN("Unable to check uuid.txt: %d", rc);
+		return rc;
+	}
+
+	written = snprintf(uuid_contents, sizeof(uuid_contents),
+			   "%s\nName: %s\nDevice ID: %s\nVersion: %s"
+			   "\nGit Commit: %s\nGit Tree: %s"
+			   "\nppg format: %s\naccel format: %s"
+			   "\nFor a more complete description of how this device works, please visit "
+			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
+			   ble_address, ble_name, device_id_hex, CONFIG_BT_DIS_MODEL,
+			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
+			   ppg_file.sensor_format, accel_file.sensor_format);
+	if (written < 0 || written >= sizeof(uuid_contents)) {
+		return -ENOSPC;
+	}
+
+	rc = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
+	if (rc != 0) {
+		LOG_WRN("Unable to create uuid.txt: %d", rc);
+		return rc;
+	}
+
+	bytes_written = fs_write(&name_file, uuid_contents, written);
+	if (bytes_written < 0) {
+		rc = (int)bytes_written;
+	} else if (bytes_written != written) {
+		rc = -EIO;
+	} else {
+		rc = 1;
+	}
+
 	{
-		int file_create = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
-		if (file_create != 0)
-		{
-			LOG_WRN("Unable to create file");
-			return -1;
+		int close_rc = fs_close(&name_file);
+
+		if (rc > 0 && close_rc != 0) {
+			rc = close_rc;
 		}
-		// we write in sizes of 4096*2, so we include that in the formula
-		// max_writes
-
-		strcat(uuid, "\n ppg format: ");
-  		strcat(uuid, ppg_file.sensor_format);
-
-		strcat(uuid, "\n accel format: ");
-  		strcat(uuid, accel_file.sensor_format);
-		strcat(uuid, "\n for a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.");
-		//res = f_expand(name_file.filep, 4096 * 4, 1);
-		res = fs_write(&name_file, uuid, strlen(uuid));
-		res = 1;
 	}
-	else
-	{
-		res = 0;
-	}
-	fs_close(&name_file);
-	
-	return res;
+
+	return rc;
 }
 
 int close_all_files(){
@@ -896,7 +927,23 @@ int test_desk_driver(){
 	print_page_hex(read_buf, sizeof(read_buf), true);
 	return 0;
 }
-
+uint8_t test_read_buf[4096];
+void print_out_page(int page_num){
+	
+	// can also just change this to disk_read()
+	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
+	if (page_num > 1500){
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 2, 1);
+	}
+	
+	//(filesystem_device2, page_num, test_read_buf);
+	//LOG_INF("with")
+	//spi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	print_page_hex(test_read_buf, sizeof(test_read_buf), false);
+}
 
 
 int read_storage_percent_full(){
@@ -905,20 +952,26 @@ int read_storage_percent_full(){
 
 
 void set_date_time_bt(uint64_t value){
-	
+	/*
+	 * The datetime characteristic uses Unix milliseconds. Keep the phone's full
+	 * precision and anchor it to the millisecond-resolution system uptime.
+	 */
 	set_date_time = value;
-	last_time_update_sent = k_uptime_get() / 1000;
-	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
+	last_time_update_uptime_ms = k_uptime_get();
+	LOG_INF("datetime set to %llu milliseconds, uptime is %llu milliseconds",
+		set_date_time, last_time_update_uptime_ms);
+}
+
+uint64_t get_current_unix_time_ms(){
+	uint64_t current_uptime_ms = k_uptime_get();
+	uint64_t current_time_ms =
+		(current_uptime_ms - last_time_update_uptime_ms) + set_date_time;
+	LOG_DBG("current timestamp in milliseconds: %llu", current_time_ms);
+	return current_time_ms;
 }
 
 uint64_t get_current_unix_time(){
-	
-	uint64_t current_upime = k_uptime_get();
-	current_upime /= 1000;
-	LOG_DBG("current uptime in seconds: %llu", current_upime);
-	uint64_t current_time = (current_upime - last_time_update_sent) + set_date_time;
-	LOG_DBG("current timestamp: %llu", current_time);
-	return current_time;
+	return get_current_unix_time_ms() / 1000;
 }
 
 // for now we will use Mountain Time (UTC -7)
@@ -965,12 +1018,12 @@ int64_t stop_timer(int64_t* start_time_ref){
 	if (start_time_ref != NULL){
 		length = k_uptime_get() - *start_time_ref;
 		*start_time_ref = 0;
-		LOG_INF("Timer Value: %lli ms", length);
+		LOG_DBG("Timer Value: %lli ms", length);
 	}
 	else{
 		length = k_uptime_get() - start_time;
 		start_time = 0;
-		LOG_INF("Timer Value: %lli ms", length);
+		LOG_DBG("Timer Value: %lli ms", length);
 	}
 	return length;
 }

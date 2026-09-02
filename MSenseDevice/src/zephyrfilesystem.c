@@ -934,9 +934,9 @@ void print_out_page(int page_num){
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
 	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
 	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
-	if (page_num > 1500){
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 2, 1);
+	if (page_num > 500){
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, (page_num + 1)-500, 1);
+		disk_nand_access_read(&sdmmc_disk, test_read_buf, (page_num + 2)-500, 1);
 	}
 	
 	//(filesystem_device2, page_num, test_read_buf);

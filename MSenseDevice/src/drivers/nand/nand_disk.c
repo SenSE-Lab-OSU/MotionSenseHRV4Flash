@@ -77,7 +77,7 @@ K_MUTEX_DEFINE(disk_access_mutex);
 #endif 
 
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
-#define FILETABLE_PARTITION_OFFSET 0
+#define FILETABLE_PARTITION_OFFSET 4096*10
 
 
 
@@ -154,6 +154,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	struct flash_pages_info* page_info_ptr;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
+	LOG_WRN("address: %d", address);
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
 	//sector cannot be greater than the allocated file table segment size
 	if (sector_num > file_table_sector_num){

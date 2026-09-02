@@ -32,6 +32,40 @@ Build output lands in `MSenseDevice/build/` exactly like a local build
 (`merged.hex`, `merged_CPUNET.hex`, `dfu_application.zip`, etc.) -- it's
 gitignored already.
 
+## Flashing the build output (J-Link / nrfjprog)
+
+The container has no USB passthrough, so flashing happens on the host, not
+inside Docker. Install `nrfjprog` (bundled with `nRF Command Line Tools`, or
+via `nrfutil install nrf5sdk-tools`) and a SEGGER J-Link connection to the
+board, then flash directly from the `merged*.hex` files the container just
+produced in `MSenseDevice/build/`.
+
+The nRF5340 has two cores, each flashed separately:
+
+```bash
+# Confirm the J-Link is enumerated before flashing
+nrfjprog --ids
+
+# Network core (Bluetooth controller)
+nrfjprog --program MSenseDevice/build/merged_CPUNET.hex \
+  --chiperase --verify --coprocessor CP_NETWORK -r
+
+# Application core (the MSenseDevice firmware itself)
+nrfjprog --program MSenseDevice/build/merged.hex \
+  --chiperase --verify --coprocessor CP_APPLICATION -r
+```
+
+- `--chiperase` erases the whole core before programming (avoids stale-page
+  leftovers from a previous, differently-sized image).
+- `--verify` reads back and compares after programming.
+- `-r` resets and starts the core once flashing finishes.
+- If you only changed application-core source (the common case -- e.g.
+  anything under `MSenseDevice/src/`), you only need to reflash
+  `merged.hex`/`CP_APPLICATION`; skip the network-core command unless
+  `sysbuild`/network-core config changed.
+- `nrfjprog --recover` (per-core, same `--coprocessor` flag) is the fallback
+  if a core is unresponsive or `--chiperase` itself fails to connect.
+
 ## What's in the image
 
 - **Toolchain**: installed via `nrfutil toolchain-manager`, pinned to NCS
@@ -152,3 +186,11 @@ entry in the real `sdk-nrf` manifest's `west.yml` for that version
   `west build` arguments (see the incremental-builds section above), and
   that `MSenseDevice/build/CMakeCache.txt` actually exists (a deleted or
   never-created build dir also takes this path, correctly, for its first run).
+- **`nrfjprog`: "ERROR: No debuggers were discovered." (exit 41)**: the
+  host can't see the J-Link over USB -- check the cable/hub, run `nrfjprog
+  --ids` on its own to confirm a serial number shows up, then retry the
+  flash command.
+- **`nrfjprog`: "Low voltage 0 detected in target device" / "Unable to
+  connect to a debugger" (exit 43)**: this is the *board's* power, not the
+  J-Link's USB connection -- the debugger enumerates fine but can't detect
+  target voltage. Check the board's power connection/battery, then retry.

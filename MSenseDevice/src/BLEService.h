@@ -137,6 +137,10 @@ extern bool battery_charging;
 #define NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x52, 0xC9, 0x39, 0xDA
 
+// Real-time accel + quaternion streaming characteristic UUID
+#define NOTIFY_IMU_STREAM_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+  0xE2, 0x48, 0x81, 0x1D, 0x53, 0xC9, 0x39, 0xDA
+
 
 
 /** @brief Callback type for when new data is received. */
@@ -161,6 +165,7 @@ void disconnected(struct bt_conn *conn, uint8_t reason);
 
 
 void enmo_threshold_send(uint8_t* data, uint8_t len);
+void imu_stream_send(uint8_t* data, uint8_t len);
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic);
 void status_reg_ble_notification();
 

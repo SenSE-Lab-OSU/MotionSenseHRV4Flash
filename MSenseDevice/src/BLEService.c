@@ -132,6 +132,7 @@ struct bt_uuid_128 bt_uuid_read_uptime = BT_UUID_INIT_128(READ_UPTIME_UUID);
 struct bt_uuid_128 bt_uuid_update_service = BT_UUID_INIT_128(UPDATE_SERVICE_UUID);
 struct bt_uuid_128 bt_uuid_enmo_notify = BT_UUID_INIT_128(NOTIFY_ENMO_CHARACTERISTIC_UUID);
 struct bt_uuid_128 bt_uuid_enmothreshold_notify = BT_UUID_INIT_128(NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID);
+struct bt_uuid_128 bt_uuid_imu_stream_notify = BT_UUID_INIT_128(NOTIFY_IMU_STREAM_CHARACTERISTIC_UUID);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 /* TF micro Button Service Declaration and Registration */
@@ -211,6 +212,10 @@ BT_GATT_SERVICE_DEFINE(update_service, // 0
 
   BT_GATT_CHARACTERISTIC(&bt_uuid_enmothreshold_notify.uuid, BT_GATT_CHRC_NOTIFY | BT_GATT_CHRC_READ , BT_GATT_PERM_READ,
     read_enmo_threshold, NULL, &enmo_threshold_packet), // 4
+  BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+  BT_GATT_CHARACTERISTIC(&bt_uuid_imu_stream_notify.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE,
+    NULL, NULL, NULL), // 8: real-time accel + quaternion stream
   BT_GATT_CCC(on_cccd_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
   );
 
@@ -810,6 +815,21 @@ void enmo_threshold_send(uint8_t* data, uint8_t len){
 
 }
 
+
+/* Sends a real-time accel + quaternion notification, given that the
+Client Characteristic Control Descriptor has been set to Notify (0x1). */
+void imu_stream_send(uint8_t* data, uint8_t len){
+
+  // the number 8 accesses the 8th attribute in the service, IMU stream characteristic
+  const struct bt_gatt_attr *attr = &update_service.attrs[8];
+  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send IMU stream notification\n");
+    }
+  }
+
+}
 
 void status_reg_ble_notification(){
 

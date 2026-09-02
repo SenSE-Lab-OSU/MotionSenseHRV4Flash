@@ -1,0 +1,39 @@
+/*
+ * Copyright (c) 2026 The Ohio State University SENSE Lab
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		msense-command-uart = &uart1;
+		msense-relay-uart = &uart0;
+	};
+};
+
+/*
+ * The DK normally forwards the Serial Port 0 pins to the network core when a
+ * Bluetooth controller child image is present. This application owns those
+ * pins for UARTE1 command/control instead.
+ */
+&gpio_fwd {
+	/delete-node/ uart;
+};
+
+/* The tester does not use the DK's native USB peripheral. */
+&usbd {
+	status = "disabled";
+};
+
+/* Serial Port 1/VCOM2: binary relay, with RTS/CTS to pace bursts. */
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	hw-flow-control;
+};
+
+/* Serial Port 0/VCOM0: line-oriented command/control, no flow control. */
+&uart1 {
+	status = "okay";
+	current-speed = <115200>;
+};

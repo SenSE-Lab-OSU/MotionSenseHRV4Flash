@@ -187,6 +187,7 @@ static void stream_connected(struct bt_conn *conn, uint8_t err)
 {
 	struct bt_conn *held_conn;
 	struct bt_conn *discard_conn = NULL;
+	uint32_t connection_generation;
 	k_spinlock_key_t key;
 
 	if (err != 0U) {
@@ -219,6 +220,7 @@ static void stream_connected(struct bt_conn *conn, uint8_t err)
 		stream.state = stream.recording ? MSENSE_SENSOR_STREAM_STATE_HISTORY_FILLING :
 							  MSENSE_SENSOR_STREAM_STATE_NOT_RECORDING;
 	}
+	connection_generation = stream.connection_generation;
 	k_spin_unlock(&stream.lock, key);
 
 	if (held_conn != NULL) {
@@ -227,15 +229,15 @@ static void stream_connected(struct bt_conn *conn, uint8_t err)
 	if (discard_conn != NULL) {
 		bt_conn_unref(discard_conn);
 	}
+	LOG_INF("NUS stream connection ready: generation %u", connection_generation);
 	k_sem_give(&stream_wake);
 }
 
 static void stream_disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	struct bt_conn *discard_conn = NULL;
+	uint32_t connection_generation = 0U;
 	k_spinlock_key_t key;
-
-	ARG_UNUSED(reason);
 
 	key = k_spin_lock(&stream.lock);
 	if (stream.conn == conn) {
@@ -255,11 +257,14 @@ static void stream_disconnected(struct bt_conn *conn, uint8_t reason)
 		stream.history_collecting = stream.recording;
 		stream.state = stream.recording ? MSENSE_SENSOR_STREAM_STATE_HISTORY_FILLING :
 							  MSENSE_SENSOR_STREAM_STATE_NOT_RECORDING;
+		connection_generation = stream.connection_generation;
 	}
 	k_spin_unlock(&stream.lock, key);
 
 	if (discard_conn != NULL) {
 		bt_conn_unref(discard_conn);
+		LOG_INF("NUS stream disconnected: reason 0x%02x, generation %u", reason,
+			connection_generation);
 	}
 	k_sem_give(&stream_wake);
 }
@@ -1041,6 +1046,9 @@ static void stream_process_start(const struct stream_command *command)
 	uint32_t connection_generation;
 	uint16_t status = MSENSE_SENSOR_STREAM_STATUS_SUCCESS;
 	uint16_t mtu;
+	uint8_t state;
+	bool notifications_enabled;
+	bool recording;
 	bool subscribed;
 	k_spinlock_key_t key;
 
@@ -1096,7 +1104,20 @@ static void stream_process_start(const struct stream_command *command)
 		stream_queue_result_locked(command->session_id, status,
 					   command->connection_generation);
 	}
+	state = stream.state;
+	recording = stream.recording;
+	notifications_enabled = stream.notifications_enabled;
 	k_spin_unlock(&stream.lock, key);
+
+	if (status == MSENSE_SENSOR_STREAM_STATUS_SUCCESS) {
+		LOG_INF("NUS START accepted: session 0x%08x, MTU %u", command->session_id,
+			mtu);
+	} else {
+		LOG_WRN("NUS START rejected: session 0x%08x, status 0x%04x, state 0x%02x, "
+			"recording %u, CCC %u, subscribed %u, MTU %u",
+			command->session_id, status, state, recording, notifications_enabled,
+			subscribed, mtu);
+	}
 }
 
 static void stream_process_cancel(const struct stream_command *command)
@@ -1274,9 +1295,11 @@ static ssize_t stream_rx_write(struct bt_conn *conn, const struct bt_gatt_attr *
 	ARG_UNUSED(flags);
 
 	if (offset != 0U) {
+		LOG_WRN("NUS command rejected: nonzero offset %u", offset);
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
 	if (len != MSENSE_SENSOR_STREAM_COMMAND_BYTES) {
+		LOG_WRN("NUS command rejected: length %u", len);
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
@@ -1306,25 +1329,33 @@ static ssize_t stream_rx_write(struct bt_conn *conn, const struct bt_gatt_attr *
 	}
 
 	if (k_msgq_put(&stream_command_queue, &command, K_NO_WAIT) != 0) {
+		LOG_WRN("NUS command queue full: opcode 0x%02x, session 0x%08x",
+			command_bytes[3], command.session_id);
 		return BT_GATT_ERR(BT_ATT_ERR_INSUFFICIENT_RESOURCES);
 	}
 
+	LOG_INF("NUS command queued: opcode 0x%02x, session 0x%08x, generation %u",
+		command_bytes[3], command.session_id, command.connection_generation);
 	k_sem_give(&stream_wake);
 	return len;
 }
 
 static void stream_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
+	bool notifications_enabled;
 	k_spinlock_key_t key;
 
 	ARG_UNUSED(attr);
 
 	key = k_spin_lock(&stream.lock);
-	stream.notifications_enabled = (value & BT_GATT_CCC_NOTIFY) != 0U;
-	if (!stream.notifications_enabled && stream.session_active) {
+	notifications_enabled = (value & BT_GATT_CCC_NOTIFY) != 0U;
+	stream.notifications_enabled = notifications_enabled;
+	if (!notifications_enabled && stream.session_active) {
 		stream_reset_session_locked();
 	}
 	k_spin_unlock(&stream.lock, key);
+	LOG_INF("NUS TX notifications %s (CCCD 0x%04x)",
+		notifications_enabled ? "enabled" : "disabled", value);
 	k_sem_give(&stream_wake);
 }
 
@@ -1369,6 +1400,11 @@ int msense_sensor_stream_init(const struct msense_sensor_stream_config *config)
 	stream.state = MSENSE_SENSOR_STREAM_STATE_NOT_RECORDING;
 	k_spin_unlock(&stream.lock, key);
 
+	LOG_INF("NUS stream initialized: device 0x%02x, record size %u, rate %u/%u Hz, "
+		"history %u, forward %u",
+		config->device_type, config->record_size, config->record_rate_numerator,
+		config->record_rate_denominator, config->history_record_count,
+		config->forward_record_count);
 	k_sem_give(&stream_wake);
 	return 0;
 }

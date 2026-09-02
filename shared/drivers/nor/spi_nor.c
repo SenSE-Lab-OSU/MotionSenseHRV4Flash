@@ -979,7 +979,7 @@ static int spi_nor_process_bfp(const struct device *dev,
 		}
 
 		if (rc != 0) {
-			LOG_ERR("Unable to enter 4-byte mode: %d\n", rc);
+			LOG_ERR("Unable to enter 4-byte mode: %d", rc);
 			return rc;
 		}
 	}
@@ -1222,7 +1222,7 @@ static int spi_nor_configure(const struct device *dev)
 		}
 
 		if (rc != 0) {
-			LOG_ERR("BP clear failed: %d\n", rc);
+			LOG_ERR("BP clear failed: %d", rc);
 			return -ENODEV;
 		}
 
@@ -1237,7 +1237,7 @@ static int spi_nor_configure(const struct device *dev)
 		rc = spi_nor_set_address_mode(dev, cfg->enter_4byte_addr);
 
 		if (rc != 0) {
-			LOG_ERR("Unable to enter 4-byte mode: %d\n", rc);
+			LOG_ERR("Unable to enter 4-byte mode: %d", rc);
 			return -ENODEV;
 		}
 	}

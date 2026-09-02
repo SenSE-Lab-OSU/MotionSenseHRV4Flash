@@ -640,7 +640,7 @@ int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor)
 		//fp->flag |= 0x40; // = FA_MODIFIED
 		sync_ret = fs_sync(&MSenseFile->self_file);
 		close_ret = fs_close(&MSenseFile->self_file);
-		LOG_INF("closing file\n");
+		LOG_INF("closing file");
 		if (sync_ret != 0) {
 			return sensor_write_failure(sensor, "File rollover sync", sync_ret);
 		}
@@ -1044,7 +1044,7 @@ static int setup_flash(struct fs_mount_t *mnt)
 	id = STORAGE_PARTITION_ID;
 
 	rc = flash_area_open(id, &pfa);
-	LOG_INF("Area %u at 0x%x on %s for %u bytes\n",
+	LOG_INF("Area %u at 0x%x on %s for %u bytes",
 	       id, (unsigned int)pfa->fa_off, pfa->fa_dev->name,
 	       (unsigned int)pfa->fa_size);
 

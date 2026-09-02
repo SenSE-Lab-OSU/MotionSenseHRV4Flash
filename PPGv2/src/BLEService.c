@@ -146,7 +146,7 @@ void on_cccd_changed(const struct bt_gatt_attr *attr, uint16_t value){
       break;
         
     default: 
-      printk("Error, CCCD has been set to an invalid value");     
+      LOG_WRN("CCCD set to invalid value 0x%04x", value);
   }
 }
 
@@ -507,21 +507,17 @@ void connected(struct bt_conn* conn, uint8_t err){
 
   my_connection = conn;
   if (err) {
-    printk("Connection failed (err %u)\n", err);
+    LOG_ERR("Connection failed: 0x%02x", err);
     return;
   }
   else if(bt_conn_get_info(conn, &info))
-    printk("Could not parse connection info\n");
+    LOG_WRN("Could not parse connection info");
   else{  
   // Start the timer and stop advertising and initialize all the modules
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    printk("Connection established!		\n\
-      Connected to: %s					\n\
-      Role: %u							\n\
-      Connection interval: %u				\n\
-      Slave latency: %u					\n\
-      Connection supervisory timeout: %u	\n"
-      , addr, info.role, info.le.interval, info.le.latency, info.le.timeout);
+    LOG_INF("Connection established: connected to %s, role %u, interval %u, "
+            "latency %u, supervisory timeout %u",
+            addr, info.role, info.le.interval, info.le.latency, info.le.timeout);
 		
     
     
@@ -541,7 +537,7 @@ void connected(struct bt_conn* conn, uint8_t err){
 
 void disconnected(struct bt_conn *conn, uint8_t reason){
   // Stop timer and do all the cleanup
-  printk("Disconnected (reason %u)\n", reason);
+  LOG_INF("Disconnected: reason 0x%02x", reason);
   connectedFlag=false;
 
   #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -1245,10 +1241,10 @@ uint16_t offset, uint8_t flags){
 
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
-    printk("Advertising failed to start (err %d)\n", err);
+    LOG_ERR("BLE advertising failed to start: %d", err);
   else
   {
-    printk("Advertising successfully started\n");
+    LOG_INF("BLE advertising started");
   }
   k_sleep(K_SECONDS(1));
   NVIC_SystemReset();
@@ -1378,7 +1374,7 @@ void enmo_send(struct bt_conn* conn, uint8_t* data, uint8_t len){
     LOG_INF("sending ennmo...");
     int ret = bt_gatt_notify(conn, attr, data, len);
     if (ret != 0){
-      printk("Error, unable to send notification\n");
+      LOG_WRN("Unable to send ENMO notification: %d", ret);
     }
   } 
 
@@ -1395,7 +1391,7 @@ void enmo_threshold_send(uint8_t* data, uint8_t len){
     LOG_INF("sending ennmo...");
     int ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){
-      printk("Error, unable to send notification\n");
+      LOG_WRN("Unable to send ENMO threshold notification: %d", ret);
     }
   } 
 
@@ -1412,7 +1408,7 @@ void status_reg_ble_notification(){
     LOG_INF("sending status reg...");
     int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
     if (ret != 0){
-      printk("Error, unable to send notification\n");
+      LOG_WRN("Unable to send status notification: %d", ret);
     }
   } 
 }
@@ -1425,7 +1421,7 @@ int storage_ble_notification(uint8_t* data, uint8_t len){
     LOG_INF("sending ennmo...");
     int ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){
-      printk("Error, unable to send notification\n");
+      LOG_WRN("Unable to send storage notification: %d", ret);
     }
   }
   return ret; 
@@ -1447,7 +1443,7 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
     LOG_INF("sending ennmo...");
     ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){
-      printk("Error, unable to send notification\n");
+      LOG_WRN("Unable to send notification: %d", ret);
     }
   }
   return ret; 
@@ -1495,8 +1491,9 @@ void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     // Send the notification
     
-    if(bt_gatt_notify_cb(conn, &params)){
-            printk("Error, unable to send notification\n");
+    int ret = bt_gatt_notify_cb(conn, &params);
+    if(ret){
+            LOG_WRN("Unable to send accelerometer notification: %d", ret);
     }
     
   }
@@ -1521,7 +1518,7 @@ void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len){
   if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     // Send the notification
     if(bt_gatt_notify_cb(conn, &params)){
-            LOG_WRN("Error, unable to send notification\n");
+            LOG_WRN("Error, unable to send notification");
     }
   }
   else{
@@ -1603,11 +1600,9 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
 			  uint8_t flags){
   const uint8_t * buffer =(const uint8_t*) buf;
   
-  printk("Received data, handle %d, conn %p, data: 0x", attr->handle, conn);
-  for(uint8_t i = 0; i < len; i++){
-        printk("%02X,", buffer[i]);
-  }
-  printk("\n");
+  LOG_INF("Received configuration data: handle %u, conn %p", attr->handle,
+          (void *)conn);
+  LOG_HEXDUMP_INF(buffer, len, "Configuration payload");
 
   switch(buffer[0]){
     case BLE_CONFIG_SENSOR_ENABLE:
@@ -1724,7 +1719,7 @@ ssize_t legacy_on_settings_change(struct bt_conn *conn,
       configRead[5] = PPG_FIXED_256HZ_STATUS | (configRead[5]&0x0F);
       break;
     default: 
-      printk("Error, CCCD has been set to an invalid value");        
+      LOG_WRN("Unknown configuration command: 0x%02x", buffer[0]);
   }
   return len;
 }

@@ -13,6 +13,7 @@
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
+#include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
@@ -389,16 +390,13 @@ static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t l
   char addr[BT_ADDR_LE_STR_LEN];
 
   if (bt_conn_get_info(conn, &info))
-    printk("Could not parse connection info\n");
+    LOG_WRN("Could not parse connection info");
   else
   {
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    printk("Connection parameters updated!	\n\
-      Connected to: %s						\n\
-      New Connection Interval: %u				\n\
-      New Slave Latency: %u					\n\
-      New Connection Supervisory Timeout: %u	\n",
-           addr, info.le.interval, info.le.latency, info.le.timeout);
+    LOG_INF("Connection parameters updated: connected to %s, interval %u, "
+            "latency %u, supervisory timeout %u",
+            addr, info.le.interval, info.le.latency, info.le.timeout);
   }
 }
 
@@ -412,12 +410,12 @@ static void bt_ready(int err)
 {
   if (err)
   {
-    printk("BLE init failed with error code %d\n", err);
+    LOG_ERR("BLE initialization callback failed: %d", err);
     ppg_collection_latch_storage_fault();
     return;
   }
   else
-    printk("BLE init success\n");
+    LOG_INF("BLE initialized");
 
   #if CONFIG_BT_SETTINGS
     settings_load();
@@ -468,11 +466,11 @@ static void bt_ready(int err)
   */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err) {
-    printk("Advertising failed to start (err %d)\n", err);
+    LOG_ERR("BLE advertising failed to start: %d", err);
     ppg_collection_latch_storage_fault();
     return;
   }
-  printk("Advertising started\n");
+  LOG_INF("BLE advertising started");
 
   k_sem_give(&ble_init_ok);
 
@@ -488,19 +486,17 @@ static void ble_init(void)
   err = bt_enable(bt_ready);
   if (err)
   {
-    printk("BLE initialization failed\n");
+    LOG_ERR("Unable to start BLE initialization: %d", err);
     ppg_collection_latch_storage_fault();
   }
 
   //err = bt_id_create(BT_ADDR_LE_ANY, NULL);
   if (!err)
-    printk("Bluetooth initialized\n");
+    LOG_INF("BLE initialization started");
   else
   {
-    printk("BLE initialization did not complete in time\n");
+    LOG_ERR("BLE initialization did not start");
   }
-  if (err)
-    printk("Bluetooth init failed (err %d)\n", err);
 }
 
 // Timer handler that periodically executes commands with a period,
@@ -519,13 +515,13 @@ static void spi_init(void)
 
   if (spi_dev_imu == NULL || !device_is_ready(spi_dev_imu))
   {
-    printk("Could not get %s \n", spiName_imu);
+    LOG_ERR("Could not get %s", spiName_imu);
     return;
   }
 
   if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
   {
-    printk("Could not get %s \n", spiName_ppg);
+    LOG_ERR("Could not get %s", spiName_ppg);
     return;
   }
   
@@ -558,11 +554,11 @@ void spi_verify_sensor_ids()
 static void i2c_init(void)
 {
 
-  printk("The I2C Init started\n");
+  LOG_INF("I2C initialization started");
   i2c_dev = DEVICE_DT_GET(BATTERY_BUS_NODE);
   if (!device_is_ready(i2c_dev))
   {
-    printk("Binding failed to i2c.");
+    LOG_ERR("Battery I2C device is not ready");
     return;
   }
   // Previously we used to set values, but these are now set by device tree.
@@ -632,9 +628,15 @@ int main(void)
 	int uuid_ret = 0;
 	bool boot_storage_ready = false;
 	bool uuid_address_present = false;
+	uint32_t reset_reason = nrfx_reset_reason_get();
 
-  printk("Starting Application... \n");
-  LOG_INF("Starting Logging...\n");
+	/* RESETREAS is cumulative until acknowledged. Capture this boot's reason
+	 * before clearing it, so the next boot is not reported with stale flags.
+	 */
+	nrfx_reset_reason_clear(reset_reason);
+
+	LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
+	LOG_INF("Starting application");
 
 	identity_err = msense_device_identity_init(&device_identity,
 						   &device_identity_config);
@@ -680,7 +682,7 @@ int main(void)
   ret = gpio_pin_configure(gpio0_device, 27, GPIO_OUTPUT_INACTIVE);
   if (ret < 0)
   {
-    printk("Error: Can't initialize LED");
+    LOG_ERR("Failed to initialize application GPIOs: %d", ret);
     // return;
   }
   

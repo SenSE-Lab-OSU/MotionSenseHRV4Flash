@@ -231,7 +231,7 @@ int create_test_file(int writes)
 		return -EINVAL;
 	}
 
-	printk("write file...\n");
+	LOG_INF("Creating test file");
 	fs_file_t_init(&test_file);
 	total_test_files++;
 	ret = snprintf(id_string, sizeof(id_string), "%d", total_test_files);
@@ -284,7 +284,7 @@ close_file:
 		ret = close_ret;
 	}
 	if (ret == 0) {
-		printk("done write\n");
+		LOG_INF("Test file write complete");
 	}
 
 	return ret;
@@ -943,14 +943,18 @@ static int setup_flash(struct fs_mount_t *mnt)
 	id = STORAGE_PARTITION_ID;
 
 	rc = flash_area_open(id, &pfa);
-	LOG_INF("Area %u at 0x%x on %s for %u bytes\n",
+	LOG_INF("Area %u at 0x%x on %s for %u bytes",
 	       id, (unsigned int)pfa->fa_off, pfa->fa_dev->name,
 	       (unsigned int)pfa->fa_size);
 
 	if (rc < 0 && IS_ENABLED(CONFIG_APP_WIPE_STORAGE)) {
-		printk("Erasing flash area ... ");
+		LOG_WRN("Erasing flash area");
 		rc = flash_area_erase(pfa, 0, pfa->fa_size);
-		printk("%d\n", rc);
+		if (rc != 0) {
+			LOG_ERR("Flash area erase failed: %d", rc);
+		} else {
+			LOG_INF("Flash area erase complete");
+		}
 	}
 
 	if (rc < 0) {

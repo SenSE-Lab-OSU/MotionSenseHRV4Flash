@@ -78,7 +78,7 @@ uint8_t * rx_buffer, uint8_t rxLen){
 
   err = spi_transceive(spi_dev_imu, &spi_cfg_imu, &tx, &rx);
   if (err)
-    printk("SPI error: %d\n", err);
+    LOG_ERR("SPI transaction failed: %d", err);
 }
 
 // Reads the gyroscope raw data at the global tick rate and accumulates samples
@@ -589,7 +589,7 @@ void getIMUID(){
       tx_buffer[1] = 0xFF;
       uint8_t txLen=2,rxLen=2;
       spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
-      LOG_INF("Chip ID from motion sensor=%x\n",rx_buffer[1]);
+      LOG_INF("Chip ID from motion sensor=%x", rx_buffer[1]);
 }
 
 void motionSensitivitySampling_config(void){

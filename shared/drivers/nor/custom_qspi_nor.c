@@ -1361,9 +1361,9 @@ static int qspi_nor_configure(const struct device *dev)
 */
 	//qspi_nor_write_protection_set(dev, false);
 	int status_register = qspi_rdsr(dev, 1);
-	LOG_INF("status register: %d \n", status_register);
+	LOG_INF("status register: %d", status_register);
 	int security_register = qspi_read_security(dev);
-	LOG_INF("security register: %d \n", security_register);
+	LOG_INF("security register: %d", security_register);
 
 #ifdef CONFIG_PM_DEVICE_RUNTIME
 	ret = pm_device_runtime_enable(dev);

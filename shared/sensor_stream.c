@@ -92,7 +92,6 @@ struct stream_tx_slot {
 struct stream_runtime {
 	struct k_spinlock lock;
 	struct bt_conn *conn;
-	uint8_t record_buffer[MSENSE_SENSOR_STREAM_SENSOR_BYTES];
 	uint8_t device_id[8];
 	char device_name[17];
 	char git_commit[41];
@@ -140,6 +139,9 @@ struct stream_runtime {
 	bool terminal_complete;
 	struct stream_pending_result results[STREAM_RESULT_QUEUE_DEPTH];
 };
+
+/* Keep the large zero-initialized payload buffer in .bss, not flash-backed .data. */
+static uint8_t stream_record_buffer[MSENSE_SENSOR_STREAM_SENSOR_BYTES];
 
 static struct stream_runtime stream = {
 	.state = MSENSE_SENSOR_STREAM_STATE_UNINITIALIZED,
@@ -351,12 +353,12 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 
 static uint8_t *stream_history_buffer(void)
 {
-	return stream.record_buffer;
+	return stream_record_buffer;
 }
 
 static uint8_t *stream_forward_buffer(void)
 {
-	return &stream.record_buffer[stream.history_record_count * stream.record_size];
+	return &stream_record_buffer[stream.history_record_count * stream.record_size];
 }
 
 static enum msense_sensor_stream_state stream_post_terminal_state_locked(void)

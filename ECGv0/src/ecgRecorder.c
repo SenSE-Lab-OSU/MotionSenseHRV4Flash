@@ -4,6 +4,7 @@
 #include "drivers/ecg/max30001.h"
 #include "ecgRecordFormat.h"
 #include "zephyrfilesystem.h"
+#include "msense_sensor_stream.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -269,11 +270,21 @@ static int ecg_record_store_sample(const struct max30001_ecg_sample *sample,
 				   uint32_t rtc_tick)
 {
 	uint8_t frame[ECG_RECORD_FORMAT_FRAME_BYTES];
+	int ret;
+
+	BUILD_ASSERT(ECG_RECORD_FORMAT_FRAME_BYTES == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE,
+		     "ECG record must match the sensor stream contract");
 
 	ecg_record_format_build_sample_frame(frame, sample->etag, sample->ptag,
 					 sample->raw, rtc_tick);
 
-	return store_data(frame, sizeof(frame), ecg);
+	ret = store_data(frame, sizeof(frame), ecg);
+	if (ret != 0) {
+		msense_sensor_stream_storage_failed(ret);
+		return ret;
+	}
+	(void)msense_sensor_stream_accept_record(frame, sizeof(frame));
+	return 0;
 }
 
 /**

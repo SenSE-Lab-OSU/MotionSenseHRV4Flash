@@ -4,6 +4,7 @@ zephyr_library()
 zephyr_library_include_directories(include)
 
 zephyr_library_sources(device_identity.c)
+zephyr_library_sources_ifdef(CONFIG_MSENSE_SENSOR_STREAM sensor_stream.c)
 zephyr_library_sources_ifdef(CONFIG_FILE_SYSTEM uuid_file.c)
 zephyr_library_sources_ifdef(CONFIG_USB_MASS_STORAGE msc_media.c)
 zephyr_library_sources_ifdef(CONFIG_QSPI_NOR_CUSTOM_DRIVER drivers/nor/custom_qspi.c)

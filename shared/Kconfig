@@ -39,3 +39,30 @@ menuconfig SPI_NOR_CUSTOM_DRIVER
 	bool
 	prompt "Custom spi NOR driver, modified from spi_nor.c to be more generic and customizable."
 	default n
+
+menuconfig MSENSE_SENSOR_STREAM
+	bool "Bounded NUS sensor stream"
+	depends on BT
+	default n
+	help
+	  Provide the MotionSense version-1 bounded sensor record stream over a
+	  NUS-compatible GATT service. The application supplies recording lifecycle
+	  events and mirrors only records accepted by its storage pipeline.
+
+if MSENSE_SENSOR_STREAM
+
+config MSENSE_SENSOR_STREAM_THREAD_STACK_SIZE
+	int
+	default 2048
+	range 1024 8192
+	help
+	  Stack size in bytes for the low-priority NUS stream worker thread.
+
+config MSENSE_SENSOR_STREAM_TX_SLOTS
+	int
+	default 3
+	range 1 8
+	help
+	  Number of fixed notification buffers used by the stream worker.
+
+endif # MSENSE_SENSOR_STREAM

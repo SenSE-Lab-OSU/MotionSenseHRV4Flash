@@ -4,6 +4,7 @@
 #include "BLEService.h"
 #include "common.h"
 #include "zephyrfilesystem.h"
+#include "msense_sensor_stream.h"
 #include <math.h>
 #include <stdio.h>
 #include <zephyr/drivers/spi.h>
@@ -79,7 +80,8 @@ static bool ppg_fifo_alignment_check_pending = false;
 #define PPG_NAND_RECORD_SIZE 16U
 #define PPG_SAMPLE_MASK 0x7FFFFU
 
-BUILD_ASSERT(PPG_NAND_RECORD_SIZE == 16U, "PPG NAND record must be 16 bytes");
+BUILD_ASSERT(PPG_NAND_RECORD_SIZE == MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE,
+             "PPG NAND record must match the sensor stream contract");
 
 static void ppg_put_u24_le(uint8_t *dst, uint32_t value)
 {
@@ -755,10 +757,14 @@ void read_ppg_fifo_buffer(struct k_work *item)
     ppg_encode_nand_record(ppg_record,
                            led1A[i], led1B[i], led2A[i], led2B[i],
                            global_tick_512hz);
-    if (store_data(ppg_record, sizeof(ppg_record), ppg) != 0) {
+    int storage_ret = store_data(ppg_record, sizeof(ppg_record), ppg);
+
+    if (storage_ret != 0) {
       /* store_data() has signalled the deferred storage transition owner. */
+      msense_sensor_stream_storage_failed(storage_ret);
       return;
     }
+    (void)msense_sensor_stream_accept_record(ppg_record, sizeof(ppg_record));
     
   }
   //uint8_t test_fill_arr[4096] = {[0 ... 4095] = 1};

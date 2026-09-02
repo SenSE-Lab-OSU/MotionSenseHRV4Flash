@@ -1,0 +1,24 @@
+/*
+ * Copyright (c) 2026 The Ohio State University SENSE Lab
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	aliases {
+		msense-command-uart = &uart30;
+		msense-relay-uart = &uart20;
+	};
+};
+
+/* Serial Port 0: line-oriented command/control, no flow control. */
+&uart30 {
+	status = "okay";
+	current-speed = <115200>;
+};
+
+/* Serial Port 1: binary relay, without hardware flow control. */
+&uart20 {
+	status = "okay";
+	current-speed = <115200>;
+};

@@ -2,8 +2,9 @@ MotionSense NUS Central Tester
 ==============================
 
 This is a deliberately small, temporary tester for the MotionSense version-1
-bounded sensor stream. It runs on an nRF5340 DK as a Bluetooth LE Central and
-connects to either a PPG or ECG peripheral. It discovers standard Nordic UART
+bounded sensor stream. It runs on an nRF5340 DK or nRF54L15 DK as a Bluetooth
+LE Central and connects to either a PPG or ECG peripheral. It discovers
+standard Nordic UART
 Service (NUS), requests the fixed 96 KiB stream, validates the protocol, and
 relays every received NUS notification unchanged to a second interface-MCU
 virtual COM port.
@@ -13,43 +14,56 @@ It is for protocol and interoperability testing, not a production Central.
 Build and flash
 ---------------
 
-Build with the project wrapper and the nRF5340 DK application-core target:
+Build with the project wrapper and the desired application-core target.
+For the nRF5340 DK:
 
 .. code-block:: powershell
 
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\senselab-tools\vscode-wrapper\ncs-build.ps1 `
-     -ApplicationRoot 'D:\MotionSenseHRV4Flash\central_nus_test' `
-     -Board 'nrf5340dk/nrf5340/cpuapp' `
-     -Pristine
+   & 'C:\nathan\NordicMCP\west-ncs.cmd' build `
+     --build-dir 'C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340' `
+     'C:\nathan\MotionSenseHRV4Flash\central_nus_test' `
+     --pristine --board 'nrf5340dk/nrf5340/cpuapp'
 
-The build includes the standard HCI IPC Bluetooth Controller image for the
-nRF5340 network core. It produces two domain images, which must both be
-programmed in the order recorded by ``build\domains.yaml``:
+For the nRF54L15 DK:
 
-* ``D:\MotionSenseHRV4Flash\central_nus_test\build\merged_CPUNET.hex``
+.. code-block:: powershell
+
+   & 'C:\nathan\NordicMCP\west-ncs.cmd' build `
+     --build-dir 'C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf54l15' `
+     'C:\nathan\MotionSenseHRV4Flash\central_nus_test' `
+     --pristine --board 'nrf54l15dk/nrf54l15/cpuapp'
+
+The nRF5340 build includes the standard HCI IPC Bluetooth Controller image for
+the network core. It produces two domain images, which must both be programmed
+in the order recorded by ``build_nrf5340\domains.yaml``:
+
+* ``C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex``
   (network-core controller)
-* ``D:\MotionSenseHRV4Flash\central_nus_test\build\merged.hex``
+* ``C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex``
   (application-core tester)
 
 For example, when ``nrfutil`` is available and a single DK is attached:
 
 .. code-block:: powershell
 
-   nrfutil device program --firmware D:\MotionSenseHRV4Flash\central_nus_test\build\merged_CPUNET.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
-   nrfutil device program --firmware D:\MotionSenseHRV4Flash\central_nus_test\build\merged.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
+   nrfutil device program --firmware C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
+   nrfutil device program --firmware C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
    nrfutil device reset --reset-kind=RESET_PIN
+
+The nRF54L15 has an application-core-local Bluetooth controller, so its build
+does not produce or require a separate ``merged_CPUNET.hex`` image.
 
 Interface-MCU virtual COM ports
 -------------------------------
 
-Connect the DK's **interface-MCU USB connector (J2)** to the host. It exposes
-the two VCOM ports used by the tester; the nRF5340 native USB connector (J3)
-is not used for tester traffic. Open both ports as **115,200 baud, 8N1**.
+Connect the DK's **interface-MCU USB connector** to the host. It exposes the two
+VCOM ports used by the tester. On the nRF5340 DK, the native USB connector is
+not used for tester traffic. Open both ports as **115,200 baud, 8N1**.
 The host must assert DTR on each open port so the interface MCU connects its
 UART pins. Standard terminal programs and a normal ``pyserial`` open do this;
 set ``dtr = True`` explicitly when in doubt.
 
-The firmware assigns the VCOMs as follows:
+The firmware assigns the VCOMs as follows on the nRF5340 DK:
 
 * **Command/control:** nRF UARTE1, interface-MCU Serial Port 0, pins P1.01
   (TX) and P1.00 (RX), normally marked ``VCOM0`` on the DK. It carries plain
@@ -59,18 +73,29 @@ The firmware assigns the VCOMs as follows:
   P0.19/P0.21 RTS/CTS pair for hardware flow control and carries only relay
   frames.
 
+On the nRF54L15 DK, the assignments are:
+
+* **Command/control:** nRF UARTE30, interface-MCU Serial Port 0, pins P0.00
+  (TX) and P0.01 (RX).
+* **Binary relay:** nRF UARTE20, interface-MCU Serial Port 1, pins P1.04 (TX)
+  and P1.05 (RX), without RTS/CTS hardware flow control. The relay uses a
+  bounded asynchronous TX operation, so a stalled VCOM cannot block BLE
+  notification processing.
+
 COM numbers and some DK silkscreen labels are not reliable identifiers. Open
 both VCOMs, assert DTR, and send ``help`` followed by a newline to identify the
 command port; it replies with the command list. The relay port emits no text
 and carries only binary frames once a NUS notification is received. Keep the
 relay VCOM open through the complete transfer. The firmware cannot observe
-host DTR on these physical UARTEs; an unopened relay will eventually fill the
-bounded relay queue and invalidate the capture rather than silently succeeding.
+host DTR on these physical UARTEs. On the nRF5340, an unopened relay can hold
+CTS, eventually fill the bounded relay queue, and invalidate the capture. On
+the nRF54L15, flow control is intentionally disabled so an unopened relay
+cannot stall BLE; the host must keep its reader open to avoid losing relay data.
 
 RTT is diagnostic-only and never carries command or relay traffic. It reports
-``UART_INIT_OK`` after both VCOM UARTEs are ready. Verify the relevant UART
-interface solder bridges are closed (SB27--SB30 and SB50--SB53) before treating
-a VCOM problem as firmware related.
+``UART_INIT_OK`` after both VCOM UARTEs are ready. On the nRF5340 DK, verify
+the relevant UART interface solder bridges are closed (SB27--SB30 and
+SB50--SB53) before treating a VCOM problem as firmware related.
 
 Command protocol
 ----------------
@@ -153,8 +178,10 @@ All multibyte fields are little-endian:
      - variable
      - Exact raw NUS TX notification bytes
 
-There is no relay CRC. Relay RTS/CTS prevents the interface MCU UART from
-overrunning during bursts, and the enclosed NUS common header supplies a second
+There is no relay CRC. On the nRF5340, relay RTS/CTS prevents the interface-MCU
+UART from overrunning during bursts. On the nRF54L15, each relay frame uses a
+bounded asynchronous UART TX and a timeout abort prevents a stalled relay from
+starving BLE processing. The enclosed NUS common header supplies a second
 length/version check. For resynchronization,
 discard bytes until ``MRLY`` appears, then require version 1, type 1, a length
 at most 512 bytes, and a complete enclosed NUS message before accepting it.

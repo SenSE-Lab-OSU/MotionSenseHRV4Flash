@@ -35,6 +35,11 @@
 #define CONTROL_EVENT_BYTES 192U
 #define RELAY_MAX_NUS_BYTES 512U
 #define RELAY_HEADER_BYTES 12U
+#define RELAY_FRAME_BYTES (RELAY_HEADER_BYTES + RELAY_MAX_NUS_BYTES)
+#define RELAY_FRAME_COUNT 2U
+#define RELAY_TX_DRIVER_TIMEOUT_US 250000U
+#define RELAY_TX_COMPLETION_TIMEOUT_MS 300U
+#define RELAY_TX_ABORT_TIMEOUT_MS 50U
 /* Holds the complete 32 KiB history burst while the VCOM relay drains it. */
 #define RELAY_QUEUE_DEPTH 80U
 #define REQUIRED_ATT_MTU 128U
@@ -117,6 +122,16 @@ struct relay_message {
 	uint8_t data[RELAY_MAX_NUS_BYTES];
 };
 
+struct relay_frame {
+	uint8_t data[RELAY_FRAME_BYTES];
+};
+
+enum relay_tx_terminal {
+	RELAY_TX_PENDING,
+	RELAY_TX_DONE,
+	RELAY_TX_ABORTED,
+};
+
 struct stream_metadata {
 	uint32_t history_records;
 	uint32_t forward_records;
@@ -174,11 +189,27 @@ static size_t command_rx_length;
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command_line), 8, 4);
 K_MSGQ_DEFINE(control_event_queue, sizeof(struct control_event), 16, 4);
-K_MSGQ_DEFINE(relay_queue, sizeof(struct relay_message), RELAY_QUEUE_DEPTH, 4);
+/*
+ * NUS notifications run on the Bluetooth RX thread.  Keep the full relay
+ * message in this static slab rather than on that thread's limited stack.
+ * The queue carries pointers to slab blocks, so both enqueue operations can
+ * remain nonblocking.
+ */
+K_MEM_SLAB_DEFINE_STATIC(relay_message_slab, sizeof(struct relay_message),
+			 RELAY_QUEUE_DEPTH, 4);
+K_MSGQ_DEFINE(relay_queue, sizeof(struct relay_message *), RELAY_QUEUE_DEPTH, 4);
+K_SEM_DEFINE(relay_tx_complete, 0, 1);
+
+static struct relay_frame relay_frames[RELAY_FRAME_COUNT];
+static atomic_t relay_tx_active;
+static atomic_t relay_tx_bytes;
+static atomic_t relay_tx_terminal;
+static atomic_ptr_t relay_tx_buffer;
 
 static void start_scan(void);
 static void command_write_complete(struct bt_conn *conn, uint8_t err,
 				   struct bt_gatt_write_params *params);
+static void mark_protocol_failure(const char *reason);
 
 static const char *tester_state_name(enum tester_state state)
 {
@@ -285,19 +316,112 @@ static void post_event(const char *format, ...)
 	(void)k_msgq_put(&control_event_queue, &event, K_NO_WAIT);
 }
 
-static void relay_write_bytes(const uint8_t *data, size_t length)
+static void relay_uart_callback(const struct device *device, struct uart_event *event,
+				void *user_data)
 {
-	size_t index;
+	const uint8_t *active_buffer;
+	enum relay_tx_terminal terminal;
 
-	for (index = 0U; index < length; index++) {
-		uart_poll_out(relay_uart, data[index]);
+	ARG_UNUSED(device);
+	ARG_UNUSED(user_data);
+
+	switch (event->type) {
+	case UART_TX_DONE:
+		terminal = RELAY_TX_DONE;
+		break;
+	case UART_TX_ABORTED:
+		terminal = RELAY_TX_ABORTED;
+		break;
+	default:
+		return;
 	}
+
+	active_buffer = (const uint8_t *)atomic_ptr_get(&relay_tx_buffer);
+	/* Ignore stale terminal events from the previous frame buffer. */
+	if (event->data.tx.buf != active_buffer) {
+		return;
+	}
+	/* Only the relay thread initiates TX; ignore a duplicate terminal event. */
+	if (!atomic_cas(&relay_tx_active, 1, 0)) {
+		return;
+	}
+	atomic_set(&relay_tx_bytes, (atomic_val_t)event->data.tx.len);
+	atomic_set(&relay_tx_terminal, (atomic_val_t)terminal);
+	k_sem_give(&relay_tx_complete);
+}
+
+static enum relay_tx_terminal relay_wait_for_terminal(k_timeout_t timeout)
+{
+	if (k_sem_take(&relay_tx_complete, timeout) != 0) {
+		/* Catch a terminal event that raced the timeout. */
+		return (enum relay_tx_terminal)atomic_get(&relay_tx_terminal);
+	}
+
+	return (enum relay_tx_terminal)atomic_get(&relay_tx_terminal);
+}
+
+static bool relay_send_frame(struct relay_frame *frame, size_t frame_length,
+			     bool *terminal_missing)
+{
+	enum relay_tx_terminal terminal;
+	int err;
+
+	*terminal_missing = false;
+	k_sem_reset(&relay_tx_complete);
+	atomic_set(&relay_tx_bytes, 0);
+	atomic_set(&relay_tx_terminal, RELAY_TX_PENDING);
+	atomic_ptr_set(&relay_tx_buffer, frame->data);
+	atomic_set(&relay_tx_active, 1);
+	err = uart_tx(relay_uart, frame->data, frame_length, RELAY_TX_DRIVER_TIMEOUT_US);
+	if (err != 0) {
+		atomic_set(&relay_tx_active, 0);
+		post_event("ERROR relay TX start=%d; capture invalid", err);
+		return false;
+	}
+
+	terminal = relay_wait_for_terminal(K_MSEC(RELAY_TX_COMPLETION_TIMEOUT_MS));
+	if (terminal == RELAY_TX_DONE) {
+		if ((size_t)atomic_get(&relay_tx_bytes) == frame_length) {
+			return true;
+		}
+		post_event("ERROR relay TX short completion bytes=%u/%u; capture invalid",
+			   (uint32_t)atomic_get(&relay_tx_bytes), (uint32_t)frame_length);
+		return false;
+	}
+	if (terminal == RELAY_TX_ABORTED) {
+		post_event("ERROR relay TX aborted bytes=%u/%u; capture invalid",
+			   (uint32_t)atomic_get(&relay_tx_bytes), (uint32_t)frame_length);
+		return false;
+	}
+
+	post_event("ERROR relay TX timeout after %u ms; aborting",
+		   RELAY_TX_COMPLETION_TIMEOUT_MS);
+	err = uart_tx_abort(relay_uart);
+	terminal = relay_wait_for_terminal(K_MSEC(RELAY_TX_ABORT_TIMEOUT_MS));
+	if (terminal == RELAY_TX_DONE) {
+		post_event("ERROR relay TX completed after timeout (abort=%d); capture invalid", err);
+		return false;
+	}
+	if (terminal == RELAY_TX_ABORTED) {
+		post_event("ERROR relay TX aborted after timeout (abort=%d bytes=%u/%u); "
+			   "capture invalid", err, (uint32_t)atomic_get(&relay_tx_bytes),
+			   (uint32_t)frame_length);
+		return false;
+	}
+
+	/* Keep the static frame intact if the driver did not confirm it stopped. */
+	*terminal_missing = true;
+	post_event("ERROR relay TX no terminal event after abort=%d; relay stopped", err);
+	return false;
 }
 
 static void relay_thread(void *arg1, void *arg2, void *arg3)
 {
-	struct relay_message message;
-	uint8_t header[RELAY_HEADER_BYTES] = { 'M', 'R', 'L', 'Y', 1U, 1U };
+	struct relay_message *message;
+	struct relay_frame *frame;
+	bool terminal_missing;
+	size_t frame_length;
+	uint8_t frame_index = 0U;
 
 	ARG_UNUSED(arg1);
 	ARG_UNUSED(arg2);
@@ -307,10 +431,38 @@ static void relay_thread(void *arg1, void *arg2, void *arg3)
 		if (k_msgq_get(&relay_queue, &message, K_FOREVER) != 0) {
 			continue;
 		}
-		sys_put_le16(message.length, &header[6]);
-		sys_put_le32(message.sequence, &header[8]);
-		relay_write_bytes(header, sizeof(header));
-		relay_write_bytes(message.data, message.length);
+		if (message == NULL) {
+			post_event("ERROR relay null message; capture invalid");
+			mark_protocol_failure("relay null message");
+			continue;
+		}
+		if (message->length > RELAY_MAX_NUS_BYTES) {
+			post_event("ERROR relay frame too large: %u; capture invalid", message->length);
+			mark_protocol_failure("relay frame too large");
+			k_mem_slab_free(&relay_message_slab, (void *)message);
+			continue;
+		}
+
+		frame = &relay_frames[frame_index];
+		memcpy(frame->data, "MRLY", 4U);
+		frame->data[4] = 1U;
+		frame->data[5] = 1U;
+		sys_put_le16(message->length, &frame->data[6]);
+		sys_put_le32(message->sequence, &frame->data[8]);
+		memcpy(&frame->data[RELAY_HEADER_BYTES], message->data, message->length);
+		frame_length = RELAY_HEADER_BYTES + message->length;
+
+		/* The asynchronous UART owns only frame->data, not this slab block. */
+		k_mem_slab_free(&relay_message_slab, (void *)message);
+		message = NULL;
+		if (!relay_send_frame(frame, frame_length, &terminal_missing)) {
+			mark_protocol_failure("relay TX failed");
+			if (terminal_missing) {
+				/* The driver may still own frame->data, so never reuse either buffer. */
+				return;
+			}
+		}
+		frame_index = (frame_index + 1U) % ARRAY_SIZE(relay_frames);
 	}
 }
 
@@ -396,20 +548,33 @@ static void mark_protocol_failure(const char *reason)
 
 static bool relay_enqueue(const uint8_t *data, uint16_t length)
 {
-	struct relay_message message;
+	struct relay_message *message;
+	void *slab_block;
 	k_spinlock_key_t key;
+	int err;
 
-	if (length > sizeof(message.data)) {
+	if (length > RELAY_MAX_NUS_BYTES) {
 		post_event("ERROR relay notification too large: %u", length);
 		return false;
 	}
 
+	err = k_mem_slab_alloc(&relay_message_slab, &slab_block, K_NO_WAIT);
+	if (err != 0) {
+		key = k_spin_lock(&tester.lock);
+		tester.relay_dropped++;
+		k_spin_unlock(&tester.lock, key);
+		post_event("ERROR relay slab exhausted; capture invalid");
+		return false;
+	}
+	message = slab_block;
+
 	key = k_spin_lock(&tester.lock);
-	message.sequence = tester.relay_sequence++;
+	message->sequence = tester.relay_sequence++;
 	k_spin_unlock(&tester.lock, key);
-	message.length = length;
-	memcpy(message.data, data, length);
+	message->length = length;
+	memcpy(message->data, data, length);
 	if (k_msgq_put(&relay_queue, &message, K_NO_WAIT) != 0) {
+		k_mem_slab_free(&relay_message_slab, (void *)message);
 		key = k_spin_lock(&tester.lock);
 		tester.relay_dropped++;
 		k_spin_unlock(&tester.lock, key);
@@ -705,10 +870,11 @@ static uint8_t nus_notification(struct bt_conn *conn,
 	if (!notification_for_current_connection(conn)) {
 		return BT_GATT_ITER_CONTINUE;
 	}
+	/* Parse first so relay backpressure cannot hide a valid RESULT or END. */
+	handle_notification(data, length);
 	if (!relay_enqueue(data, length)) {
 		mark_protocol_failure("relay delivery failed");
 	}
-	handle_notification(data, length);
 
 	return BT_GATT_ITER_CONTINUE;
 }
@@ -1437,6 +1603,11 @@ static int uart_initialize(void)
 	err = uart_irq_callback_user_data_set(command_uart, command_uart_callback, NULL);
 	if (err != 0) {
 		printk("UART_INIT_ERROR command callback=%d\n", err);
+		return err;
+	}
+	err = uart_callback_set(relay_uart, relay_uart_callback, NULL);
+	if (err != 0) {
+		printk("UART_INIT_ERROR relay async callback=%d\n", err);
 		return err;
 	}
 	uart_irq_rx_enable(command_uart);

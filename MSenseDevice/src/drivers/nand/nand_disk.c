@@ -15,6 +15,7 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
+#include <zephyr/sys/crc.h>
 #include "bad_page.h"
 #include "spi_nand.h"
 #include "nand_disk.h"
@@ -35,11 +36,32 @@ enum sd_status {
 bool CheckDuplicateAccess = false;
 bool VerifyWrites = false;
 
+int duplicate_sector_writes = 0;
+int verify_fails = 0;
 
-const int file_table_sector_num = 180;
+int nor_fails = 0;
 
+#define FILE_TABLE_SECTOR_COUNT 180
+const int file_table_sector_num = FILE_TABLE_SECTOR_COUNT;
+
+/* CRC32 of the expected contents of each file table sector, updated on every write and
+ * seeded on the first read after boot. RAM only, so it cannot catch corruption that
+ * happened while powered off - it detects torn/failed NOR writes within a session. */
+static uint32_t file_table_crcs[FILE_TABLE_SECTOR_COUNT];
+static bool file_table_crc_valid[FILE_TABLE_SECTOR_COUNT];
+int file_table_crc_fails = 0;
+
+
+uint32_t update_counter = 0;
 
 bool read_only = false;
+
+/* Serializes all disk read/write access so only one thread drives the shared
+ * SPI bus (NOR file table + NAND data) at a time. Must be a mutex, not a plain
+ * semaphore: disk_nand_access_write re-enters disk_nand_access_read on the same
+ * thread (verify readback + duplicate-write check), and a recursive mutex allows
+ * that while still blocking other threads. A binary semaphore would deadlock. */
+K_MUTEX_DEFINE(disk_access_mutex);
 
 
 #define FILE_TABLE_NAND_PARTITION	slot0_partition
@@ -73,6 +95,8 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 			#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 			register_bad_sector(sector_num);
 			#endif
+			duplicate_sector_writes++;
+			//print_page_hex(check_buffer, 4096, false);
 			return -1;
 			
 		}
@@ -84,22 +108,24 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 #ifdef CONFIG_RAW_NAND_ALLOW_PAGE_REWRITE
 int duplicate_writes = 0;
 int duplicate_write_max = 50;
-char sector_buffer[64][4096];
+char sector_buffer[NAND_PAGES_PER_ERASE_BLOCK][4096];
 int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 	if (duplicate_writes < duplicate_write_max){
 	// Get the addresses for the starting page of the block and the page relative to the block number
-	int current_page_in_block = sector_num % 64;
-	int block_num = sector_num / 64;
+	int current_page_in_block = sector_num % NAND_PAGES_PER_ERASE_BLOCK;
+	int block_num = sector_num / NAND_PAGES_PER_ERASE_BLOCK;
 	int starting_page_number = sector_num - current_page_in_block;
 	// read in the block the page is located in to the buffer
-	disk_access_read(disk, sector_buffer, starting_page_number, 64);
+	disk_access_read(disk, sector_buffer, starting_page_number,
+			 NAND_PAGES_PER_ERASE_BLOCK);
 	spi_nand_block_erase(disk->dev, sector_num);
 
 	// modify the desired buffer with the updated page contents
 	memcpy(sector_buffer[current_page_in_block], buffer, 4096);
 
 	// fill the block back up with the buffer
-	for (int x = starting_page_number; x < starting_page_number + 64; x++){
+	for (int x = starting_page_number;
+	     x < starting_page_number + NAND_PAGES_PER_ERASE_BLOCK; x++){
 		spi_nand_page_write(disk->dev, x, sector_buffer[x], 4096);
 	}
 	duplicate_writes++;
@@ -112,40 +138,23 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	// the stored crcs no longer describe the (now blank) sectors
+	memset(file_table_crc_valid, 0, sizeof(file_table_crc_valid));
 	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
 }
 
 
 
-char nor_buffer[256];
-static int flash_nor_adjustment_write(const struct device* dev, off_t address, char* buf, size_t size){
-	int ret;
-	
-	int memory_corrections = 0;
-	int cmp;
-	off_t computed_address;
-	for (int nor_page = 0; nor_page <= 4096; nor_page += 256){
-		computed_address = address + nor_page;
-		ret = flash_read(dev, computed_address, nor_buffer, 256);
-		void* adjusted_buf = &buf[nor_page];
-		cmp = memcmp(adjusted_buf, nor_buffer, 256);
-
-		if (cmp != 0) {
-			ret = flash_erase(dev, computed_address, 256);
-			ret = flash_write(dev, computed_address, adjusted_buf, 256);
-		}
-	}
-}
 
 
 static int file_table_access(void* buf, int sector_num, bool write){
 	
 	int ret;
+	LOG_DBG("accessing file table, sect %d", sector_num);
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	struct flash_pages_info* page_info_ptr;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
 	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
-
 	//sector cannot be greater than the allocated file table segment size
 	if (sector_num > file_table_sector_num){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
@@ -153,12 +162,40 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	}
 
 	if (write){
+		// remember what this sector is supposed to contain so reads can be checked against it
+		file_table_crcs[sector_num] = crc32_ieee(buf, 4096);
+		file_table_crc_valid[sector_num] = true;
 
 		ret = flash_erase(soc_flash, address, 4096);
-		ret = flash_write(soc_flash, address, buf, 4096);	
+		if (ret != 0){
+			nor_fails++;
+			LOG_ERR("nor flash erase failure! tot %d", nor_fails);
+			
+		}
+		ret = flash_write(soc_flash, address, buf, 4096);
+		if (ret != 0){
+			nor_fails++;
+			LOG_ERR("nor flash write failure! tot: %d", nor_fails);
+		}
 	}
 	else {
 		ret = flash_read(soc_flash, address, buf, 4096);
+		if (ret == 0){
+			uint32_t crc = crc32_ieee(buf, 4096);
+			if (!file_table_crc_valid[sector_num]){
+				// first access since boot, seed with the current contents
+				file_table_crcs[sector_num] = crc;
+				file_table_crc_valid[sector_num] = true;
+			}
+			else if (crc != file_table_crcs[sector_num]){
+				file_table_crc_fails++;
+				LOG_ERR("file table sector %d crc mismatch, tot fails: %d", sector_num, file_table_crc_fails);
+			}
+		}
+		else{
+			nor_fails++;
+			LOG_ERR("nor failed to read! tot err: %d", nor_fails);
+		}
 	}
 	return ret;
 }
@@ -176,6 +213,10 @@ bool get_read_only(){
 	return read_only;
 }
 
+
+
+
+
 static int disk_nand_access_init(struct disk_info *disk)
 {
 	const struct device* dev = disk->dev;
@@ -184,6 +225,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 	if (sucess != 0){
 		LOG_WRN("disk_nand_init failed %d", sucess);
 	}
+	
 	
 	return 0;
 }
@@ -226,13 +268,19 @@ static int disk_nand_access_status(struct disk_info *disk)
 
 }
 
-static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
+int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
+	
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
-	const struct device *dev = disk->dev;	
+	const struct device *dev = disk->dev;
 
+	if ((update_counter % 500) == 0){
+		print_flash_status_info();
+	}
+	update_counter++;
 	off_t addr;
 	int ret = 0;
 
@@ -241,24 +289,28 @@ static int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		if (sector+x < file_table_sector_num)
 		{
 			ret = file_table_access(&buf[x*4096], sector+x, false);
-			continue;
 		}
-		ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
+		else {
+			ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
+		}
 	}
 	
 	//lol
 	if (ret != 0){
 		LOG_ERR("ret: %d", ret);
 	}
-	return ret; 
+	k_mutex_unlock(&disk_access_mutex);
+	return 0;
 }
 
 uint8_t read_back_buffer[4096];
 static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 								  uint32_t sector, uint32_t count)
 {
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
+	int result;
 	const char *name = k_thread_name_get(k_current_get());
-	LOG_DBG("thread: %s", name);
+	//LOG_DBG("thread: %s", name);
 	// count is the number of sectors that are being written
 	bool disabled_usb_write = (strcmp(name, "usb_mass") == 0) && !IS_ENABLED(CONFIG_USB_WRITABLE);
 	if (!read_only && !disabled_usb_write)
@@ -275,68 +327,69 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 
 		for (int x = 0; x < count; x++)
 		{
-			LOG_DBG("performing disk write at sector %i", sector + x);
-			if (sector + x < file_table_sector_num)
+			int sector_num = get_sector_offset(x + sector);
+			LOG_DBG("performing disk write at sector %i", sector_num);
+			if (sector_num < file_table_sector_num)
 			{
 
-				file_table_access(&buf[x * 4096], sector + x, true);
-				continue;
+				file_table_access(&buf[x * 4096], sector_num, true);
 			}
 			else
 			{
-				int sector_num = x + sector;
+				
 				if (CheckDuplicateAccess)
 				{
-					for (int y = 0; y < 1000; y++)
+					int error = check_duplicate_sector_write(disk, sector_num);
+					if (error == -1)
 					{
-						sector_num = get_sector_offset(x + sector);
-
-						int error = check_duplicate_sector_write(disk, sector_num);
-						if (error == -1)
-						{
-							continue;
-						}
-						break;
+						continue;
 					}
+					
 				}
 
 				addr = convert_page_to_address(dev, sector_num);
 				ret = spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
 				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
-
-				if (VerifyWrites)
+			}
+			if (VerifyWrites)
+			{
+				//ret = spi_nand_page_read(dev, addr, read_back_buffer);
+				disk_nand_access_read(disk, read_back_buffer, sector_num, 1);
+				int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
+				if (equal != 0)
 				{
-					ret = spi_nand_page_read(dev, addr, read_back_buffer);
-					int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
-					if (!equal)
-					{
-						LOG_WRN("sect %d yield bad readback", sector_num);
-#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-						register_bad_sector(sector_num);
-#endif
-					}
+					verify_fails++;
+					LOG_ERR("sect %d yield bad readback (%d), tot fails: %d", sector_num, equal, verify_fails);
+					#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+					register_bad_sector(sector_num);
+					#endif
 				}
 			}
+			
 		}
 		if (ret != 0)
 		{
 			LOG_ERR("ret %d", ret);
 		}
-		return ret;
+		result = ret;
 	}
 	else{
-	LOG_INF("fs wr req sect %lu num %lu, but dev read only", sector, count);
-	// we fake that we wrote so the the USB mass system does not complain.
-	if (disabled_usb_write){
-		return 0;
+	LOG_DBG("fs wr req sect %lu num %lu, but dev read only", sector, count);
+	
+	result = disabled_usb_write ? -2 : -1;
 	}
-	return -1;
-	}
+	k_mutex_unlock(&disk_access_mutex);
+	return result;
 }
+
+void print_flash_status_info(){
+	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d, tot file table crc fails %d, tot nor fails %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err, file_table_crc_fails, nor_fails);
+}
+
 
 static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf)
 {
-	LOG_INF("Ac ioctl with cmd %d", cmd);
+	LOG_DBG("Ac ioctl with cmd %d", cmd);
 	const struct device *dev = disk->dev;
 
     switch (cmd) {
@@ -350,7 +403,7 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 		(*(uint32_t *)buf) = dev_page_size(dev); 
 		break;
 	case DISK_IOCTL_GET_ERASE_BLOCK_SZ:
-		(*(uint32_t *)buf) = dev_page_size(dev)*64;
+		(*(uint32_t *)buf) = NAND_PAGES_PER_ERASE_BLOCK;
 		break;
 	case DISK_IOCTL_CTRL_SYNC:
 		/* Ensure card is not busy with data write.

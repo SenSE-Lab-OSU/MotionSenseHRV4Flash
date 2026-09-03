@@ -116,6 +116,12 @@ static int data_counter;
 static bool first_write = false;
 static struct fs_file_t file;
 static int close_all_files(void);
+static int64_t file_system_timer;
+
+static void filesystem_latch_fault(void)
+{
+	ppg_collection_latch_storage_fault();
+}
 
 
 
@@ -126,7 +132,7 @@ typedef struct MotionSenseFile {
 	uint64_t start_time;
 	bool first_sample_init;
 	const char sensor_string[5];
-	char file_name[50];
+	char file_name[96];
 	const char sensor_format[90];
 	struct fs_file_t self_file;
 	bool switch_buffer;
@@ -239,10 +245,11 @@ int create_test_file(int writes)
 		return -ENAMETOOLONG;
 	}
 
-	strcat(destination, mp->mnt_point);
-	strcat(destination, "/");
-	strcat(destination, id_string);
-	strcat(destination, "testing.txt");
+	ret = snprintf(destination, sizeof(destination), "%s/%stesting.txt",
+			       mp->mnt_point, id_string);
+	if (ret < 0 || ret >= (int)sizeof(destination)) {
+		return -ENAMETOOLONG;
+	}
 	ret = fs_open(&test_file, destination, FS_O_CREATE | FS_O_WRITE);
 	if (ret != 0) {
 		return ret;
@@ -427,7 +434,7 @@ int shutdown_filesystem(void)
 
 void reset_log_file(){
 	LOG_ERR("Direct log-file reset is disabled outside the PPG storage owner");
-	ppg_collection_latch_storage_fault();
+	filesystem_latch_fault();
 }
 
 static int sensor_write_failure(enum sensor_type sensor, const char *operation,
@@ -480,9 +487,8 @@ static int sensor_write_to_file(const void* data, size_t size, enum sensor_type 
 		
 		
 		uint64_t ID = 0;
-		// max itoa can do is 33 with binary, but theoretically it will be < 9
-		char IDString[33];
-		char patient_id[33];
+		const char *extension;
+		int written;
 		if (use_random_files){
 			
 		
@@ -501,24 +507,21 @@ static int sensor_write_to_file(const void* data, size_t size, enum sensor_type 
 			}
 
 		}
-		sprintf(IDString, "%llu", ID);
-		//itoa(ID, IDString,  10);
-		
-
-		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
-		strcat(MSenseFile->file_name, mp->mnt_point);
-		strcat(MSenseFile->file_name, "/");
-		if (patient_num != 0){
-			itoa(patient_num, patient_id, 10);
-			strcat(MSenseFile->file_name, patient_id);	
+		extension = (sensor == customlog) ? ".txt" : ".bin";
+		if (patient_num != 0) {
+			written = snprintf(MSenseFile->file_name,
+					   sizeof(MSenseFile->file_name), "%s/%d%s%llu%s",
+					   mp->mnt_point, patient_num, MSenseFile->sensor_string,
+					   (unsigned long long)ID, extension);
+		} else {
+			written = snprintf(MSenseFile->file_name,
+					   sizeof(MSenseFile->file_name), "%s/%s%llu%s",
+					   mp->mnt_point, MSenseFile->sensor_string,
+					   (unsigned long long)ID, extension);
 		}
-		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
-		strcat(MSenseFile->file_name, IDString);
-		if (sensor != customlog){
-			strcat(MSenseFile->file_name, ".bin");
-		}
-		else {
-			strcat(MSenseFile->file_name, ".txt");
+		if (written < 0 || written >= (int)sizeof(MSenseFile->file_name)) {
+			return sensor_write_failure(sensor, "File name construction",
+						    -ENAMETOOLONG);
 		}
 		
 		// Now that we created the file name, open it and write the data
@@ -594,12 +597,10 @@ int write_to_file(const void* data, size_t size)
 	ARG_UNUSED(data);
 	ARG_UNUSED(size);
 	LOG_ERR("Direct filesystem writes are disabled outside the PPG storage owner");
-	ppg_collection_latch_storage_fault();
+	filesystem_latch_fault();
 	return -ENOTSUP;
 }
 
-
-int64_t file_system_timer;
 
 void work_write(struct k_work* item){
 	
@@ -643,7 +644,7 @@ void work_write(struct k_work* item){
 	if (write_ret != 0) {
 		LOG_ERR("Filesystem write failed for sensor %d: %d", container->sensor,
 			write_ret);
-		ppg_collection_latch_storage_fault();
+		filesystem_latch_fault();
 	}
 
 }
@@ -715,7 +716,7 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else{
 		LOG_WRN("sensor type unknown");
-		ppg_collection_latch_storage_fault();
+		filesystem_latch_fault();
 		return -EINVAL;
 	}
 
@@ -727,13 +728,13 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	if (current_buffer->current_size >= MSenseFile->write_size) {
 		LOG_ERR("Completed buffer for %d is still awaiting ownership", sensor);
-		ppg_collection_latch_storage_fault();
+		filesystem_latch_fault();
 		return -EBUSY;
 	}
 	if (size > sizeof(current_buffer->data_upload_buffer) -
 		    current_buffer->current_size) {
 		LOG_ERR("Buffer capacity exceeded for %d", sensor);
-		ppg_collection_latch_storage_fault();
+		filesystem_latch_fault();
 		return -ENOSPC;
 	}
 
@@ -753,14 +754,14 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 		}
 		if (panic_single_thread) {
 			LOG_ERR("Cannot verify a direct buffer write during panic mode");
-			ppg_collection_latch_storage_fault();
+			filesystem_latch_fault();
 			return -ENOTSUP;
 		}
 		ret = submit_write(current_buffer->data_upload_buffer,
 					   current_buffer->current_size, sensor);
 		if (ret != 0) {
 			LOG_ERR("Unable to submit completed buffer for %d: %d", sensor, ret);
-			ppg_collection_latch_storage_fault();
+			filesystem_latch_fault();
 			return ret;
 		}
 		if ((MSenseFile->current_writes + 1) >= max_writes){
@@ -1234,7 +1235,7 @@ DWORD get_fattime(void)
 
 int64_t start_time;
 
-void start_timer(int64_t* start_time_ref){
+void start_timer(int64_t *start_time_ref){
 	if (start_time_ref != NULL){
 		if (*start_time_ref != 0){
 			LOG_WRN("timer was executed again before it could finish!");
@@ -1247,7 +1248,7 @@ void start_timer(int64_t* start_time_ref){
 }
 
 
-int64_t stop_timer(int64_t* start_time_ref){
+int64_t stop_timer(int64_t *start_time_ref){
 	int64_t length;
 	if (start_time_ref != NULL){
 		length = k_uptime_get() - *start_time_ref;

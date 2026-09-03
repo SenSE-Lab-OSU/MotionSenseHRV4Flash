@@ -364,7 +364,7 @@ void enmo_threshold_evaluation(float enmo_number)
       }
       */
 
-      uint64_t current_time = get_current_unix_time_ms();
+      uint64_t current_time = get_current_unix_time();
       memcpy(&enmo_threshold_packet[1], &current_time, sizeof(current_time));
       enmoThreshold.dataPacket = &currentAccData.ENMO;
       enmoThreshold.packetLength = sizeof(currentAccData.ENMO);

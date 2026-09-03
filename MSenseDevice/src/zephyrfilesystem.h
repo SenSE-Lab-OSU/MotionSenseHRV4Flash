@@ -62,9 +62,6 @@ void work_write(struct k_work* item);
 
 uint64_t get_current_unix_time();
 
-uint64_t get_current_unix_time_ms();
-
-/* Accepts Unix time in milliseconds. */
 void set_date_time_bt(uint64_t value);
 
 void start_timer(int64_t* start_time_ref);

@@ -1277,9 +1277,16 @@ int read_storage_percent_full(){
 	return storage_percent_full;
 }
 
+#define FAT_UNIX_TIME_MIN_SECONDS 315532800ULL
+#define FAT_UNIX_TIME_MAX_SECONDS 4354819199ULL
 
 void set_date_time_bt(uint64_t value){
-	
+	if (value < FAT_UNIX_TIME_MIN_SECONDS ||
+	    value > FAT_UNIX_TIME_MAX_SECONDS) {
+		LOG_WRN("rejected invalid Unix time in seconds: %llu", value);
+		return;
+	}
+
 	set_date_time = value;
 	last_time_update_sent = k_uptime_get() / 1000;
 	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);

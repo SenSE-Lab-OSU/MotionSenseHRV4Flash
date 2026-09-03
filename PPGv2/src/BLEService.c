@@ -5,6 +5,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
 #include <errno.h>
 #include "custom_qspi.h"
 
@@ -1119,7 +1120,7 @@ uint16_t offset, uint8_t flags){
 
   }
 
-  uint64_t val = *((uint64_t *)buff);
+  uint64_t val = sys_get_le64(buff);
   LOG_INF("writing: %llu", val);
   set_date_time_bt(val);
   return len;

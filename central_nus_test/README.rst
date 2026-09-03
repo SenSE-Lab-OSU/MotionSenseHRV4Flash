@@ -144,6 +144,30 @@ Useful command-port results include:
 ``HISTORY_NOT_READY``. ``STREAM_END`` means the accepted session did not pass
 the success checks. ``PROTOCOL_ERROR`` and any relay error invalidate the test.
 
+Throughput diagnostics
+----------------------
+
+The tester reports the negotiated link state as ``BLE_LINK`` after connection
+setup and whenever the controller reports a connection-parameter, PHY, or data
+length update. Its ``tx_*`` fields describe Central-to-peripheral transport;
+the stream direction is represented by the ``rx_*`` fields. ``interval_ms_x100``
+is the interval in hundredths of a millisecond, avoiding floating-point output.
+
+Each END message is preceded by a summary such as:
+
+.. code-block:: text
+
+   THROUGHPUT id=1 elapsed_ms=10433 data_notifs=212 raw_nus_bytes=103368 sensor_bytes=98304 mean_notif_bytes=487 notif_s=20.3 raw_kib_s=9.6 sensor_kib_s=9.2 max_gap_ms=61
+
+``raw_nus_bytes`` is the complete received DATA notification, including the
+MotionSense common and DATA headers but excluding ATT and relay framing.
+``sensor_bytes`` contains only sensor records. The elapsed period spans the
+first through last valid DATA notification. Rates are shown as decimal values
+without floating-point support, and ``max_gap_ms`` is the largest callback-to-
+callback gap. A ``status`` command additionally prints ``THROUGHPUT_LIVE``
+using the current time while a stream is active, followed by the most recently
+reported ``BLE_LINK`` values.
+
 Binary relay framing
 --------------------
 

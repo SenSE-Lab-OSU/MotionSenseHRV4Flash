@@ -32,7 +32,7 @@
 #include "msense_sensor_stream_protocol.h"
 
 #define COMMAND_LINE_BYTES 96U
-#define CONTROL_EVENT_BYTES 192U
+#define CONTROL_EVENT_BYTES 256U
 #define RELAY_MAX_NUS_BYTES 512U
 #define RELAY_HEADER_BYTES 12U
 #define RELAY_FRAME_BYTES (RELAY_HEADER_BYTES + RELAY_MAX_NUS_BYTES)
@@ -152,10 +152,43 @@ struct stream_metadata {
 	char git_commit[41];
 };
 
+struct stream_statistics {
+	int64_t first_data_ms;
+	int64_t last_data_ms;
+	uint32_t raw_nus_bytes;
+	uint32_t sensor_bytes;
+	uint32_t data_notifications;
+	uint32_t max_gap_ms;
+	bool has_data;
+};
+
+struct ble_link_info {
+	uint32_t interval_ms_x100;
+	uint32_t timeout_ms;
+	uint16_t interval_units;
+	uint16_t latency;
+	uint16_t tx_max_len;
+	uint16_t tx_max_time;
+	uint16_t rx_max_len;
+	uint16_t rx_max_time;
+	uint8_t tx_phy;
+	uint8_t rx_phy;
+};
+
+struct throughput_values {
+	uint32_t elapsed_ms;
+	uint32_t mean_notification_bytes;
+	uint32_t notifications_per_second_x10;
+	uint32_t raw_kib_per_second_x10;
+	uint32_t sensor_kib_per_second_x10;
+};
+
 struct tester_context {
 	struct k_spinlock lock;
 	struct bt_conn *conn;
 	struct stream_metadata metadata;
+	struct stream_statistics statistics;
+	struct ble_link_info link;
 	enum tester_state state;
 	enum scan_target scan_target;
 	uint32_t next_session_id;
@@ -495,6 +528,188 @@ static bool all_zero(const uint8_t *data, size_t length)
 	return true;
 }
 
+static uint32_t elapsed_ms_between(int64_t start_ms, int64_t end_ms)
+{
+	int64_t elapsed_ms;
+
+	if (end_ms <= start_ms) {
+		return 0U;
+	}
+	elapsed_ms = end_ms - start_ms;
+	if ((uint64_t)elapsed_ms > UINT32_MAX) {
+		return UINT32_MAX;
+	}
+
+	return (uint32_t)elapsed_ms;
+}
+
+static uint32_t rate_per_second_x10(uint32_t value, uint32_t elapsed_ms)
+{
+	if (elapsed_ms == 0U) {
+		return 0U;
+	}
+
+	return (uint32_t)((uint64_t)value * 10000U / elapsed_ms);
+}
+
+static uint32_t kib_per_second_x10(uint32_t bytes, uint32_t elapsed_ms)
+{
+	if (elapsed_ms == 0U) {
+		return 0U;
+	}
+
+	return (uint32_t)((uint64_t)bytes * 10000U / (1024U * elapsed_ms));
+}
+
+static void stream_statistics_record_data(struct stream_statistics *statistics,
+					  uint16_t raw_nus_length, uint32_t sensor_bytes,
+					  int64_t received_ms)
+{
+	uint32_t gap_ms;
+
+	if (statistics->has_data) {
+		gap_ms = elapsed_ms_between(statistics->last_data_ms, received_ms);
+		if (gap_ms > statistics->max_gap_ms) {
+			statistics->max_gap_ms = gap_ms;
+		}
+	} else {
+		statistics->first_data_ms = received_ms;
+		statistics->has_data = true;
+	}
+
+	statistics->last_data_ms = received_ms;
+	statistics->raw_nus_bytes += raw_nus_length;
+	statistics->sensor_bytes += sensor_bytes;
+	statistics->data_notifications++;
+}
+
+static struct throughput_values stream_throughput_values(
+	const struct stream_statistics *statistics, int64_t end_ms)
+{
+	struct throughput_values values;
+
+	memset(&values, 0, sizeof(values));
+	if (!statistics->has_data) {
+		return values;
+	}
+
+	values.elapsed_ms = elapsed_ms_between(statistics->first_data_ms, end_ms);
+	values.mean_notification_bytes =
+		statistics->raw_nus_bytes / statistics->data_notifications;
+	values.notifications_per_second_x10 =
+		rate_per_second_x10(statistics->data_notifications, values.elapsed_ms);
+	values.raw_kib_per_second_x10 =
+		kib_per_second_x10(statistics->raw_nus_bytes, values.elapsed_ms);
+	values.sensor_kib_per_second_x10 =
+		kib_per_second_x10(statistics->sensor_bytes, values.elapsed_ms);
+
+	return values;
+}
+
+static void post_throughput_summary(uint32_t session_id,
+				    const struct stream_statistics *statistics)
+{
+	struct throughput_values values =
+		stream_throughput_values(statistics, statistics->last_data_ms);
+
+	post_event("THROUGHPUT id=%u elapsed_ms=%u data_notifs=%u raw_nus_bytes=%u "
+		   "sensor_bytes=%u mean_notif_bytes=%u notif_s=%u.%u raw_kib_s=%u.%u "
+		   "sensor_kib_s=%u.%u max_gap_ms=%u",
+		   session_id, values.elapsed_ms, statistics->data_notifications,
+		   statistics->raw_nus_bytes, statistics->sensor_bytes,
+		   values.mean_notification_bytes, values.notifications_per_second_x10 / 10U,
+		   values.notifications_per_second_x10 % 10U, values.raw_kib_per_second_x10 / 10U,
+		   values.raw_kib_per_second_x10 % 10U, values.sensor_kib_per_second_x10 / 10U,
+		   values.sensor_kib_per_second_x10 % 10U, statistics->max_gap_ms);
+}
+
+static void print_live_throughput(uint32_t session_id,
+				  const struct stream_statistics *statistics, int64_t end_ms)
+{
+	struct throughput_values values = stream_throughput_values(statistics, end_ms);
+
+	command_printf("THROUGHPUT_LIVE id=%u elapsed_ms=%u data_notifs=%u raw_nus_bytes=%u "
+		       "sensor_bytes=%u mean_notif_bytes=%u notif_s=%u.%u raw_kib_s=%u.%u "
+		       "sensor_kib_s=%u.%u max_gap_ms=%u",
+		       session_id, values.elapsed_ms, statistics->data_notifications,
+		       statistics->raw_nus_bytes, statistics->sensor_bytes,
+		       values.mean_notification_bytes, values.notifications_per_second_x10 / 10U,
+		       values.notifications_per_second_x10 % 10U,
+		       values.raw_kib_per_second_x10 / 10U,
+		       values.raw_kib_per_second_x10 % 10U,
+		       values.sensor_kib_per_second_x10 / 10U,
+		       values.sensor_kib_per_second_x10 % 10U, statistics->max_gap_ms);
+}
+
+static void update_link_info_from_connection(struct bt_conn *conn)
+{
+	struct bt_conn_info info;
+	k_spinlock_key_t key;
+
+	if (bt_conn_get_info(conn, &info) != 0 || info.type != BT_CONN_TYPE_LE) {
+		return;
+	}
+
+	key = k_spin_lock(&tester.lock);
+	if (tester.conn == conn) {
+		tester.link.interval_units = info.le.interval;
+		tester.link.interval_ms_x100 = (uint32_t)info.le.interval * 125U;
+		tester.link.latency = info.le.latency;
+		tester.link.timeout_ms = (uint32_t)info.le.timeout * 10U;
+#if defined(CONFIG_BT_USER_PHY_UPDATE)
+		if (info.le.phy != NULL) {
+			tester.link.tx_phy = info.le.phy->tx_phy;
+			tester.link.rx_phy = info.le.phy->rx_phy;
+		}
+#endif
+#if defined(CONFIG_BT_USER_DATA_LEN_UPDATE)
+		if (info.le.data_len != NULL) {
+			tester.link.tx_max_len = info.le.data_len->tx_max_len;
+			tester.link.tx_max_time = info.le.data_len->tx_max_time;
+			tester.link.rx_max_len = info.le.data_len->rx_max_len;
+			tester.link.rx_max_time = info.le.data_len->rx_max_time;
+		}
+#endif
+	}
+	k_spin_unlock(&tester.lock, key);
+}
+
+static void post_ble_link(struct bt_conn *conn)
+{
+	struct ble_link_info link;
+	uint16_t mtu;
+	bool current = false;
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&tester.lock);
+	if (tester.conn == conn) {
+		link = tester.link;
+		mtu = tester.att_mtu;
+		current = true;
+	}
+	k_spin_unlock(&tester.lock, key);
+	if (!current) {
+		return;
+	}
+
+	post_event("BLE_LINK mtu=%u interval_units=%u interval_ms_x100=%u latency=%u "
+		   "timeout_ms=%u tx_phy=%u rx_phy=%u tx_octets=%u rx_octets=%u "
+		   "tx_time_us=%u rx_time_us=%u",
+		   mtu, link.interval_units, link.interval_ms_x100, link.latency,
+		   link.timeout_ms, link.tx_phy, link.rx_phy, link.tx_max_len,
+		   link.rx_max_len, link.tx_max_time, link.rx_max_time);
+}
+
+static void print_ble_link(const struct ble_link_info *link, uint16_t mtu)
+{
+	command_printf("BLE_LINK mtu=%u interval_units=%u interval_ms_x100=%u latency=%u "
+		       "timeout_ms=%u tx_phy=%u rx_phy=%u tx_octets=%u rx_octets=%u "
+		       "tx_time_us=%u rx_time_us=%u",
+		       mtu, link->interval_units, link->interval_ms_x100, link->latency,
+		       link->timeout_ms, link->tx_phy, link->rx_phy, link->tx_max_len,
+		       link->rx_max_len, link->tx_max_time, link->rx_max_time);
+}
+
 static bool geometry_is_valid(const struct stream_metadata *metadata)
 {
 	if (metadata->total_sensor_bytes != MSENSE_SENSOR_STREAM_SENSOR_BYTES ||
@@ -655,11 +870,13 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 		   metadata.history_records, metadata.forward_records, mtu);
 }
 
-static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t length)
+static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t length,
+			uint16_t raw_nus_length, int64_t received_ms)
 {
 	uint32_t sequence;
 	uint32_t first_record;
 	uint32_t expected_end;
+	uint32_t sensor_bytes;
 	uint16_t record_count;
 	uint16_t expected_length;
 	uint8_t phase;
@@ -705,8 +922,10 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 
 	tester.metadata.expected_sequence++;
 	tester.metadata.expected_record_index = expected_end;
-	tester.metadata.received_sensor_bytes += record_count * tester.metadata.record_size;
+	sensor_bytes = (uint32_t)record_count * tester.metadata.record_size;
+	tester.metadata.received_sensor_bytes += sensor_bytes;
 	tester.metadata.received_data_messages++;
+	stream_statistics_record_data(&tester.statistics, raw_nus_length, sensor_bytes, received_ms);
 	k_spin_unlock(&tester.lock, key);
 }
 
@@ -760,6 +979,7 @@ static void handle_result(uint32_t session_id, const uint8_t *payload, uint16_t 
 
 static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t length)
 {
+	struct stream_statistics statistics;
 	uint16_t status;
 	uint8_t peripheral_state;
 	uint32_t history_sent;
@@ -803,8 +1023,10 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 		  tester.metadata.expected_record_index ==
 			  tester.metadata.history_records + tester.metadata.forward_records;
 	tester.state = success ? TESTER_COMPLETE : TESTER_FAILED;
+	statistics = tester.statistics;
 	k_spin_unlock(&tester.lock, key);
 
+	post_throughput_summary(session_id, &statistics);
 	if (success) {
 		post_event("STREAM_OK id=%u bytes=%u data_messages=%u", session_id, sensor_bytes,
 			   data_messages);
@@ -815,7 +1037,7 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 	}
 }
 
-static void handle_notification(const uint8_t *data, uint16_t length)
+static void handle_notification(const uint8_t *data, uint16_t length, int64_t received_ms)
 {
 	uint16_t payload_length;
 	uint16_t flags;
@@ -843,7 +1065,8 @@ static void handle_notification(const uint8_t *data, uint16_t length)
 		handle_start_ack(session_id, &data[NUS_PAYLOAD_OFFSET], payload_length);
 		break;
 	case MSENSE_SENSOR_STREAM_MESSAGE_DATA:
-		handle_data(session_id, &data[NUS_PAYLOAD_OFFSET], payload_length);
+		handle_data(session_id, &data[NUS_PAYLOAD_OFFSET], payload_length, length,
+			    received_ms);
 		break;
 	case MSENSE_SENSOR_STREAM_MESSAGE_END:
 		handle_end(session_id, &data[NUS_PAYLOAD_OFFSET], payload_length);
@@ -861,6 +1084,8 @@ static uint8_t nus_notification(struct bt_conn *conn,
 				struct bt_gatt_subscribe_params *params,
 				const void *data, uint16_t length)
 {
+	int64_t received_ms = k_uptime_get();
+
 	ARG_UNUSED(params);
 	if (data == NULL) {
 		mark_protocol_failure("NUS subscription removed");
@@ -871,7 +1096,7 @@ static uint8_t nus_notification(struct bt_conn *conn,
 		return BT_GATT_ITER_CONTINUE;
 	}
 	/* Parse first so relay backpressure cannot hide a valid RESULT or END. */
-	handle_notification(data, length);
+	handle_notification(data, length, received_ms);
 	if (!relay_enqueue(data, length)) {
 		mark_protocol_failure("relay delivery failed");
 	}
@@ -1031,6 +1256,8 @@ static void mtu_exchange_complete(struct bt_conn *conn, uint8_t err,
 	}
 
 	post_event("ATT_MTU %u", mtu);
+	update_link_info_from_connection(conn);
+	post_ble_link(conn);
 	start_nus_discovery(conn);
 }
 
@@ -1050,6 +1277,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 		key = k_spin_lock(&tester.lock);
 		held_conn = tester.conn;
 		tester.conn = NULL;
+		memset(&tester.link, 0, sizeof(tester.link));
+		tester.att_mtu = 0U;
 		tester.state = TESTER_IDLE;
 		k_spin_unlock(&tester.lock, key);
 		if (held_conn != NULL) {
@@ -1063,6 +1292,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	tester.state = TESTER_MTU_EXCHANGE;
 	k_spin_unlock(&tester.lock, key);
 	post_event("CONNECTED %s", address);
+	update_link_info_from_connection(conn);
+	post_ble_link(conn);
 
 	memset(&exchange_params, 0, sizeof(exchange_params));
 	exchange_params.func = mtu_exchange_complete;
@@ -1090,6 +1321,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		tester.subscribed = false;
 		tester.write_pending = false;
 		tester.att_mtu = 0U;
+		memset(&tester.link, 0, sizeof(tester.link));
 		tester.state = TESTER_IDLE;
 		nus_client.conn = NULL;
 	}
@@ -1102,9 +1334,70 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 }
 
+static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency,
+			     uint16_t timeout)
+{
+	k_spinlock_key_t key;
+
+	if (!notification_for_current_connection(conn)) {
+		return;
+	}
+
+	key = k_spin_lock(&tester.lock);
+	tester.link.interval_units = interval;
+	tester.link.interval_ms_x100 = (uint32_t)interval * 125U;
+	tester.link.latency = latency;
+	tester.link.timeout_ms = (uint32_t)timeout * 10U;
+	k_spin_unlock(&tester.lock, key);
+	post_ble_link(conn);
+}
+
+#if defined(CONFIG_BT_USER_PHY_UPDATE)
+static void le_phy_updated(struct bt_conn *conn, struct bt_conn_le_phy_info *info)
+{
+	k_spinlock_key_t key;
+
+	if (!notification_for_current_connection(conn)) {
+		return;
+	}
+
+	key = k_spin_lock(&tester.lock);
+	tester.link.tx_phy = info->tx_phy;
+	tester.link.rx_phy = info->rx_phy;
+	k_spin_unlock(&tester.lock, key);
+	post_ble_link(conn);
+}
+#endif
+
+#if defined(CONFIG_BT_USER_DATA_LEN_UPDATE)
+static void le_data_len_updated(struct bt_conn *conn, struct bt_conn_le_data_len_info *info)
+{
+	k_spinlock_key_t key;
+
+	if (!notification_for_current_connection(conn)) {
+		return;
+	}
+
+	key = k_spin_lock(&tester.lock);
+	tester.link.tx_max_len = info->tx_max_len;
+	tester.link.tx_max_time = info->tx_max_time;
+	tester.link.rx_max_len = info->rx_max_len;
+	tester.link.rx_max_time = info->rx_max_time;
+	k_spin_unlock(&tester.lock, key);
+	post_ble_link(conn);
+}
+#endif
+
 BT_CONN_CB_DEFINE(connection_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
+	.le_param_updated = le_param_updated,
+#if defined(CONFIG_BT_USER_PHY_UPDATE)
+	.le_phy_updated = le_phy_updated,
+#endif
+#if defined(CONFIG_BT_USER_DATA_LEN_UPDATE)
+	.le_data_len_updated = le_data_len_updated,
+#endif
 };
 
 struct advertisement_name {
@@ -1206,6 +1499,8 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 
 	key = k_spin_lock(&tester.lock);
 	tester.conn = connection;
+	tester.att_mtu = 0U;
+	memset(&tester.link, 0, sizeof(tester.link));
 	k_spin_unlock(&tester.lock, key);
 	post_event("CONNECTING name=%s address=%s", name.value, address_text);
 }
@@ -1387,6 +1682,7 @@ static void begin_start(uint32_t requested_session_id, bool has_requested_id)
 		return;
 	}
 	memset(&tester.metadata, 0, sizeof(tester.metadata));
+	memset(&tester.statistics, 0, sizeof(tester.statistics));
 	tester.metadata.session_id = session_id;
 	tester.state = TESTER_START_PENDING;
 	k_spin_unlock(&tester.lock, key);
@@ -1432,7 +1728,10 @@ static void begin_cancel(uint32_t requested_session_id, bool has_requested_id)
 static void print_status(void)
 {
 	struct stream_metadata metadata;
+	struct stream_statistics statistics;
+	struct ble_link_info link;
 	enum tester_state state;
+	int64_t throughput_end_ms;
 	uint16_t mtu;
 	uint32_t relay_dropped;
 	bool subscribed;
@@ -1443,12 +1742,17 @@ static void print_status(void)
 	subscribed = tester.subscribed;
 	relay_dropped = tester.relay_dropped;
 	metadata = tester.metadata;
+	statistics = tester.statistics;
+	link = tester.link;
 	k_spin_unlock(&tester.lock, key);
 
 	command_printf("STATUS state=%s subscribed=%u mtu=%u id=%u bytes=%u data=%u "
 		       "record_index=%u relay_dropped=%u", tester_state_name(state), subscribed, mtu,
 		       metadata.session_id, metadata.received_sensor_bytes,
 		       metadata.received_data_messages, metadata.expected_record_index, relay_dropped);
+	throughput_end_ms = state == TESTER_RECEIVING ? k_uptime_get() : statistics.last_data_ms;
+	print_live_throughput(metadata.session_id, &statistics, throughput_end_ms);
+	print_ble_link(&link, mtu);
 }
 
 static void show_help(void)

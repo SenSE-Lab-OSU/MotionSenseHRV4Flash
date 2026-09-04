@@ -1633,10 +1633,9 @@ static void report_peer_ready(bool smp_ready)
 		tester.peer_ready_reported = true;
 		report = true;
 	}
-	if (smp_ready || nus_ready) {
-		tester.state = TESTER_READY;
-	} else {
-		tester.state = TESTER_FAILED;
+	if (tester.state == TESTER_MTU_EXCHANGE || tester.state == TESTER_DISCOVERING ||
+	    tester.state == TESTER_SUBSCRIBING) {
+		tester.state = (smp_ready || nus_ready) ? TESTER_READY : TESTER_FAILED;
 	}
 	k_spin_unlock(&tester.lock, key);
 

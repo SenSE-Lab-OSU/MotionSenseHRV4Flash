@@ -31,6 +31,7 @@
 #define MSENSE_DFU_SMP_TIMEOUT_MS 15000U
 #define MSENSE_DFU_HOST_FRAME_TIMEOUT_MS 30000U
 #define MSENSE_DFU_RECONNECT_TIMEOUT_MS 30000U
+#define MSENSE_DFU_POST_RESET_RECONNECT_TIMEOUT_MS 60000U
 /* SMP header plus the largest first-upload CBOR map without its image data:
  * map/image/data/off/len/sha, including max-width offset/length encodings. */
 #define MSENSE_DFU_SMP_OVERHEAD_BYTES 80U
@@ -800,10 +801,10 @@ static bool wait_for_reset_reconnect(uint32_t previous_disconnect_epoch,
 			return true;
 		}
 		elapsed_ms = k_uptime_get() - start_ms;
-		if (elapsed_ms >= MSENSE_DFU_RECONNECT_TIMEOUT_MS) {
+		if (elapsed_ms >= MSENSE_DFU_POST_RESET_RECONNECT_TIMEOUT_MS) {
 			return false;
 		}
-		remaining_ms = MSENSE_DFU_RECONNECT_TIMEOUT_MS - elapsed_ms;
+		remaining_ms = MSENSE_DFU_POST_RESET_RECONNECT_TIMEOUT_MS - elapsed_ms;
 		(void)k_sem_take(&dfu_peer_ready, K_MSEC(remaining_ms));
 	}
 }

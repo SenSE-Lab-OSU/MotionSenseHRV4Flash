@@ -333,14 +333,16 @@ Require `DFU_SUCCESS`, then verify the peer advertises as `MSense4PPG-...` and
 reports both `nus=1` and `smp=1`. If the normal PPG artifact matches the active
 image, the Central rejects it unless `--allow-same` is deliberately supplied.
 
-Upload frame waits are bounded (30 seconds). BLE management requests and
-post-reset reconnects are bounded as well. A wire CRC, incorrect transaction,
-incorrect offset, or target-reported offset produces a new/repeated credit;
-target offset zero restarts safely from zero. A BLE disconnect during upload
-causes a same-peer reconnect and resume; the target remains authoritative for
-the next offset. If the host disappears, a management operation fails, or
-postboot identity cannot be verified, the terminal result is `DFU_FAIL` and
-the Central never confirms the image.
+Upload frame waits and ordinary upload-resume reconnects are bounded at 30
+seconds. After an observed reset disconnect, the Central allows 60 seconds for
+MCUboot image swapping, application startup, same-address reconnection, and
+service discovery. A wire CRC, incorrect transaction, incorrect offset, or
+target-reported offset produces a new/repeated credit; target offset zero
+restarts safely from zero. A BLE disconnect during upload causes a same-peer
+reconnect and resume; the target remains authoritative for the next offset. If
+the host disappears, a management operation fails, or postboot identity cannot
+be verified, the terminal result is `DFU_FAIL` and the Central never confirms
+the image.
 
 If recovery is needed:
 

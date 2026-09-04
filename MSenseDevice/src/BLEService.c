@@ -647,6 +647,7 @@ void create_test_files_through_file_workqueue(struct k_work* work){
 
 }
 
+// function that will crash the device, for testing purposes only.
 void crash_device(){
     // can use:
     //k_oops();

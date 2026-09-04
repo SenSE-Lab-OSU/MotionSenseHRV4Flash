@@ -1,28 +1,24 @@
 #include <zephyr/logging/log.h>
+#include <zephyr/settings/settings.h>
 #include "spi_nand.h"
-#include "nand_disk.h"
 #include "bad_page.h"
 
 
 LOG_MODULE_REGISTER(spi_nand_bad_page, CONFIG_FLASH_LOG_LEVEL);
 
 
-#define FILE_TABLE_NAND_PARTITION	slot0_partition
+/* Both keys live under the "main" settings subtree, which is what
+ * bad_sector_storage_init() loads at boot.
+ */
+#define BAD_SECT_SUBTREE	"main"
+#define BAD_SECT_SCAN_DONE_KEY	BAD_SECT_SUBTREE "/bbscan_done"
+#define BAD_SECT_TABLE_KEY	BAD_SECT_SUBTREE "/bbtable"
 
-
-#ifdef CONFIG_PARTITION_MANAGER_ENABLED
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(PM_FATFILETABLE_PARTITION_NAME)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(PM_FATFILETABLE_PARTITION_NAME)
-#else
-
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(FILE_TABLE_NAND_PARTITION)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
-#endif 
-
-#define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_NODELABEL(mx25u80))
-#define FILETABLE_PARTITION_OFFSET 0
-
-#define bad_sector_detect_limit 2000
+/* The whole table is persisted as a single settings value, so this must stay
+ * under the NVS per-entry cap of (sector_size - 4 * ate_size), which is 4064
+ * bytes / 1016 entries on a 4096 byte flash page.
+ */
+#define bad_sector_detect_limit 200
 
 #ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 
@@ -31,6 +27,10 @@ LOG_MODULE_REGISTER(spi_nand_bad_page, CONFIG_FLASH_LOG_LEVEL);
 // The current sector offset, caused by the file system having to move data in a different sector due to the prescense of a bad block.
 int total_bad_sectors = 0;
 
+// persisted through the settings subsystem so the manufacturer bad-block scan
+// only ever runs on the very first boot of a device
+bool bad_block_scan_done;
+
 /* This should work for bad blocks.
 TODO: Test this system to save and load in offline mode.
 Essentially the idea for this is that when we are acessing sectors, we check to see how many bad sectors are below, and that determines the offset to use,
@@ -38,71 +38,156 @@ since bad sectors aren't used and the next sector over is used.
 */
 
 
-bool use_blocks = false;
+bool use_blocks = true;
 
 
 uint32_t bad_sectors[bad_sector_detect_limit] = {0};
 
+/* The first-boot scan registers every bad block it finds one at a time. Writing
+ * the whole table back to NVS on each hit would rewrite the same value hundreds
+ * of times, so the scan defers the write and saves once when it finishes.
+ */
+static bool static_scan_in_progress;
 
 
+/* Only the live entries are persisted, so a device with a handful of bad blocks
+ * writes a handful of bytes rather than the whole table.
+ */
 int save_bad_sectors_arr(){
-	
-	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
-	// start address for bad sectors
-	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = 0;
-	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
-	if (ret == 0){
-		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+
+	if (static_scan_in_progress){
+		return 0;
+	}
+
+	int ret = settings_save_one(BAD_SECT_TABLE_KEY, bad_sectors,
+				    total_bad_sectors * sizeof(bad_sectors[0]));
+	if (ret != 0){
+		LOG_ERR("failed to persist bad sector table: %d", ret);
 	}
 	return ret;
 };
 
+/* The table itself is restored by bad_sector_settings_set(), which the settings
+ * subsystem drives from inside this call. It initializes both the table and the bool.
+ */
 int load_bad_sectors_arr()
 {
-	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	size_t total_bad_sect_arr_size = sizeof(bad_sectors);
-	size_t total_bad_sect_count = total_bad_sect_arr_size / sizeof(bad_sectors[0]);
-	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = 0;
-	
-	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
-	// if the memory is all 1s, that means we haven't written to the array yet
-	if (bad_sectors[0] == 0xFFFFFFFF){
-		LOG_INF("first load bad sect arr, saving");
-		for (int x = 0; x < total_bad_sect_count; x++){
-			bad_sectors[x] = 0;
-		}
-		save_bad_sectors_arr();
-	}
-	LOG_INF("found and loaded bad sector arr");
-	for (int x = 0; x < total_bad_sect_count; x++){
-		if (bad_sectors[x] != 0){
-			total_bad_sectors++;
-		}
+	int ret = settings_load_subtree(BAD_SECT_SUBTREE);
+	if (ret != 0){
+		LOG_ERR("failed to load bad sector table: %d", ret);
+		return ret;
 	}
 	LOG_WRN("Load Bad Sect count: %d", total_bad_sectors);
 	return ret;
 };
+/* This function loads both the bad_block_scan and bad block table variables.
+ it's an implicit function that's done by the settings subsystem */
+static int bad_sector_settings_set(const char *name, size_t len,
+				   settings_read_cb read_cb, void *cb_arg)
+{
+	const char *next;
+	int rc;
 
+	if (settings_name_steq(name, "bbscan_done", &next) && !next) {
+		if (len != sizeof(bad_block_scan_done)) {
+			return -EINVAL;
+		}
+		rc = read_cb(cb_arg, &bad_block_scan_done, sizeof(bad_block_scan_done));
+		return (rc >= 0) ? 0 : rc;
+	}
 
+	if (settings_name_steq(name, "bbtable", &next) && !next) {
+		if ((len % sizeof(bad_sectors[0])) != 0 || len > sizeof(bad_sectors)) {
+			LOG_ERR("stored bad sector table has bad length %u", (unsigned int)len);
+			return -EINVAL;
+		}
+		rc = read_cb(cb_arg, bad_sectors, len);
+		if (rc < 0) {
+			return rc;
+		}
+		total_bad_sectors = rc / sizeof(bad_sectors[0]);
+		return 0;
+	}
 
+	return -ENOENT;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(nand_bad_page, BAD_SECT_SUBTREE, NULL,
+			       bad_sector_settings_set, NULL, NULL);
+
+/* Brings the persisted state back, then runs the manufacturer bad-block scan if
+ * it has never run on this device, remembering completion in the settings
+ * subsystem (NVS on internal flash).
+ */
+int bad_sector_storage_init(const struct device *dev)
+{
+	int rc = settings_subsys_init();
+	if (rc == 0) {
+		rc = load_bad_sectors_arr();
+	}
+	if (rc != 0) {
+		LOG_WRN("settings unavailable (%d), skipping bad block scan", rc);
+		return rc;
+	}
+
+	if (bad_block_scan_done) {
+		LOG_INF("manufacturer bad block scan already done, skipping");
+		print_bad_sect_info();
+		return 0;
+	}
+
+	LOG_INF("first boot: scanning for manufacturer bad blocks");
+	static_scan_in_progress = true;
+	detect_manufacturer_bad_blocks(dev);
+	static_scan_in_progress = false;
+
+	rc = save_bad_sectors_arr();
+	if (rc != 0) {
+		return rc;
+	}
+
+	bad_block_scan_done = true;
+	rc = settings_save_one(BAD_SECT_SCAN_DONE_KEY, &bad_block_scan_done,
+			       sizeof(bad_block_scan_done));
+	if (rc != 0) {
+		LOG_WRN("failed to persist bad block scan flag: %d", rc);
+	}
+	return rc;
+}
+
+int erase_bad_sectors_arr()
+{
+	memset(bad_sectors, 0, sizeof(bad_sectors));
+	total_bad_sectors = 0;
+	bad_block_scan_done = false;
+
+	int ret = settings_delete(BAD_SECT_TABLE_KEY);
+	if (ret != 0){
+		LOG_ERR("fail to delete bad sect table: %d", ret);
+		return ret;
+	}
+	// dropping the flag too means the next boot rescans the freshly erased chips
+	ret = settings_delete(BAD_SECT_SCAN_DONE_KEY);
+	if (ret != 0){
+		LOG_ERR("fail to delete bad sect scan flag: %d", ret);
+	}
+	return ret;
+}
 
 void print_bad_sect_info()
 {
 	LOG_INF("Load Bad Sect count: %d", total_bad_sectors);
-	int bad_sects_tot_length = sizeof(bad_sectors) / sizeof(bad_sectors[0]);
-	for (int x = 0; x < bad_sects_tot_length; x++)
+	for (int x = 0; x < total_bad_sectors; x++)
 	{
-		if (bad_sectors[x] != 0){
-			LOG_WRN("sect %lu", bad_sectors[x]);
-		}
+		LOG_WRN("sect %lu", bad_sectors[x]);
 	}
 }
 
 // eventually we should just change this to blocks.
 int register_bad_sector(uint32_t sector_num){
+	// after the first boot scan the table is treated as the fixed factory bad
+	// block list, unless runtime registration is explicitly enabled
+	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_SECTOR_SAVING_RUNTIME)){
     if (use_blocks){
         sector_num = convert_page_to_block(sector_num);
         sector_num = convert_block_to_page(0, sector_num);
@@ -117,27 +202,11 @@ int register_bad_sector(uint32_t sector_num){
 	else{
 		LOG_ERR("Bad sectors hit max allowable bad limit");
 	}
+	}
 	return total_bad_sectors;
-}
-#else
-int register_bad_sector(uint32_t sector_num){return 0;}
-int save_bad_sectors_arr(){return 0;}
-int load_bad_sectors_arr(){return 0;}
-void print_bad_sect_info(){}
-
-#endif
-
-int erase_bad_sectors_arr()
-{
-	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = flash_erase(soc_flash, address, sizeof(uint32_t)*bad_sector_detect_limit);
-	return ret;
-
 }
 
 int get_sector_offset(int sector_num){
-	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 	for (int x = 0; x < total_bad_sectors; x++){
 		if (bad_sectors[x] <= sector_num){
             if (use_blocks){
@@ -148,9 +217,21 @@ int get_sector_offset(int sector_num){
             }
 		}
 	}
-	#endif
-	return sector_num;	
+	return sector_num;
 }
+
+#else
+int total_bad_sectors = 0;
+bool bad_block_scan_done;
+int bad_sector_storage_init(const struct device *dev){return 0;}
+int register_bad_sector(uint32_t sector_num){return 0;}
+int save_bad_sectors_arr(){return 0;}
+int load_bad_sectors_arr(){return 0;}
+int erase_bad_sectors_arr(){return 0;}
+void print_bad_sect_info(){}
+int get_sector_offset(int sector_num){return sector_num;}
+
+#endif
 
 
 #define MAX_BAD_PAGES 100

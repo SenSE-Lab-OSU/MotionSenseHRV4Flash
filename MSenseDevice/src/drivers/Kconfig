@@ -17,10 +17,14 @@ menuconfig DISK_DRIVER_RAW_NAND
 
 menuconfig RAW_NAND_BAD_SECTOR_SAVING
     bool
-    prompt "Allows bad pages to be dynamically registered in a memory array stored on the nor flash."
+    prompt "Allows bad pages to be registered in a memory array persisted through the settings subsystem."
     default n
+    select SETTINGS
     help
        Not currently enabled since our Custom Sense FTL does not support block reallocation.
+       The table lives in the settings subsystem (NVS on internal flash), so the
+       settings_storage partition has to be large enough to hold the table in a
+       single NVS entry. See bad_sector_detect_limit in bad_page.c.
 
 config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
 	bool "allows the file system to be set as read only during runtime (via set_read_only)"
@@ -30,10 +34,15 @@ config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
 	    Note that this is a system that will only work at the internal software level: the drive is not actually readonly
 		on windows, to do this, the drive must instead be mounted as readonly vs fs_mount. 
 
+config BAD_SECTOR_SAVING_RUNTIME
+    bool 
+    prompt "Allows bad pages to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
+    default n
 
 menuconfig DISK_DRIVER_DHARA
     bool
     prompt "Disk Driver using dhara as the flash translation layer, instead of the SENSE lab custom nor solution."
+    select BAD_SECTOR_SAVING_RUNTIME
     help
         Not Currently Implemented, but uses Dhara's virtual addressing to handle bad blocks, wear leveling, and sector erasing
         for the current nand driver.

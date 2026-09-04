@@ -3,7 +3,25 @@
 
 
 #include <stddef.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <zephyr/device.h>
 
+
+/* Persisted through the settings subsystem so the manufacturer bad-block scan
+ * only ever runs on the very first boot of a device.
+ */
+extern bool bad_block_scan_done;
+
+/* Number of entries currently live in the bad sector table. */
+extern int total_bad_sectors;
+
+/* Brings up the settings subsystem, restores the bad sector table, and runs the
+ * manufacturer bad-block scan if it has never been run on this device.
+ * Call once from spi_init().
+ */
+int bad_sector_storage_init(const struct device *dev);
 
 int save_bad_sectors_arr();
 int load_bad_sectors_arr();

@@ -245,6 +245,8 @@ struct spi_nor_data {
 
 };
 
+/* bad_block_scan_done and the rest of the bad block state now live in bad_page.h */
+
 extern int current_writes;
 extern int current_reads;
 extern int current_erases;
@@ -268,6 +270,10 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page);
 
 off_t convert_block_to_singledie_address(uint32_t block);
 
+/* Inverse of convert_page_to_address: converts a die-local page address back to the
+ * global sector number, based on the currently selected flash and die. */
+uint32_t convert_address_to_sector(off_t address);
+
 uint8_t get_features(const struct device* dev, uint8_t register_select);
 
 int set_features(const struct device* dev, uint8_t register_select, uint8_t data);
@@ -284,6 +290,12 @@ int spi_nor_wrsr(const struct device *dev,
 			uint8_t sr);
 
 int detect_manufacturer_bad_blocks(const struct device* dev);
+
+/* Destructive bad block scan for chips whose factory marks were erased: per block,
+ * erases, writes a test pattern, reads back, and flags erase/program failures,
+ * uncorrectable ECC, or data mismatch. Leaves the flash erased. Only run on a
+ * flash with no data on it. */
+int dynamic_detect_bad_blocks(const struct device* dev);
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest);
 

@@ -496,11 +496,10 @@ int main(void)
   
   
   
-
+  k_sleep(K_SECONDS(1));
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  //create_test_files(400);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
@@ -512,7 +511,7 @@ int main(void)
   #endif
 
 
-  k_sleep(K_SECONDS(2));
+  
   
 
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));

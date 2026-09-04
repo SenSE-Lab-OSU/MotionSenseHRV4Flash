@@ -1,34 +1,24 @@
-# Known Issues
+# Known issues and limits
 
-## Large relay allocation on the Bluetooth RX stack
+## No hardware DFU validation in this source tree
 
-The NUS notification path currently calls `relay_enqueue()`, which creates a
-roughly 520-byte `struct relay_message` as a local variable. Because GATT
-notification callbacks run in the Bluetooth RX thread, this allocation consumes
-more than half of that thread's configured stack.
+The DFU wire parser, host CLI, and both DK firmware targets have automated
+build/test coverage, but a complete upload/test/reset/reconnect/confirm cycle
+still requires an approved hardware session with a compatible SMP + MCUboot
+peripheral. Do not infer target interoperability from a successful compile.
 
-This causes a reproducible UsageFault on the nRF54L15 build:
+## Signature validation remains peripheral policy
 
-- `CONFIG_BT_RX_STACK_SIZE=1024`
-- `relay_enqueue()` reserves 520 bytes in its function prologue
-- At the fault, `PSP` was equal to `PSPLIM`, confirming stack exhaustion
-- The captured call path was `nus_notification()` -> `relay_enqueue()` ->
-  `k_msgq_put()`
+The host validates MCUboot BIN structure and SHA-256 identity metadata only.
+It detects signature TLVs but intentionally does not require a public key or
+cryptographically validate one. With v1's default BLE security disabled, the
+peripheral MCUboot configuration remains the authority deciding whether a
+candidate image is acceptable. See `OPERATIONS.md` before enabling a signed
+image or paired-link production policy.
 
-The nRF5340 build has not reproduced the fault because its Bluetooth RX stack is
-larger (`CONFIG_BT_RX_STACK_SIZE=1200`) and currently has just enough headroom.
-This is still a latent defect on nRF5340; changes to the SDK, compiler, logging,
-or callback depth could expose it there as well.
+## VCOM physical ownership is host-visible only through protocol events
 
-### Future fix
-
-Move relay-message storage out of the Bluetooth callback stack. Use a bounded
-static `k_mem_slab` for relay messages and queue only pointers to allocated
-blocks. Keep allocation and queue operations nonblocking, release blocks on all
-success and failure paths, and preserve notification parsing before relay
-enqueueing.
-
-Increasing `CONFIG_BT_RX_STACK_SIZE` alone is only a workaround and should not
-be treated as the final fix. Remove or update this entry after the slab-based
-implementation passes pristine builds and hardware tests on both nRF54L15 DK
-and nRF5340 DK.
+The DK UARTE cannot observe interface-MCU DTR directly. Keep both VCOMs open
+with DTR asserted and treat `RELAY_IDLE` as the authoritative NUS-to-DFU handoff
+event. A failed async RX shutdown deliberately leaves the binary port
+unavailable rather than risking overlapping NUS TX and DFU RX.

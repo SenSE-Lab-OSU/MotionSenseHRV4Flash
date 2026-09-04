@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+
+source "Kconfig.zephyr"
+
+menu "MotionSense Central DFU"
+
+config MSENSE_DFU_REQUIRE_SECURITY
+	bool "Require encrypted BLE link for DFU"
+	depends on BT_SMP
+	default n
+	help
+	  Reject DFU jobs unless the connected peer has an encrypted BLE link.
+	  The v1 default is disabled so existing MotionSense peripherals need no
+	  pairing, keys, or host-side signature verification material. A future
+	  product policy can enable Bluetooth security and this guard together.
+
+endmenu

@@ -29,9 +29,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "msense_dfu_engine.h"
+#include "msense_dfu_wire.h"
+#include "msense_smp_central.h"
 #include "msense_sensor_stream_protocol.h"
 
-#define COMMAND_LINE_BYTES 96U
+#define COMMAND_LINE_BYTES 256U
 /* Holds complete phase-throughput summaries with full-width numeric fields. */
 #define CONTROL_EVENT_BYTES 320U
 #define RELAY_MAX_NUS_BYTES 512U
@@ -44,6 +47,14 @@
 /* Holds the complete 32 KiB history burst while the VCOM relay drains it. */
 #define RELAY_QUEUE_DEPTH 80U
 #define REQUIRED_ATT_MTU 128U
+#define DFU_UART_RX_BUFFER_BYTES 512U
+/* At 1 Mbaud, 5 ms is 500 byte-times; it flushes short MDFU frames while
+ * tolerating normal serial scheduling gaps. */
+#define DFU_UART_RX_INACTIVITY_TIMEOUT_US 5000U
+#define RELAY_UART_HAS_HWFC \
+	DT_NODE_HAS_PROP(DT_ALIAS(msense_relay_uart), hw_flow_control)
+#define MSENSE_NAME_PREFIX "MSense"
+#define MSENSE_BLINKY_NAME "MSenseBlinky"
 
 #define NUS_HEADER_MESSAGE_TYPE_OFFSET 3U
 #define NUS_HEADER_SESSION_ID_OFFSET 4U
@@ -109,6 +120,13 @@ enum scan_target {
 	SCAN_TARGET_PPG,
 	SCAN_TARGET_ECG,
 	SCAN_TARGET_ANY,
+	SCAN_TARGET_RECONNECT,
+};
+
+enum binary_port_mode {
+	BINARY_PORT_IDLE,
+	BINARY_PORT_NUS_RELAY,
+	BINARY_PORT_DFU_RX,
 };
 
 struct command_line {
@@ -211,6 +229,14 @@ struct tester_context {
 	uint8_t last_command_opcode;
 	bool subscribed;
 	bool write_pending;
+	bool nus_discovery_complete;
+	bool smp_ready;
+	bool smp_discovery_started;
+	bool peer_ready_reported;
+	bool reconnect_enabled;
+	bool peer_address_valid;
+	bt_addr_le_t peer_address;
+	char peer_name[17];
 };
 
 static const struct device *const command_uart =
@@ -231,6 +257,7 @@ static struct bt_gatt_write_params command_write_params;
 static uint8_t command_write_data[MSENSE_SENSOR_STREAM_COMMAND_BYTES];
 static char command_rx_buffer[COMMAND_LINE_BYTES];
 static size_t command_rx_length;
+static bool command_rx_overlong;
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command_line), 8, 4);
 K_MSGQ_DEFINE(control_event_queue, sizeof(struct control_event), 16, 4);
@@ -244,14 +271,26 @@ K_MEM_SLAB_DEFINE_STATIC(relay_message_slab, sizeof(struct relay_message),
 			 RELAY_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(relay_queue, sizeof(struct relay_message *), RELAY_QUEUE_DEPTH, 4);
 K_SEM_DEFINE(relay_tx_complete, 0, 1);
+K_SEM_DEFINE(dfu_rx_disabled, 0, 1);
 
 static struct relay_frame relay_frames[RELAY_FRAME_COUNT];
 static atomic_t relay_tx_active;
 static atomic_t relay_tx_bytes;
 static atomic_t relay_tx_terminal;
 static atomic_ptr_t relay_tx_buffer;
+static atomic_t binary_port_mode = ATOMIC_INIT(BINARY_PORT_IDLE);
+static atomic_t relay_close_requested;
+static atomic_t relay_idle_emitted;
+static atomic_t relay_close_after_notification;
+static atomic_t dfu_rx_active;
+static atomic_t dfu_rx_disabled_seen;
+static uint8_t dfu_rx_buffers[2][DFU_UART_RX_BUFFER_BYTES];
+static uint8_t dfu_rx_next_buffer;
+static struct msense_dfu_wire_parser dfu_wire_parser;
 
 static void start_scan(void);
+static void start_smp_discovery(struct bt_conn *conn);
+static struct bt_conn *connection_ref(void);
 static void command_write_complete(struct bt_conn *conn, uint8_t err,
 				   struct bt_gatt_write_params *params);
 static void mark_protocol_failure(const char *reason);
@@ -361,6 +400,228 @@ static void post_event(const char *format, ...)
 	(void)k_msgq_put(&control_event_queue, &event, K_NO_WAIT);
 }
 
+static void relay_try_idle(void)
+{
+	if (atomic_get(&binary_port_mode) != BINARY_PORT_NUS_RELAY ||
+	    !atomic_get(&relay_close_requested) ||
+	    k_msgq_num_used_get(&relay_queue) != 0U || atomic_get(&relay_tx_active)) {
+		return;
+	}
+	if (atomic_cas(&binary_port_mode, BINARY_PORT_NUS_RELAY, BINARY_PORT_IDLE)) {
+		atomic_set(&relay_close_requested, 0);
+		atomic_set(&relay_idle_emitted, 1);
+		post_event("RELAY_IDLE");
+	}
+}
+
+static int binary_port_begin_nus_relay(void)
+{
+	if (!atomic_cas(&binary_port_mode, BINARY_PORT_IDLE, BINARY_PORT_NUS_RELAY)) {
+		return -EBUSY;
+	}
+	atomic_set(&relay_close_requested, 0);
+	atomic_set(&relay_idle_emitted, 0);
+	return 0;
+}
+
+static void relay_request_idle(void)
+{
+	if (atomic_get(&binary_port_mode) == BINARY_PORT_NUS_RELAY) {
+		atomic_set(&relay_close_requested, 1);
+		relay_try_idle();
+	}
+}
+
+static void dfu_wire_frame_received(const struct msense_dfu_frame *frame, void *context)
+{
+	ARG_UNUSED(context);
+	msense_dfu_engine_receive_frame(frame);
+}
+
+static void dfu_wire_error_received(enum msense_dfu_wire_error error, void *context)
+{
+	ARG_UNUSED(context);
+	msense_dfu_engine_note_wire_error(error);
+}
+
+static void dfu_handle_uart_event(const struct uart_event *event)
+{
+	uint8_t *buffer;
+
+	if (atomic_get(&binary_port_mode) != BINARY_PORT_DFU_RX) {
+		return;
+	}
+	switch (event->type) {
+	case UART_RX_RDY:
+		msense_dfu_wire_parser_feed(&dfu_wire_parser,
+					    event->data.rx.buf + event->data.rx.offset,
+					    event->data.rx.len, dfu_wire_frame_received,
+					    dfu_wire_error_received, NULL);
+		break;
+	case UART_RX_BUF_REQUEST:
+		buffer = dfu_rx_buffers[dfu_rx_next_buffer];
+		dfu_rx_next_buffer = (dfu_rx_next_buffer + 1U) % ARRAY_SIZE(dfu_rx_buffers);
+		if (uart_rx_buf_rsp(relay_uart, buffer, sizeof(dfu_rx_buffers[0])) != 0) {
+			msense_dfu_engine_note_wire_error(MSENSE_DFU_WIRE_ERROR_HEADER);
+		}
+		break;
+	case UART_RX_DISABLED:
+		atomic_set(&dfu_rx_active, 0);
+		atomic_set(&dfu_rx_disabled_seen, 1);
+		k_sem_give(&dfu_rx_disabled);
+		break;
+	case UART_RX_BUF_RELEASED:
+		break;
+	case UART_RX_STOPPED:
+		atomic_set(&dfu_rx_active, 0);
+		post_event("ERROR DFU binary RX stopped reason=%d", event->data.rx_stop.reason);
+		msense_dfu_engine_binary_rx_stopped();
+		break;
+	default:
+		break;
+	}
+}
+
+static int dfu_claim_binary_port(void *context)
+{
+	int error;
+
+	ARG_UNUSED(context);
+	if (!atomic_get(&relay_idle_emitted) || k_msgq_num_used_get(&relay_queue) != 0U ||
+	    atomic_get(&relay_tx_active) ||
+	    !atomic_cas(&binary_port_mode, BINARY_PORT_IDLE, BINARY_PORT_DFU_RX)) {
+		return -EBUSY;
+	}
+	msense_dfu_wire_parser_init(&dfu_wire_parser);
+	dfu_rx_next_buffer = 1U;
+	atomic_set(&dfu_rx_active, 0);
+	atomic_set(&dfu_rx_disabled_seen, 0);
+	k_sem_reset(&dfu_rx_disabled);
+	atomic_set(&dfu_rx_active, 1);
+	error = uart_rx_enable(relay_uart, dfu_rx_buffers[0], sizeof(dfu_rx_buffers[0]),
+			       DFU_UART_RX_INACTIVITY_TIMEOUT_US);
+	if (error != 0) {
+		atomic_set(&dfu_rx_active, 0);
+		atomic_set(&binary_port_mode, BINARY_PORT_IDLE);
+		return error;
+	}
+	return 0;
+}
+
+static void dfu_release_binary_port(void *context)
+{
+	int error;
+
+	ARG_UNUSED(context);
+	if (atomic_get(&binary_port_mode) == BINARY_PORT_DFU_RX) {
+		error = 0;
+		if (!atomic_get(&dfu_rx_disabled_seen)) {
+			k_sem_reset(&dfu_rx_disabled);
+			if (!atomic_get(&dfu_rx_disabled_seen) && atomic_get(&dfu_rx_active)) {
+				error = uart_rx_disable(relay_uart);
+				if (error == -EFAULT) {
+					/* Zephyr reports no active reception when a prior RX stop has
+					 * already completed; the UART is safe to hand back. */
+					atomic_set(&dfu_rx_active, 0);
+					atomic_set(&dfu_rx_disabled_seen, 1);
+				}
+			}
+			if (!atomic_get(&dfu_rx_disabled_seen) &&
+			    k_sem_take(&dfu_rx_disabled, K_MSEC(250)) != 0) {
+				error = error == 0 ? -ETIMEDOUT : error;
+			}
+		}
+		if (atomic_get(&dfu_rx_disabled_seen)) {
+			atomic_set(&binary_port_mode, BINARY_PORT_IDLE);
+		} else {
+			post_event("ERROR DFU binary RX did not stop cleanly: %d",
+				   error == 0 ? -ETIMEDOUT : error);
+		}
+	}
+}
+
+static bool dfu_smp_ready(void *context)
+{
+	ARG_UNUSED(context);
+	return msense_smp_central_ready();
+}
+
+static bool dfu_security_ok(void *context)
+{
+	ARG_UNUSED(context);
+#if IS_ENABLED(CONFIG_MSENSE_DFU_REQUIRE_SECURITY)
+	struct bt_conn *connection = connection_ref();
+	bool secure = false;
+
+	if (connection != NULL) {
+		secure = bt_conn_get_security(connection) >= BT_SECURITY_L2;
+		bt_conn_unref(connection);
+	}
+	return secure;
+#else
+	return true;
+#endif
+}
+
+static uint16_t dfu_att_mtu(void *context)
+{
+	uint16_t mtu;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(context);
+	key = k_spin_lock(&tester.lock);
+	mtu = tester.att_mtu;
+	k_spin_unlock(&tester.lock, key);
+	return mtu;
+}
+
+static bool dfu_peer_requires_nus(void *context)
+{
+	bool requires_nus;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(context);
+	key = k_spin_lock(&tester.lock);
+	requires_nus = strcmp(tester.peer_name, MSENSE_BLINKY_NAME) != 0;
+	k_spin_unlock(&tester.lock, key);
+	return requires_nus;
+}
+
+static void dfu_request_reconnect(void *context)
+{
+	bool start = false;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(context);
+	key = k_spin_lock(&tester.lock);
+	tester.reconnect_enabled = true;
+	if (tester.conn == NULL && tester.peer_address_valid && tester.state == TESTER_IDLE) {
+		tester.scan_target = SCAN_TARGET_RECONNECT;
+		tester.state = TESTER_SCANNING;
+		start = true;
+	}
+	k_spin_unlock(&tester.lock, key);
+	if (start) {
+		start_scan();
+	}
+}
+
+static void dfu_set_reconnect_enabled(void *context, bool enabled)
+{
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(context);
+	key = k_spin_lock(&tester.lock);
+	tester.reconnect_enabled = enabled;
+	k_spin_unlock(&tester.lock, key);
+}
+
+static void dfu_post_event(const char *text, void *context)
+{
+	ARG_UNUSED(context);
+	post_event("%s", text);
+}
+
 static void relay_uart_callback(const struct device *device, struct uart_event *event,
 				void *user_data)
 {
@@ -369,6 +630,13 @@ static void relay_uart_callback(const struct device *device, struct uart_event *
 
 	ARG_UNUSED(device);
 	ARG_UNUSED(user_data);
+
+	if (event->type == UART_RX_RDY || event->type == UART_RX_BUF_REQUEST ||
+	    event->type == UART_RX_BUF_RELEASED || event->type == UART_RX_DISABLED ||
+	    event->type == UART_RX_STOPPED) {
+		dfu_handle_uart_event(event);
+		return;
+	}
 
 	switch (event->type) {
 	case UART_TX_DONE:
@@ -507,6 +775,7 @@ static void relay_thread(void *arg1, void *arg2, void *arg3)
 				return;
 			}
 		}
+		relay_try_idle();
 		frame_index = (frame_index + 1U) % ARRAY_SIZE(relay_frames);
 	}
 }
@@ -831,6 +1100,10 @@ static bool relay_enqueue(const uint8_t *data, uint16_t length)
 	k_spinlock_key_t key;
 	int err;
 
+	if (atomic_get(&binary_port_mode) != BINARY_PORT_NUS_RELAY) {
+		post_event("ERROR relay received while binary port is not owned by NUS");
+		return false;
+	}
 	if (length > RELAY_MAX_NUS_BYTES) {
 		post_event("ERROR relay notification too large: %u", length);
 		return false;
@@ -1058,6 +1331,9 @@ static void handle_result(uint32_t session_id, const uint8_t *payload, uint16_t 
 	post_event(rejected_start ? "START_RESULT status=%s(0x%04x) peripheral_state=%u" :
 		   "CANCEL_RESULT status=%s(0x%04x) peripheral_state=%u", status_name(status),
 		   status, peripheral_state);
+	if (rejected_start) {
+		atomic_set(&relay_close_after_notification, 1);
+	}
 }
 
 static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t length)
@@ -1134,6 +1410,7 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 			   "detail=%d", status_name(status), status, peripheral_state, sensor_bytes,
 			   data_messages, detail);
 	}
+	atomic_set(&relay_close_after_notification, 1);
 }
 
 static void handle_notification(const uint8_t *data, uint16_t length, int64_t received_ms)
@@ -1199,6 +1476,9 @@ static uint8_t nus_notification(struct bt_conn *conn,
 	if (!relay_enqueue(data, length)) {
 		mark_protocol_failure("relay delivery failed");
 	}
+	if (atomic_cas(&relay_close_after_notification, 1, 0)) {
+		relay_request_idle();
+	}
 
 	return BT_GATT_ITER_CONTINUE;
 }
@@ -1215,9 +1495,10 @@ static void subscribe_complete(struct bt_conn *conn, uint8_t err,
 	}
 	if (err != 0U) {
 		key = k_spin_lock(&tester.lock);
-		tester.state = TESTER_FAILED;
+		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS subscription failed: ATT 0x%02x", err);
+		start_smp_discovery(conn);
 		return;
 	}
 
@@ -1234,25 +1515,30 @@ static void subscribe_complete(struct bt_conn *conn, uint8_t err,
 
 	if (mtu < REQUIRED_ATT_MTU) {
 		post_event("ERROR negotiated ATT MTU %u is below %u", mtu, REQUIRED_ATT_MTU);
+		start_smp_discovery(conn);
 		return;
 	}
 	post_event("NUS_READY mtu=%u tx=0x%04x rx=0x%04x cccd=0x%04x", mtu,
 		   nus_client.handles.tx, nus_client.handles.rx, nus_client.handles.tx_ccc);
+	start_smp_discovery(conn);
 }
 
 static void discovery_complete(struct bt_gatt_dm *dm, void *context)
 {
 	int err;
+	struct bt_conn *conn;
 	k_spinlock_key_t key;
 
 	ARG_UNUSED(context);
+	conn = bt_gatt_dm_conn_get(dm);
 	err = bt_nus_handles_assign(dm, &nus_client);
 	if (err != 0) {
 		(void)bt_gatt_dm_data_release(dm);
 		key = k_spin_lock(&tester.lock);
-		tester.state = TESTER_FAILED;
+		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS handle discovery failed: %d", err);
+		start_smp_discovery(conn);
 		return;
 	}
 
@@ -1281,24 +1567,24 @@ static void discovery_service_not_found(struct bt_conn *conn, void *context)
 {
 	k_spinlock_key_t key;
 
-	ARG_UNUSED(conn);
 	ARG_UNUSED(context);
 	key = k_spin_lock(&tester.lock);
-	tester.state = TESTER_FAILED;
+	tester.subscribed = false;
 	k_spin_unlock(&tester.lock, key);
-	post_event("ERROR standard NUS service not found");
+	post_event("NUS_UNAVAILABLE reason=not_found");
+	start_smp_discovery(conn);
 }
 
 static void discovery_error(struct bt_conn *conn, int err, void *context)
 {
 	k_spinlock_key_t key;
 
-	ARG_UNUSED(conn);
 	ARG_UNUSED(context);
 	key = k_spin_lock(&tester.lock);
-	tester.state = TESTER_FAILED;
+	tester.subscribed = false;
 	k_spin_unlock(&tester.lock, key);
 	post_event("ERROR NUS discovery failed: %d", err);
+	start_smp_discovery(conn);
 }
 
 static const struct bt_gatt_dm_cb discovery_callbacks = {
@@ -1318,9 +1604,81 @@ static void start_nus_discovery(struct bt_conn *conn)
 	err = bt_gatt_dm_start(conn, BT_UUID_NUS_SERVICE, &discovery_callbacks, NULL);
 	if (err != 0) {
 		key = k_spin_lock(&tester.lock);
-		tester.state = TESTER_FAILED;
+		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS discovery could not start: %d", err);
+		start_smp_discovery(conn);
+	}
+}
+
+static void report_peer_ready(bool smp_ready)
+{
+	bool nus_ready;
+	bool report = false;
+	bool peer_address_valid;
+	bt_addr_le_t peer_address;
+	char peer_name[sizeof(tester.peer_name)];
+	char peer_address_text[BT_ADDR_STR_LEN] = "none";
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&tester.lock);
+	tester.smp_ready = smp_ready;
+	tester.smp_discovery_started = false;
+	nus_ready = tester.subscribed;
+	peer_address_valid = tester.peer_address_valid;
+	peer_address = tester.peer_address;
+	memcpy(peer_name, tester.peer_name, sizeof(peer_name));
+	peer_name[sizeof(peer_name) - 1U] = '\0';
+	if (!tester.peer_ready_reported) {
+		tester.peer_ready_reported = true;
+		report = true;
+	}
+	if (smp_ready || nus_ready) {
+		tester.state = TESTER_READY;
+	} else {
+		tester.state = TESTER_FAILED;
+	}
+	k_spin_unlock(&tester.lock, key);
+
+	if (peer_address_valid) {
+		(void)bt_addr_to_str(&peer_address.a, peer_address_text, sizeof(peer_address_text));
+	}
+	if (report) {
+		post_event("PEER_READY nus=%u smp=%u peer_name=%s peer_addr=%s peer_addr_type=%u",
+			   nus_ready, smp_ready, peer_name[0] == '\0' ? "none" : peer_name,
+			   peer_address_text,
+			   peer_address_valid ? (unsigned int)peer_address.type : (unsigned int)UINT8_MAX);
+	}
+	msense_dfu_engine_peer_ready(nus_ready, smp_ready);
+}
+
+static void smp_discovery_ready(bool ready, int error, void *context)
+{
+	ARG_UNUSED(context);
+	if (ready) {
+		post_event("SMP_READY mtu=%u", dfu_att_mtu(NULL));
+	} else {
+		post_event("SMP_UNAVAILABLE error=%d", error);
+	}
+	report_peer_ready(ready);
+}
+
+static void start_smp_discovery(struct bt_conn *conn)
+{
+	int err;
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&tester.lock);
+	if (tester.smp_discovery_started || tester.smp_ready) {
+		k_spin_unlock(&tester.lock, key);
+		return;
+	}
+	tester.smp_discovery_started = true;
+	k_spin_unlock(&tester.lock, key);
+	err = msense_smp_central_discover(conn);
+	if (err != 0) {
+		post_event("SMP_UNAVAILABLE error=%d", err);
+		report_peer_ready(false);
 	}
 }
 
@@ -1347,17 +1705,18 @@ static void mtu_exchange_complete(struct bt_conn *conn, uint8_t err,
 	tester.att_mtu = mtu;
 	k_spin_unlock(&tester.lock, key);
 	if (mtu < REQUIRED_ATT_MTU) {
-		key = k_spin_lock(&tester.lock);
-		tester.state = TESTER_FAILED;
-		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR negotiated ATT MTU %u is below %u", mtu, REQUIRED_ATT_MTU);
-		return;
 	}
 
 	post_event("ATT_MTU %u", mtu);
 	update_link_info_from_connection(conn);
 	post_ble_link(conn);
-	start_nus_discovery(conn);
+	if (dfu_peer_requires_nus(NULL)) {
+		start_nus_discovery(conn);
+	} else {
+		post_event("NUS_SKIPPED reason=smp_only");
+		start_smp_discovery(conn);
+	}
 }
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -1389,6 +1748,10 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
 	key = k_spin_lock(&tester.lock);
 	tester.state = TESTER_MTU_EXCHANGE;
+	tester.subscribed = false;
+	tester.smp_ready = false;
+	tester.smp_discovery_started = false;
+	tester.peer_ready_reported = false;
 	k_spin_unlock(&tester.lock, key);
 	post_event("CONNECTED %s", address);
 	update_link_info_from_connection(conn);
@@ -1409,6 +1772,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	struct bt_conn *held_conn = NULL;
 	bool stream_was_active;
+	bool reconnect = false;
 	k_spinlock_key_t key;
 
 	key = k_spin_lock(&tester.lock);
@@ -1420,16 +1784,26 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		tester.subscribed = false;
 		tester.write_pending = false;
 		tester.att_mtu = 0U;
+		tester.smp_ready = false;
+		tester.smp_discovery_started = false;
+		tester.peer_ready_reported = false;
 		memset(&tester.link, 0, sizeof(tester.link));
 		tester.state = TESTER_IDLE;
 		nus_client.conn = NULL;
+		reconnect = tester.reconnect_enabled && tester.peer_address_valid;
 	}
 	k_spin_unlock(&tester.lock, key);
 
 	if (held_conn != NULL) {
 		bt_conn_unref(held_conn);
+		msense_smp_central_disconnected(conn);
+		msense_dfu_engine_connection_lost();
+		relay_request_idle();
 		post_event("DISCONNECTED reason=0x%02x%s", reason,
 			   stream_was_active ? " stream_aborted" : "");
+		if (reconnect) {
+			dfu_request_reconnect(NULL);
+		}
 	}
 }
 
@@ -1520,6 +1894,11 @@ static bool advertising_data_parse(struct bt_data *data, void *user_data)
 	return false;
 }
 
+static bool name_is_msense(const char *name)
+{
+	return strncmp(name, MSENSE_NAME_PREFIX, sizeof(MSENSE_NAME_PREFIX) - 1U) == 0;
+}
+
 static bool name_matches_target(const char *name, enum scan_target target)
 {
 	if (target == SCAN_TARGET_PPG) {
@@ -1528,15 +1907,7 @@ static bool name_matches_target(const char *name, enum scan_target target)
 	if (target == SCAN_TARGET_ECG) {
 		return strncmp(name, "MSense4ECG-", 11U) == 0;
 	}
-	return target == SCAN_TARGET_ANY &&
-	       (strncmp(name, "MSense4PPG-", 11U) == 0 ||
-		strncmp(name, "MSense4ECG-", 11U) == 0);
-}
-
-static bool name_is_msense(const char *name)
-{
-	return strncmp(name, "MSense4PPG-", 11U) == 0 ||
-	       strncmp(name, "MSense4ECG-", 11U) == 0;
+	return target == SCAN_TARGET_ANY && name_is_msense(name);
 }
 
 static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
@@ -1568,6 +1939,13 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	target = tester.scan_target;
 	if (target == SCAN_TARGET_LIST) {
 		tester.state = TESTER_IDLE;
+	} else if (target == SCAN_TARGET_RECONNECT) {
+		if (!tester.peer_address_valid ||
+		    bt_addr_le_cmp(address, &tester.peer_address) != 0) {
+			k_spin_unlock(&tester.lock, key);
+			return;
+		}
+		tester.state = TESTER_CONNECTING;
 	} else if (name_matches_target(name.value, target)) {
 		tester.state = TESTER_CONNECTING;
 	} else {
@@ -1599,6 +1977,10 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	key = k_spin_lock(&tester.lock);
 	tester.conn = connection;
 	tester.att_mtu = 0U;
+	tester.peer_address = *address;
+	tester.peer_address_valid = true;
+	memset(tester.peer_name, 0, sizeof(tester.peer_name));
+	strncpy(tester.peer_name, name.value, sizeof(tester.peer_name) - 1U);
 	memset(&tester.link, 0, sizeof(tester.link));
 	k_spin_unlock(&tester.lock, key);
 	post_event("CONNECTING name=%s address=%s", name.value, address_text);
@@ -1661,6 +2043,42 @@ static bool parse_u32(const char *text, uint32_t *value)
 	}
 
 	*value = result;
+	return true;
+}
+
+static bool parse_hash32(const char *text, uint8_t hash[32])
+{
+	size_t index;
+
+	if (text == NULL || strlen(text) != 64U) {
+		return false;
+	}
+	for (index = 0U; index < 32U; index++) {
+		uint8_t high;
+		uint8_t low;
+		char high_char = text[index * 2U];
+		char low_char = text[index * 2U + 1U];
+
+		if (high_char >= '0' && high_char <= '9') {
+			high = high_char - '0';
+		} else if (high_char >= 'a' && high_char <= 'f') {
+			high = high_char - 'a' + 10U;
+		} else if (high_char >= 'A' && high_char <= 'F') {
+			high = high_char - 'A' + 10U;
+		} else {
+			return false;
+		}
+		if (low_char >= '0' && low_char <= '9') {
+			low = low_char - '0';
+		} else if (low_char >= 'a' && low_char <= 'f') {
+			low = low_char - 'a' + 10U;
+		} else if (low_char >= 'A' && low_char <= 'F') {
+			low = low_char - 'A' + 10U;
+		} else {
+			return false;
+		}
+		hash[index] = (high << 4) | low;
+	}
 	return true;
 }
 
@@ -1770,7 +2188,8 @@ static void begin_start(uint32_t requested_session_id, bool has_requested_id)
 
 	key = k_spin_lock(&tester.lock);
 	if ((tester.state != TESTER_READY && tester.state != TESTER_COMPLETE) ||
-	    !tester.subscribed || tester.write_pending) {
+	    !tester.subscribed || tester.write_pending ||
+	    atomic_get(&binary_port_mode) != BINARY_PORT_IDLE) {
 		enum tester_state state = tester.state;
 
 		k_spin_unlock(&tester.lock, key);
@@ -1778,8 +2197,14 @@ static void begin_start(uint32_t requested_session_id, bool has_requested_id)
 			       tester_state_name(state));
 		return;
 	}
+	if (binary_port_begin_nus_relay() != 0) {
+		k_spin_unlock(&tester.lock, key);
+		command_printf("ERR start requires idle binary relay port");
+		return;
+	}
 	session_id = has_requested_id ? requested_session_id : tester.next_session_id++;
 	if (session_id == 0U) {
+		relay_request_idle();
 		k_spin_unlock(&tester.lock, key);
 		command_printf("ERR session ID must be nonzero");
 		return;
@@ -1797,6 +2222,7 @@ static void begin_start(uint32_t requested_session_id, bool has_requested_id)
 			tester.state = TESTER_READY;
 		}
 		k_spin_unlock(&tester.lock, key);
+		relay_request_idle();
 		command_printf("ERR START write %d", err);
 		return;
 	}
@@ -1838,21 +2264,39 @@ static void print_status(void)
 	uint16_t mtu;
 	uint32_t relay_dropped;
 	bool subscribed;
+	bool smp_ready;
+	bool peer_address_valid;
+	bt_addr_le_t peer_address;
+	char peer_name[sizeof(tester.peer_name)];
+	char peer_address_text[BT_ADDR_STR_LEN] = "none";
 	k_spinlock_key_t key = k_spin_lock(&tester.lock);
 
 	state = tester.state;
 	mtu = tester.att_mtu;
 	subscribed = tester.subscribed;
+	smp_ready = tester.smp_ready;
+	peer_address_valid = tester.peer_address_valid;
+	peer_address = tester.peer_address;
+	memcpy(peer_name, tester.peer_name, sizeof(peer_name));
+	peer_name[sizeof(peer_name) - 1U] = '\0';
 	relay_dropped = tester.relay_dropped;
 	metadata = tester.metadata;
 	statistics = tester.statistics;
 	link = tester.link;
 	k_spin_unlock(&tester.lock, key);
+	if (peer_address_valid) {
+		(void)bt_addr_to_str(&peer_address.a, peer_address_text, sizeof(peer_address_text));
+	}
 
-	command_printf("STATUS state=%s subscribed=%u mtu=%u id=%u bytes=%u data=%u "
-		       "record_index=%u relay_dropped=%u", tester_state_name(state), subscribed, mtu,
+	command_printf("STATUS state=%s subscribed=%u smp=%u mtu=%u id=%u bytes=%u data=%u "
+		       "record_index=%u relay_dropped=%u binary_mode=%d peer_name=%s peer_addr=%s "
+		       "peer_addr_type=%u", tester_state_name(state),
+		       subscribed, smp_ready, mtu,
 		       metadata.session_id, metadata.received_sensor_bytes,
-		       metadata.received_data_messages, metadata.expected_record_index, relay_dropped);
+		       metadata.received_data_messages, metadata.expected_record_index, relay_dropped,
+		       (int)atomic_get(&binary_port_mode),
+		       peer_name[0] == '\0' ? "none" : peer_name, peer_address_text,
+		       peer_address_valid ? (unsigned int)peer_address.type : (unsigned int)UINT8_MAX);
 	throughput_end_ms =
 		state == TESTER_RECEIVING ? k_uptime_get() : statistics.total.last_data_ms;
 	print_live_throughput(metadata.session_id, &statistics.total, throughput_end_ms);
@@ -1862,21 +2306,115 @@ static void print_status(void)
 static void show_help(void)
 {
 	command_printf("COMMANDS: help | scan | connect ppg|ecg|any | status | start [id] | "
-		       "cancel [id] | disconnect");
+		       "cancel [id] | disconnect | dfu capabilities|status|list|begin|abort|erase|"
+		       "test|confirm|reset");
+}
+
+static void handle_dfu_command(char **cursor)
+{
+	char *subcommand = next_token(cursor);
+	char *transaction_text = next_token(cursor);
+	char *argument = next_token(cursor);
+	char *extra = next_token(cursor);
+	char *final = next_token(cursor);
+	uint32_t transaction;
+	uint32_t value;
+	uint8_t hash[32];
+	uint8_t tlv_hash[32];
+	int error;
+
+	if (subcommand == NULL) {
+		command_printf("ERR usage: dfu capabilities|status|list|begin|abort|erase|test|confirm|reset");
+		return;
+	}
+	if (strcmp(subcommand, "capabilities") == 0 && transaction_text == NULL) {
+		command_printf("DFU_CAPS protocol=1 mdfu=1 image=0 payload_cap=%u command_baud=115200 "
+			       "data_baud=1000000 hwfc=%u security=%s", MSENSE_DFU_WIRE_MAX_PAYLOAD,
+			       RELAY_UART_HAS_HWFC,
+			       IS_ENABLED(CONFIG_MSENSE_DFU_REQUIRE_SECURITY) ? "required" : "off");
+		return;
+	}
+	if (strcmp(subcommand, "status") == 0 && transaction_text == NULL) {
+		struct msense_dfu_status status;
+
+		msense_dfu_engine_get_status(&status);
+		command_printf("DFU_STATUS state=%s tx=%u off=%u bytes=%u credit_max=%u dropped=%u "
+			       "binary_owned=%u", msense_dfu_engine_state_name(status.state),
+			       status.transaction, status.offset, status.image_size,
+			       status.credit_payload_max, status.dropped_frames,
+			       status.binary_port_claimed);
+		return;
+	}
+	if (transaction_text == NULL || !parse_u32(transaction_text, &transaction) ||
+	    transaction == 0U) {
+		command_printf("ERR dfu transaction must be a nonzero decimal or 0x hexadecimal uint32");
+		return;
+	}
+	if (strcmp(subcommand, "list") == 0 && argument == NULL) {
+		error = msense_dfu_engine_request_list(transaction);
+	} else if (strcmp(subcommand, "abort") == 0 && argument == NULL) {
+		error = msense_dfu_engine_abort(transaction);
+		if (error == 0) {
+			command_printf("DFU_ABORT_REQUESTED tx=%u", transaction);
+		}
+		return;
+	} else if (strcmp(subcommand, "erase") == 0 && final == NULL &&
+		   (argument == NULL || (extra == NULL && parse_u32(argument, &value)))) {
+		error = msense_dfu_engine_request_erase(transaction, argument == NULL ? 1U : value);
+	} else if ((strcmp(subcommand, "confirm") == 0 || strcmp(subcommand, "test") == 0) &&
+		   argument != NULL && extra == NULL && parse_hash32(argument, hash)) {
+		error = strcmp(subcommand, "confirm") == 0 ?
+			msense_dfu_engine_request_confirm(transaction, hash) :
+			msense_dfu_engine_request_test(transaction, hash);
+	} else if (strcmp(subcommand, "reset") == 0 && argument == NULL) {
+		error = msense_dfu_engine_request_reset(transaction);
+	} else if (strcmp(subcommand, "begin") == 0 && argument != NULL && extra != NULL &&
+		   final != NULL && parse_u32(argument, &value) && value != 0U &&
+		   parse_hash32(extra, hash) && parse_hash32(final, tlv_hash)) {
+		char *allow_same = next_token(cursor);
+
+		if (allow_same != NULL && (strcmp(allow_same, "allow-same") != 0 ||
+					 next_token(cursor) != NULL)) {
+			command_printf("ERR dfu begin optional flag is allow-same");
+			return;
+		}
+		error = msense_dfu_engine_request_begin(transaction, value, hash, tlv_hash,
+						 allow_same != NULL);
+	} else {
+		command_printf("ERR usage: dfu list <tx> | dfu begin <tx> <bytes> <file_sha256> "
+			       "<tlv_sha256> [allow-same] | dfu abort <tx> | dfu erase <tx> [slot] | "
+			       "dfu test|confirm <tx> <tlv_sha256> | dfu reset <tx>");
+		return;
+	}
+	if (error != 0) {
+		command_printf("ERR dfu %s tx=%u error=%d", subcommand, transaction, error);
+	} else {
+		command_printf("DFU_QUEUED tx=%u operation=%s", transaction, subcommand);
+	}
 }
 
 static void handle_command(struct command_line *line)
 {
 	char *cursor = line->text;
 	char *command = next_token(&cursor);
-	char *argument = next_token(&cursor);
-	char *extra = next_token(&cursor);
+	char *argument;
+	char *extra;
 	uint32_t value;
 	k_spinlock_key_t key;
 
 	if (command == NULL) {
 		return;
 	}
+	if (strcmp(command, "__OVERLONG__") == 0) {
+		command_printf("ERR command exceeds %u bytes", COMMAND_LINE_BYTES - 1U);
+		return;
+	}
+	if (strcmp(command, "dfu") == 0) {
+		handle_dfu_command(&cursor);
+		return;
+	}
+	argument = next_token(&cursor);
+	extra = next_token(&cursor);
 	if (strcmp(command, "help") == 0 && argument == NULL) {
 		show_help();
 		return;
@@ -1980,13 +2518,18 @@ static void command_uart_callback(const struct device *device, void *user_data)
 		if (byte == '\r' || byte == '\n') {
 			struct command_line line;
 
-			if (command_rx_length == 0U) {
+			if (command_rx_length == 0U && !command_rx_overlong) {
 				continue;
 			}
 			printk("UART_COMMAND_RX length=%u\n", (uint32_t)command_rx_length);
 			memset(&line, 0, sizeof(line));
-			memcpy(line.text, command_rx_buffer, command_rx_length);
+			if (command_rx_overlong) {
+				strcpy(line.text, "__OVERLONG__");
+			} else {
+				memcpy(line.text, command_rx_buffer, command_rx_length);
+			}
 			command_rx_length = 0U;
+			command_rx_overlong = false;
 			(void)k_msgq_put(&command_queue, &line, K_NO_WAIT);
 			continue;
 		}
@@ -1994,7 +2537,7 @@ static void command_uart_callback(const struct device *device, void *user_data)
 			if (command_rx_length < sizeof(command_rx_buffer) - 1U) {
 				command_rx_buffer[command_rx_length++] = (char)byte;
 			} else {
-				command_rx_length = 0U;
+				command_rx_overlong = true;
 			}
 		}
 	}
@@ -2019,6 +2562,8 @@ static int uart_initialize(void)
 		return err;
 	}
 	uart_irq_rx_enable(command_uart);
+	atomic_set(&relay_idle_emitted, 1);
+	post_event("RELAY_IDLE");
 	printk("UART_INIT_OK\n");
 
 	return 0;
@@ -2029,6 +2574,16 @@ int main(void)
 	struct command_line command;
 	struct control_event event;
 	struct bt_nus_client_init_param nus_init = { 0 };
+	const struct msense_dfu_platform dfu_platform = {
+		.claim_binary_port = dfu_claim_binary_port,
+		.release_binary_port = dfu_release_binary_port,
+		.smp_ready = dfu_smp_ready,
+		.security_ok = dfu_security_ok,
+		.att_mtu = dfu_att_mtu,
+		.peer_requires_nus = dfu_peer_requires_nus,
+		.request_reconnect = dfu_request_reconnect,
+		.set_reconnect_enabled = dfu_set_reconnect_enabled,
+	};
 	int err;
 
 	err = uart_initialize();
@@ -2046,6 +2601,22 @@ int main(void)
 			k_sleep(K_FOREVER);
 		}
 	}
+	err = msense_smp_central_init(smp_discovery_ready, NULL);
+	if (err != 0) {
+		printk("FATAL SMP client init %d\n", err);
+		command_printf("FATAL SMP client init %d", err);
+		while (true) {
+			k_sleep(K_FOREVER);
+		}
+	}
+	err = msense_dfu_engine_init(&dfu_platform, dfu_post_event, NULL);
+	if (err != 0) {
+		printk("FATAL DFU engine init %d\n", err);
+		command_printf("FATAL DFU engine init %d", err);
+		while (true) {
+			k_sleep(K_FOREVER);
+		}
+	}
 	err = bt_enable(NULL);
 	if (err != 0) {
 		printk("FATAL Bluetooth init %d\n", err);
@@ -2055,7 +2626,7 @@ int main(void)
 		}
 	}
 
-	command_printf("MSENSE_NUS_CENTRAL_READY protocol=1; use help");
+	command_printf("MSENSE_CENTRAL_READY nus_protocol=1 dfu_protocol=1; use help");
 	while (true) {
 		while (k_msgq_get(&control_event_queue, &event, K_NO_WAIT) == 0) {
 			command_printf("%s", event.text);

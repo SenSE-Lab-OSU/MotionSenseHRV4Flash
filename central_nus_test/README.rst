@@ -11,6 +11,11 @@ received NUS notification unchanged to a second interface-MCU virtual COM port.
 
 It is for protocol and interoperability testing, not a production Central.
 
+The full NUS-capture and unattended BLE DFU runbook is in
+``OPERATIONS.md``. It documents the VCOM mapping, binary-port hand-off,
+machine-readable DFU protocol, host CLI, recovery policy, security default,
+and validation procedure.
+
 Build and flash
 ---------------
 
@@ -121,10 +126,11 @@ Commands are case-sensitive:
    cancel 123
    disconnect
 
-``scan`` stops after reporting the first MotionSense PPG or ECG advertising
-name. ``connect ppg``, ``connect ecg``, and ``connect any`` actively scan and
-connect to the first matching device name. Exact peripheral addresses and
-multiple simultaneous peers are intentionally unsupported.
+``scan`` stops after reporting the first advertising name beginning ``MSense``.
+``connect ppg`` and ``connect ecg`` retain their respective PPG/ECG name
+filters; ``connect any`` accepts any ``MSense`` name, including
+``MSenseBlinky``. Exact peripheral addresses and multiple simultaneous peers
+are intentionally unsupported.
 
 ``start`` chooses a nonzero session ID, unless one is supplied. It is accepted
 after ``NUS_READY`` and also after a prior terminal ``COMPLETE`` state on the
@@ -262,8 +268,9 @@ Scope limits
 ------------
 
 * One connection, one active stream, and one first-match name scan only.
-* No automated retries, request timeouts, bonding, encryption, reconnect/resume,
-  raw-record decoding, or local capture persistence.
+* NUS capture does not add raw-record decoding or local capture persistence.
+  BLE DFU reconnect/resume and bounded retry handling are documented separately
+  in ``OPERATIONS.md``.
 * No command-byte mutation interface for malformed or unsupported-version
   command injection, and no forced low-MTU negotiation test mode.
 * If the relay queue overflows, the tester marks the session failed rather than

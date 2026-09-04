@@ -32,7 +32,8 @@
 #include "msense_sensor_stream_protocol.h"
 
 #define COMMAND_LINE_BYTES 96U
-#define CONTROL_EVENT_BYTES 256U
+/* Holds complete phase-throughput summaries with full-width numeric fields. */
+#define CONTROL_EVENT_BYTES 320U
 #define RELAY_MAX_NUS_BYTES 512U
 #define RELAY_HEADER_BYTES 12U
 #define RELAY_FRAME_BYTES (RELAY_HEADER_BYTES + RELAY_MAX_NUS_BYTES)
@@ -70,6 +71,8 @@
 #define DATA_RECORD_COUNT_OFFSET 8U
 #define DATA_PHASE_OFFSET 10U
 #define DATA_RESERVED_OFFSET 11U
+#define DATA_PHASE_HISTORY 0U
+#define DATA_PHASE_FORWARD 1U
 
 #define END_STATUS_OFFSET 0U
 #define END_STATE_OFFSET 2U
@@ -152,7 +155,7 @@ struct stream_metadata {
 	char git_commit[41];
 };
 
-struct stream_statistics {
+struct phase_statistics {
 	int64_t first_data_ms;
 	int64_t last_data_ms;
 	uint32_t raw_nus_bytes;
@@ -160,6 +163,15 @@ struct stream_statistics {
 	uint32_t data_notifications;
 	uint32_t max_gap_ms;
 	bool has_data;
+};
+
+struct stream_statistics {
+	struct phase_statistics total;
+	struct phase_statistics history;
+	struct phase_statistics forward;
+	int64_t request_start_ms;
+	bool request_started;
+	bool history_reported;
 };
 
 struct ble_link_info {
@@ -561,9 +573,9 @@ static uint32_t kib_per_second_x10(uint32_t bytes, uint32_t elapsed_ms)
 	return (uint32_t)((uint64_t)bytes * 10000U / (1024U * elapsed_ms));
 }
 
-static void stream_statistics_record_data(struct stream_statistics *statistics,
-					  uint16_t raw_nus_length, uint32_t sensor_bytes,
-					  int64_t received_ms)
+static void phase_statistics_record_data(struct phase_statistics *statistics,
+					 uint16_t raw_nus_length, uint32_t sensor_bytes,
+					 int64_t received_ms)
 {
 	uint32_t gap_ms;
 
@@ -583,8 +595,19 @@ static void stream_statistics_record_data(struct stream_statistics *statistics,
 	statistics->data_notifications++;
 }
 
+static void stream_statistics_record_data(struct stream_statistics *statistics, uint8_t phase,
+					  uint16_t raw_nus_length, uint32_t sensor_bytes,
+					  int64_t received_ms)
+{
+	struct phase_statistics *phase_statistics =
+		phase == DATA_PHASE_HISTORY ? &statistics->history : &statistics->forward;
+
+	phase_statistics_record_data(&statistics->total, raw_nus_length, sensor_bytes, received_ms);
+	phase_statistics_record_data(phase_statistics, raw_nus_length, sensor_bytes, received_ms);
+}
+
 static struct throughput_values stream_throughput_values(
-	const struct stream_statistics *statistics, int64_t end_ms)
+	const struct phase_statistics *statistics, int64_t end_ms)
 {
 	struct throughput_values values;
 
@@ -606,8 +629,45 @@ static struct throughput_values stream_throughput_values(
 	return values;
 }
 
+static void post_throughput_history(uint32_t session_id,
+				    const struct phase_statistics *statistics,
+				    int64_t request_start_ms, bool request_started)
+{
+	struct throughput_values values =
+		stream_throughput_values(statistics, statistics->last_data_ms);
+	uint32_t request_elapsed_ms = request_started ?
+		elapsed_ms_between(request_start_ms, statistics->last_data_ms) : 0U;
+
+	post_event("THROUGHPUT_HISTORY id=%u active_elapsed_ms=%u request_elapsed_ms=%u "
+		   "data_notifs=%u raw_nus_bytes=%u sensor_bytes=%u mean_notif_bytes=%u "
+		   "notif_s=%u.%u raw_kib_s=%u.%u sensor_kib_s=%u.%u max_gap_ms=%u",
+		   session_id, values.elapsed_ms, request_elapsed_ms, statistics->data_notifications,
+		   statistics->raw_nus_bytes, statistics->sensor_bytes, values.mean_notification_bytes,
+		   values.notifications_per_second_x10 / 10U,
+		   values.notifications_per_second_x10 % 10U, values.raw_kib_per_second_x10 / 10U,
+		   values.raw_kib_per_second_x10 % 10U, values.sensor_kib_per_second_x10 / 10U,
+		   values.sensor_kib_per_second_x10 % 10U, statistics->max_gap_ms);
+}
+
+static void post_throughput_forward(uint32_t session_id,
+				    const struct phase_statistics *statistics)
+{
+	struct throughput_values values =
+		stream_throughput_values(statistics, statistics->last_data_ms);
+
+	post_event("THROUGHPUT_FORWARD id=%u active_elapsed_ms=%u data_notifs=%u "
+		   "raw_nus_bytes=%u sensor_bytes=%u mean_notif_bytes=%u notif_s=%u.%u "
+		   "raw_kib_s=%u.%u sensor_kib_s=%u.%u max_gap_ms=%u",
+		   session_id, values.elapsed_ms, statistics->data_notifications,
+		   statistics->raw_nus_bytes, statistics->sensor_bytes, values.mean_notification_bytes,
+		   values.notifications_per_second_x10 / 10U,
+		   values.notifications_per_second_x10 % 10U, values.raw_kib_per_second_x10 / 10U,
+		   values.raw_kib_per_second_x10 % 10U, values.sensor_kib_per_second_x10 / 10U,
+		   values.sensor_kib_per_second_x10 % 10U, statistics->max_gap_ms);
+}
+
 static void post_throughput_summary(uint32_t session_id,
-				    const struct stream_statistics *statistics)
+				    const struct phase_statistics *statistics)
 {
 	struct throughput_values values =
 		stream_throughput_values(statistics, statistics->last_data_ms);
@@ -624,7 +684,7 @@ static void post_throughput_summary(uint32_t session_id,
 }
 
 static void print_live_throughput(uint32_t session_id,
-				  const struct stream_statistics *statistics, int64_t end_ms)
+				  const struct phase_statistics *statistics, int64_t end_ms)
 {
 	struct throughput_values values = stream_throughput_values(statistics, end_ms);
 
@@ -873,6 +933,7 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t length,
 			uint16_t raw_nus_length, int64_t received_ms)
 {
+	struct phase_statistics history_statistics;
 	uint32_t sequence;
 	uint32_t first_record;
 	uint32_t expected_end;
@@ -880,6 +941,9 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 	uint16_t record_count;
 	uint16_t expected_length;
 	uint8_t phase;
+	int64_t request_start_ms;
+	bool request_started;
+	bool report_history = false;
 	k_spinlock_key_t key;
 
 	if (length < MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES) {
@@ -898,7 +962,8 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 	first_record = sys_get_le32(&payload[DATA_FIRST_RECORD_OFFSET]);
 	record_count = sys_get_le16(&payload[DATA_RECORD_COUNT_OFFSET]);
 	phase = payload[DATA_PHASE_OFFSET];
-	if (record_count == 0U || payload[DATA_RESERVED_OFFSET] != 0U || phase > 1U ||
+	if (record_count == 0U || payload[DATA_RESERVED_OFFSET] != 0U ||
+	    phase > DATA_PHASE_FORWARD ||
 	    record_count > (UINT16_MAX - MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES) /
 			   tester.metadata.record_size) {
 		k_spin_unlock(&tester.lock, key);
@@ -913,8 +978,8 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 	    first_record != tester.metadata.expected_record_index || expected_end < first_record ||
 	    expected_end > tester.metadata.history_records + tester.metadata.forward_records ||
 	    (first_record < tester.metadata.history_records &&
-	     (phase != 0U || expected_end > tester.metadata.history_records)) ||
-	    (first_record >= tester.metadata.history_records && phase != 1U)) {
+	     (phase != DATA_PHASE_HISTORY || expected_end > tester.metadata.history_records)) ||
+	    (first_record >= tester.metadata.history_records && phase != DATA_PHASE_FORWARD)) {
 		k_spin_unlock(&tester.lock, key);
 		mark_protocol_failure("DATA sequence/index/phase");
 		return;
@@ -925,8 +990,21 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 	sensor_bytes = (uint32_t)record_count * tester.metadata.record_size;
 	tester.metadata.received_sensor_bytes += sensor_bytes;
 	tester.metadata.received_data_messages++;
-	stream_statistics_record_data(&tester.statistics, raw_nus_length, sensor_bytes, received_ms);
+	if (phase == DATA_PHASE_FORWARD && !tester.statistics.history_reported) {
+		tester.statistics.history_reported = true;
+		history_statistics = tester.statistics.history;
+		request_start_ms = tester.statistics.request_start_ms;
+		request_started = tester.statistics.request_started;
+		report_history = true;
+	}
+	stream_statistics_record_data(&tester.statistics, phase, raw_nus_length, sensor_bytes,
+				      received_ms);
 	k_spin_unlock(&tester.lock, key);
+
+	if (report_history) {
+		post_throughput_history(session_id, &history_statistics, request_start_ms,
+					request_started);
+	}
 }
 
 static void handle_result(uint32_t session_id, const uint8_t *payload, uint16_t length)
@@ -980,6 +1058,7 @@ static void handle_result(uint32_t session_id, const uint8_t *payload, uint16_t 
 static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t length)
 {
 	struct stream_statistics statistics;
+	struct phase_statistics history_statistics;
 	uint16_t status;
 	uint8_t peripheral_state;
 	uint32_t history_sent;
@@ -987,7 +1066,10 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 	uint32_t sensor_bytes;
 	uint32_t data_messages;
 	int32_t detail;
+	int64_t request_start_ms;
 	bool success;
+	bool request_started;
+	bool report_history = false;
 	k_spinlock_key_t key;
 
 	if (length != MSENSE_SENSOR_STREAM_END_BYTES || payload[END_RESERVED_OFFSET] != 0U) {
@@ -1023,11 +1105,23 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 		  tester.metadata.expected_record_index ==
 			  tester.metadata.history_records + tester.metadata.forward_records;
 	tester.state = success ? TESTER_COMPLETE : TESTER_FAILED;
+	if (!tester.statistics.history_reported && tester.statistics.history.has_data) {
+		tester.statistics.history_reported = true;
+		history_statistics = tester.statistics.history;
+		request_start_ms = tester.statistics.request_start_ms;
+		request_started = tester.statistics.request_started;
+		report_history = true;
+	}
 	statistics = tester.statistics;
 	k_spin_unlock(&tester.lock, key);
 
-	post_throughput_summary(session_id, &statistics);
+	if (report_history) {
+		post_throughput_history(session_id, &history_statistics, request_start_ms,
+					request_started);
+	}
 	if (success) {
+		post_throughput_forward(session_id, &statistics.forward);
+		post_throughput_summary(session_id, &statistics.total);
 		post_event("STREAM_OK id=%u bytes=%u data_messages=%u", session_id, sensor_bytes,
 			   data_messages);
 	} else {
@@ -1620,6 +1714,10 @@ static int issue_nus_command(uint8_t opcode, uint32_t session_id)
 	tester.write_pending = true;
 	tester.last_command_opcode = opcode;
 	tester.last_command_session_id = session_id;
+	if (opcode == MSENSE_SENSOR_STREAM_OPCODE_START) {
+		tester.statistics.request_start_ms = k_uptime_get();
+		tester.statistics.request_started = true;
+	}
 	k_spin_unlock(&tester.lock, key);
 
 	command_write_data[0] = MSENSE_SENSOR_STREAM_MAGIC0;
@@ -1750,8 +1848,9 @@ static void print_status(void)
 		       "record_index=%u relay_dropped=%u", tester_state_name(state), subscribed, mtu,
 		       metadata.session_id, metadata.received_sensor_bytes,
 		       metadata.received_data_messages, metadata.expected_record_index, relay_dropped);
-	throughput_end_ms = state == TESTER_RECEIVING ? k_uptime_get() : statistics.last_data_ms;
-	print_live_throughput(metadata.session_id, &statistics, throughput_end_ms);
+	throughput_end_ms =
+		state == TESTER_RECEIVING ? k_uptime_get() : statistics.total.last_data_ms;
+	print_live_throughput(metadata.session_id, &statistics.total, throughput_end_ms);
 	print_ble_link(&link, mtu);
 }
 

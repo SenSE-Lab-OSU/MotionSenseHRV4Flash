@@ -7,6 +7,8 @@ import serial
 
 COMMAND_PORT = "COM23"
 RELAY_PORT = "COM22"
+COMMAND_BAUD = 115200
+RELAY_BAUD = 1_000_000
 CAPTURE_PATH = pathlib.Path(__file__).parent / "captures" / "ppg_continued.mrly"
 
 
@@ -32,10 +34,10 @@ def main():
     relay_data = bytearray()
     command_text = ""
     CAPTURE_PATH.parent.mkdir(exist_ok=True)
-    with serial.Serial(COMMAND_PORT, 115200, timeout=0.02, write_timeout=1,
+    with serial.Serial(COMMAND_PORT, COMMAND_BAUD, timeout=0.02, write_timeout=1,
                        rtscts=False, dsrdtr=False) as command, \
-         serial.Serial(RELAY_PORT, 115200, timeout=0.02, write_timeout=1,
-                       rtscts=False, dsrdtr=False) as relay:
+         serial.Serial(RELAY_PORT, RELAY_BAUD, timeout=0.02, write_timeout=1,
+                       rtscts=True, dsrdtr=False) as relay:
         command.dtr = True
         relay.dtr = True
         command.reset_input_buffer()

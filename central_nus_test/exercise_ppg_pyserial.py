@@ -7,7 +7,8 @@ import serial
 
 COMMAND_PORT = "COM23"
 RELAY_PORT = "COM22"
-BAUD = 115200
+COMMAND_BAUD = 115200
+RELAY_BAUD = 1_000_000
 
 
 def drain_text(port):
@@ -55,10 +56,10 @@ def relay_frames(data):
 
 def main():
     relay_data = bytearray()
-    with serial.Serial(COMMAND_PORT, BAUD, timeout=0.05, write_timeout=1,
+    with serial.Serial(COMMAND_PORT, COMMAND_BAUD, timeout=0.05, write_timeout=1,
                        rtscts=False, dsrdtr=False) as command, \
-         serial.Serial(RELAY_PORT, BAUD, timeout=0.02, write_timeout=1,
-                       rtscts=False, dsrdtr=False) as relay:
+         serial.Serial(RELAY_PORT, RELAY_BAUD, timeout=0.02, write_timeout=1,
+                       rtscts=True, dsrdtr=False) as relay:
         command.dtr = True
         relay.dtr = True
         command.reset_input_buffer()

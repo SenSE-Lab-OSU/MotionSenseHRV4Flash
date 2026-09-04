@@ -58,7 +58,8 @@ Interface-MCU virtual COM ports
 
 Connect the DK's **interface-MCU USB connector** to the host. It exposes the two
 VCOM ports used by the tester. On the nRF5340 DK, the native USB connector is
-not used for tester traffic. Open both ports as **115,200 baud, 8N1**.
+not used for tester traffic. Open the command port at **115,200 baud, 8N1**
+and the binary relay port at **1,000,000 baud, 8N1**.
 The host must assert DTR on each open port so the interface MCU connects its
 UART pins. Standard terminal programs and a normal ``pyserial`` open do this;
 set ``dtr = True`` explicitly when in doubt.
@@ -67,19 +68,19 @@ The firmware assigns the VCOMs as follows on the nRF5340 DK:
 
 * **Command/control:** nRF UARTE1, interface-MCU Serial Port 0, pins P1.01
   (TX) and P1.00 (RX), normally marked ``VCOM0`` on the DK. It carries plain
-  ASCII commands and replies.
+  ASCII commands and replies at 115,200 baud.
 * **Binary relay:** nRF UARTE0, interface-MCU Serial Port 1, pins P0.20 (TX)
   and P0.22 (RX), normally marked ``VCOM2`` on the DK. It uses the associated
   P0.19/P0.21 RTS/CTS pair for hardware flow control and carries only relay
-  frames.
+  frames at 1,000,000 baud.
 
 On the nRF54L15 DK, the assignments are:
 
 * **Command/control:** nRF UARTE30, interface-MCU Serial Port 0, pins P0.00
-  (TX) and P0.01 (RX).
+  (TX) and P0.01 (RX) at 115,200 baud.
 * **Binary relay:** nRF UARTE20, interface-MCU Serial Port 1, pins P1.04 (TX)
-  and P1.05 (RX), without RTS/CTS hardware flow control. The relay uses a
-  bounded asynchronous TX operation, so a stalled VCOM cannot block BLE
+  and P1.05 (RX) at 1,000,000 baud, without RTS/CTS hardware flow control.
+  The relay uses a bounded asynchronous TX operation, so a stalled VCOM cannot block BLE
   notification processing.
 
 COM numbers and some DK silkscreen labels are not reliable identifiers. Open
@@ -153,18 +154,35 @@ length update. Its ``tx_*`` fields describe Central-to-peripheral transport;
 the stream direction is represented by the ``rx_*`` fields. ``interval_ms_x100``
 is the interval in hundredths of a millisecond, avoiding floating-point output.
 
-Each END message is preceded by a summary such as:
+When the first forward DATA message arrives, the tester posts a completed
+history-phase summary. A successful END then posts the forward-phase summary
+and the backwards-compatible total summary before ``STREAM_OK``. For example:
 
 .. code-block:: text
 
+   THROUGHPUT_HISTORY id=1 active_elapsed_ms=183 request_elapsed_ms=967 data_notifs=68 raw_nus_bytes=33152 sensor_bytes=32768 mean_notif_bytes=487 notif_s=371.5 raw_kib_s=176.9 sensor_kib_s=174.8 max_gap_ms=8
+   THROUGHPUT_FORWARD id=1 active_elapsed_ms=9467 data_notifs=144 raw_nus_bytes=70216 sensor_bytes=65536 mean_notif_bytes=487 notif_s=15.2 raw_kib_s=7.2 sensor_kib_s=6.7 max_gap_ms=76
    THROUGHPUT id=1 elapsed_ms=10433 data_notifs=212 raw_nus_bytes=103368 sensor_bytes=98304 mean_notif_bytes=487 notif_s=20.3 raw_kib_s=9.6 sensor_kib_s=9.2 max_gap_ms=61
 
 ``raw_nus_bytes`` is the complete received DATA notification, including the
 MotionSense common and DATA headers but excluding ATT and relay framing.
-``sensor_bytes`` contains only sensor records. The elapsed period spans the
-first through last valid DATA notification. Rates are shown as decimal values
-without floating-point support, and ``max_gap_ms`` is the largest callback-to-
-callback gap. A ``status`` command additionally prints ``THROUGHPUT_LIVE``
+``sensor_bytes`` contains only sensor records. The ``active_elapsed_ms`` for a
+phase spans its first through last valid DATA notification; its rate fields use
+that active period. For history, ``request_elapsed_ms`` separately spans from
+immediately before the Central queues its START GATT write through the last
+history DATA callback. It therefore includes command, peripheral, and history
+availability delay rather than presenting the short history burst as the whole
+request.
+
+The total ``THROUGHPUT`` line retains its original ``elapsed_ms`` field and
+spans the first valid DATA notification of either phase through the last one.
+Consequently its rate and gap can include the wait between history and forward
+capture. History and forward ``max_gap_ms`` values are scoped to their own
+phase. Rates are shown as decimal values without floating-point support. A
+single DATA notification, or notifications with the same millisecond timestamp,
+has an active elapsed time of zero and reports zero rates rather than an
+undefined or infinite value; its counts, byte totals, and mean size remain
+valid. A ``status`` command additionally prints total ``THROUGHPUT_LIVE``
 using the current time while a stream is active, followed by the most recently
 reported ``BLE_LINK`` values.
 

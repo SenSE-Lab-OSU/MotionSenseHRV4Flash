@@ -10,10 +10,11 @@ $ErrorActionPreference = 'Stop'
 function New-TestPort {
     param(
         [Parameter(Mandatory)][string]$Name,
+        [int]$BaudRate = 115200,
         [System.IO.Ports.Handshake]$Handshake = [System.IO.Ports.Handshake]::None
     )
 
-    $port = [System.IO.Ports.SerialPort]::new($Name, 115200,
+    $port = [System.IO.Ports.SerialPort]::new($Name, $BaudRate,
         [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One)
     $port.Handshake = $Handshake
     $port.DtrEnable = $true
@@ -76,7 +77,7 @@ $relayPortName = @($Ports | Where-Object { $_ -ne $commandPortName })[0]
 Write-Output "PORT_MAPPING command=$commandPortName relay=$relayPortName"
 
 $commandPort = New-TestPort -Name $commandPortName
-$relayPort = New-TestPort -Name $relayPortName -Handshake RequestToSend
+$relayPort = New-TestPort -Name $relayPortName -BaudRate 1000000 -Handshake RequestToSend
 $capture = [System.Collections.Generic.List[byte]]::new()
 $commandText = ''
 $terminalResult = $null

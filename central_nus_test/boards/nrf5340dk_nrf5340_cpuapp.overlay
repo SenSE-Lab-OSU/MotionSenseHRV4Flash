@@ -28,7 +28,7 @@
 /* Serial Port 1/VCOM2: binary relay, with RTS/CTS to pace bursts. */
 &uart0 {
 	status = "okay";
-	current-speed = <115200>;
+	current-speed = <1000000>;
 	hw-flow-control;
 };
 

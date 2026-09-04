@@ -21,6 +21,8 @@ nathan_ignore/
 AGENTS.md
 docs/
 
+central_nus_test/captures/
+
 # C extensions
 *.so
 

@@ -1,3 +1,4 @@
+#include <string.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include "spi_nand.h"
@@ -192,29 +193,54 @@ int register_bad_sector(uint32_t sector_num){
         sector_num = convert_page_to_block(sector_num);
         sector_num = convert_block_to_page(0, sector_num);
     }
-	if (total_bad_sectors < bad_sector_detect_limit)
+	if (total_bad_sectors >= bad_sector_detect_limit)
 	{
-		bad_sectors[total_bad_sectors] = sector_num;
-		total_bad_sectors++;
-		LOG_WRN("New bad sector hit! total bad sectors: %d", sector_num);
-		save_bad_sectors_arr();
-	}
-	else{
 		LOG_ERR("Bad sectors hit max allowable bad limit");
+		return total_bad_sectors;
 	}
+
+	/* get_sector_offset() walks the table in order and skips a whole block per
+	 * entry, so it has to stay sorted ascending and free of duplicates. With
+	 * use_blocks any two failing pages in the same block floor to the same value,
+	 * so the duplicate check is what stops one bad block from costing two.
+	 */
+	int pos = 0;
+	while (pos < total_bad_sectors && bad_sectors[pos] < sector_num)
+	{
+		pos++;
+	}
+	if (pos < total_bad_sectors && bad_sectors[pos] == sector_num)
+	{
+		LOG_DBG("sect %u already registered, ignoring", sector_num);
+		return total_bad_sectors;
+	}
+
+	memmove(&bad_sectors[pos + 1], &bad_sectors[pos],
+		(total_bad_sectors - pos) * sizeof(bad_sectors[0]));
+	bad_sectors[pos] = sector_num;
+	total_bad_sectors++;
+	LOG_WRN("New bad sector hit! sect %u, total bad sectors: %d", sector_num,
+		total_bad_sectors);
+	save_bad_sectors_arr();
 	}
 	return total_bad_sectors;
 }
 
+/* Maps a logical sector onto the physical one by stepping over every bad entry at
+ * or below it. Relies on register_bad_sector() keeping the table sorted ascending:
+ * sector_num only ever grows, so the first entry above it means no later entry can
+ * match either and the walk can stop there.
+ */
 int get_sector_offset(int sector_num){
 	for (int x = 0; x < total_bad_sectors; x++){
-		if (bad_sectors[x] <= sector_num){
-            if (use_blocks){
-                sector_num += 64;
-            }
-            else{
+		if (bad_sectors[x] > (uint32_t)sector_num){
+			break;
+		}
+		if (use_blocks){
+			sector_num += NAND_PAGES_PER_ERASE_BLOCK;
+		}
+		else{
 			sector_num++;
-            }
 		}
 	}
 	return sector_num;

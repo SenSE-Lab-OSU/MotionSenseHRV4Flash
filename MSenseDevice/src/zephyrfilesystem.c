@@ -25,6 +25,7 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #if CONFIG_DISK_DRIVER_RAW_NAND
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
+#include "drivers/nand/bad_page.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -932,7 +933,7 @@ void print_out_page(int page_num){
 	
 	// can also just change this to disk_read()
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
-	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	multi_nand_page_read(filesystem_device2, get_sector_offset(page_num), test_read_buf);
 	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
 	if (page_num > 1500){
 		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);

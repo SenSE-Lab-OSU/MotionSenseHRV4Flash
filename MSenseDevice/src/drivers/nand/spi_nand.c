@@ -746,16 +746,31 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 }
 
 // since spi_nand_page_read only works on one flash, we have to do work to make it work 
+// takes a physical page number spanning all 4 flashes, selects the right flash/die
+// and reads. Bad block remapping belongs to the FTL above this layer, not here: the
+// caller passes the page it actually wants touched.
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
 	int ret;
 	if (current_reads % 5000 == 1000){
 		print_bad_sect_info();
 	}
-	int non_corrupt_sector = get_sector_offset(page_number);
-	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
+	off_t addr = convert_page_to_address(dev, page_number);
 	ret = spi_nand_page_read(dev, addr, buffer);
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
-		register_bad_sector(non_corrupt_sector);
+		register_bad_sector(page_number);
+	}
+	return ret;
+}
+
+// write counterpart to multi_nand_page_read: takes a physical page number spanning
+// all 4 flashes, selects the right flash/die and writes. A program failure (P_Fail)
+// marks the block bad, mirroring the read path.
+int multi_nand_page_write(const struct device* dev, uint32_t page_number, const void* buffer, size_t size){
+	off_t addr = convert_page_to_address(dev, page_number);
+	int ret = spi_nand_page_write(dev, addr, buffer, size);
+	if (ret != 0){
+		LOG_WRN("program fail stat %d at sect %d", ret, page_number);
+		register_bad_sector(page_number);
 	}
 	return ret;
 }

@@ -90,6 +90,7 @@ struct stream_tx_slot {
 	struct bt_gatt_notify_params params;
 	uint8_t data[STREAM_TX_SLOT_BYTES];
 	atomic_t in_use;
+	uintptr_t completion_token;
 	uint32_t session_generation;
 	bool history_data;
 	bool terminal_end;
@@ -101,6 +102,7 @@ struct stream_runtime {
 	uint8_t device_id[8];
 	char device_name[17];
 	char git_commit[41];
+	uintptr_t next_completion_token;
 	uint32_t connection_generation;
 	uint32_t session_generation;
 	uint32_t record_rate_numerator;
@@ -264,6 +266,12 @@ static void stream_disconnected(struct bt_conn *conn, uint8_t reason)
 		stream.history_collecting = stream.recording;
 		stream.state = stream.recording ? MSENSE_SENSOR_STREAM_STATE_HISTORY_FILLING :
 							  MSENSE_SENSOR_STREAM_STATE_NOT_RECORDING;
+		for (uint8_t i = 0U; i < ARRAY_SIZE(tx_slots); i++) {
+			tx_slots[i].history_data = false;
+			tx_slots[i].terminal_end = false;
+			tx_slots[i].completion_token = 0U;
+			atomic_clear(&tx_slots[i].in_use);
+		}
 		connection_generation = stream.connection_generation;
 	}
 	k_spin_unlock(&stream.lock, key);
@@ -521,11 +529,17 @@ static struct stream_tx_slot *stream_claim_tx_slot(void)
 	return NULL;
 }
 
-static void stream_release_tx_slot(struct stream_tx_slot *slot)
+static void stream_release_tx_slot(struct stream_tx_slot *slot, uintptr_t completion_token)
 {
-	slot->history_data = false;
-	slot->terminal_end = false;
-	atomic_clear(&slot->in_use);
+	k_spinlock_key_t key = k_spin_lock(&stream.lock);
+
+	if (atomic_get(&slot->in_use) != 0 && slot->completion_token == completion_token) {
+		slot->history_data = false;
+		slot->terminal_end = false;
+		slot->completion_token = 0U;
+		atomic_clear(&slot->in_use);
+	}
+	k_spin_unlock(&stream.lock, key);
 }
 
 static void stream_write_header(uint8_t *message, uint8_t message_type,
@@ -541,14 +555,34 @@ static void stream_write_header(uint8_t *message, uint8_t message_type,
 }
 
 static int stream_submit_slot(struct bt_conn *conn, struct stream_tx_slot *slot,
-			      uint16_t length)
+			      uint16_t length, uintptr_t *completion_token)
 {
+	uintptr_t token;
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&stream.lock);
+	if (atomic_get(&slot->in_use) == 0) {
+		k_spin_unlock(&stream.lock, key);
+		*completion_token = 0U;
+		return -ECONNRESET;
+	}
+
+	token = ++stream.next_completion_token;
+	if (token == 0U) {
+		token = ++stream.next_completion_token;
+	}
+	slot->completion_token = token;
 	memset(&slot->params, 0, sizeof(slot->params));
 	slot->params.attr = STREAM_TX_ATTR;
 	slot->params.data = slot->data;
 	slot->params.len = length;
 	slot->params.func = stream_notify_complete;
-	slot->params.user_data = slot;
+	/* The host treats user_data as opaque.  A unique token prevents a late
+	 * completion from releasing this slot after disconnect cleanup reused it. */
+	slot->params.user_data = UINT_TO_POINTER(token);
+	k_spin_unlock(&stream.lock, key);
+
+	*completion_token = token;
 
 	return bt_gatt_notify_cb(conn, &slot->params);
 }
@@ -590,13 +624,23 @@ static void stream_note_submit_success(void)
 
 static void stream_notify_complete(struct bt_conn *conn, void *user_data)
 {
-	struct stream_tx_slot *slot = user_data;
+	struct stream_tx_slot *slot = NULL;
+	uintptr_t completion_token = POINTER_TO_UINT(user_data);
 	k_spinlock_key_t key;
+	uint8_t i;
 
 	ARG_UNUSED(conn);
 
 	key = k_spin_lock(&stream.lock);
-	if (slot->session_generation == stream.session_generation && stream.session_active) {
+	for (i = 0U; i < ARRAY_SIZE(tx_slots); i++) {
+		if (atomic_get(&tx_slots[i].in_use) != 0 &&
+		    tx_slots[i].completion_token == completion_token) {
+			slot = &tx_slots[i];
+			break;
+		}
+	}
+	if (slot != NULL && slot->session_generation == stream.session_generation &&
+	    stream.session_active) {
 		if (slot->history_data && stream.history_data_inflight != 0U) {
 			stream.history_data_inflight--;
 			stream_maybe_start_fresh_history_locked();
@@ -605,9 +649,14 @@ static void stream_notify_complete(struct bt_conn *conn, void *user_data)
 			stream.terminal_complete = true;
 		}
 	}
+	if (slot != NULL) {
+		slot->history_data = false;
+		slot->terminal_end = false;
+		slot->completion_token = 0U;
+		atomic_clear(&slot->in_use);
+	}
 	k_spin_unlock(&stream.lock, key);
 
-	stream_release_tx_slot(slot);
 	k_sem_give(&stream_wake);
 }
 
@@ -648,6 +697,7 @@ static int stream_send_start_ack(void)
 	uint32_t session_id;
 	uint16_t message_len = MSENSE_SENSOR_STREAM_HEADER_BYTES +
 			       MSENSE_SENSOR_STREAM_START_ACK_BYTES;
+	uintptr_t completion_token = 0U;
 	int ret;
 	k_spinlock_key_t key;
 
@@ -666,7 +716,7 @@ static int stream_send_start_ack(void)
 	if (!stream.session_active || !stream.start_ack_pending ||
 	    connection_generation != stream.connection_generation) {
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, 0U);
 		bt_conn_unref(conn);
 		return 1;
 	}
@@ -695,10 +745,10 @@ static int stream_send_start_ack(void)
 	slot->terminal_end = false;
 	k_spin_unlock(&stream.lock, key);
 
-	ret = stream_submit_slot(conn, slot, message_len);
+	ret = stream_submit_slot(conn, slot, message_len, &completion_token);
 	bt_conn_unref(conn);
 	if (ret != 0) {
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, completion_token);
 		if (!stream_schedule_retry(ret)) {
 			key = k_spin_lock(&stream.lock);
 			if (stream.session_active && stream.session_generation == session_generation) {
@@ -729,6 +779,7 @@ static int stream_send_terminal(void)
 	uint32_t session_id;
 	uint16_t message_len = MSENSE_SENSOR_STREAM_HEADER_BYTES +
 			       MSENSE_SENSOR_STREAM_END_BYTES;
+	uintptr_t completion_token = 0U;
 	int ret;
 	k_spinlock_key_t key;
 
@@ -747,7 +798,7 @@ static int stream_send_terminal(void)
 	if (!stream.session_active || !stream.terminal_pending || stream.terminal_submitted ||
 	    connection_generation != stream.connection_generation) {
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, 0U);
 		bt_conn_unref(conn);
 		return 1;
 	}
@@ -771,7 +822,7 @@ static int stream_send_terminal(void)
 	stream.terminal_submitted = true;
 	k_spin_unlock(&stream.lock, key);
 
-	ret = stream_submit_slot(conn, slot, message_len);
+	ret = stream_submit_slot(conn, slot, message_len, &completion_token);
 	bt_conn_unref(conn);
 	if (ret != 0) {
 		key = k_spin_lock(&stream.lock);
@@ -779,7 +830,7 @@ static int stream_send_terminal(void)
 			stream.terminal_submitted = false;
 		}
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, completion_token);
 		if (!stream_schedule_retry(ret)) {
 			key = k_spin_lock(&stream.lock);
 			if (stream.session_active && stream.session_generation == session_generation) {
@@ -804,6 +855,7 @@ static int stream_send_pending_result(void)
 	uint32_t connection_generation;
 	uint16_t message_len = MSENSE_SENSOR_STREAM_HEADER_BYTES +
 			       MSENSE_SENSOR_STREAM_RESULT_BYTES;
+	uintptr_t completion_token = 0U;
 	int ret;
 	k_spinlock_key_t key;
 
@@ -846,10 +898,10 @@ static int stream_send_pending_result(void)
 	slot->history_data = false;
 	slot->terminal_end = false;
 
-	ret = stream_submit_slot(conn, slot, message_len);
+	ret = stream_submit_slot(conn, slot, message_len, &completion_token);
 	bt_conn_unref(conn);
 	if (ret != 0) {
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, completion_token);
 		if (!stream_schedule_retry(ret)) {
 			key = k_spin_lock(&stream.lock);
 			if (stream.result_count != 0U &&
@@ -889,6 +941,7 @@ static int stream_send_data(void)
 	uint16_t record_count;
 	uint16_t payload_length;
 	uint16_t message_length;
+	uintptr_t completion_token = 0U;
 	uint16_t mtu;
 	uint8_t phase;
 	bool history_data;
@@ -933,7 +986,7 @@ static int stream_send_data(void)
 	    stream.start_ack_pending || stream.terminal_pending || stream.terminal_submitted ||
 	    connection_generation != stream.connection_generation) {
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, 0U);
 		bt_conn_unref(conn);
 		return 1;
 	}
@@ -952,7 +1005,7 @@ static int stream_send_data(void)
 		history_data = false;
 	} else {
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, 0U);
 		bt_conn_unref(conn);
 		return 0;
 	}
@@ -994,7 +1047,7 @@ static int stream_send_data(void)
 	}
 	k_spin_unlock(&stream.lock, key);
 
-	ret = stream_submit_slot(conn, slot, message_length);
+	ret = stream_submit_slot(conn, slot, message_length, &completion_token);
 	bt_conn_unref(conn);
 	if (ret != 0) {
 		key = k_spin_lock(&stream.lock);
@@ -1003,7 +1056,7 @@ static int stream_send_data(void)
 			stream.history_data_inflight--;
 		}
 		k_spin_unlock(&stream.lock, key);
-		stream_release_tx_slot(slot);
+		stream_release_tx_slot(slot, completion_token);
 		if (!stream_schedule_retry(ret)) {
 			key = k_spin_lock(&stream.lock);
 			if (stream.session_active && stream.session_generation == session_generation &&

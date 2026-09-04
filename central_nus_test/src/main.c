@@ -772,8 +772,7 @@ static void print_ble_link(const struct ble_link_info *link, uint16_t mtu)
 
 static bool geometry_is_valid(const struct stream_metadata *metadata)
 {
-	if (metadata->total_sensor_bytes != MSENSE_SENSOR_STREAM_SENSOR_BYTES ||
-	    (uint64_t)metadata->record_size *
+	if ((uint64_t)metadata->record_size *
 		    ((uint64_t)metadata->history_records + metadata->forward_records) !=
 		    metadata->total_sensor_bytes) {
 		return false;
@@ -784,14 +783,18 @@ static bool geometry_is_valid(const struct stream_metadata *metadata)
 		       metadata->record_size == MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE &&
 		       metadata->rate_numerator == 256U && metadata->rate_denominator == 1U &&
 		       metadata->history_records == MSENSE_SENSOR_STREAM_PPG_HISTORY_RECORDS &&
-		       metadata->forward_records == MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS;
+		       metadata->forward_records == MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS &&
+		       metadata->total_sensor_bytes ==
+			       MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES;
 	}
 	if (metadata->device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
 		return metadata->record_format_version == 1U &&
 		       metadata->record_size == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE &&
 		       metadata->rate_numerator == 512U && metadata->rate_denominator == 1U &&
 		       metadata->history_records == MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS &&
-		       metadata->forward_records == MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS;
+		       metadata->forward_records == MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS &&
+		       metadata->total_sensor_bytes ==
+			       MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES;
 	}
 
 	return false;
@@ -924,10 +927,12 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 	k_spin_unlock(&tester.lock, key);
 
 	device_id_to_hex(metadata.device_id, device_id);
-	post_event("START_ACK type=%s name=%s id=%s commit=%s tree=%u records=%u+%u mtu=%u",
+	post_event("START_ACK type=%s name=%s id=%s commit=%s tree=%u records=%u+%u bytes=%u "
+		   "mtu=%u",
 		   metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG ? "PPG" : "ECG",
 		   metadata.device_name, device_id, metadata.git_commit, metadata.git_tree_state,
-		   metadata.history_records, metadata.forward_records, mtu);
+		   metadata.history_records, metadata.forward_records, metadata.total_sensor_bytes,
+		   mtu);
 }
 
 static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t length,

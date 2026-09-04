@@ -5,9 +5,9 @@ This is a deliberately small, temporary tester for the MotionSense version-1
 bounded sensor stream. It runs on an nRF5340 DK or nRF54L15 DK as a Bluetooth
 LE Central and connects to either a PPG or ECG peripheral. It discovers
 standard Nordic UART
-Service (NUS), requests the fixed 96 KiB stream, validates the protocol, and
-relays every received NUS notification unchanged to a second interface-MCU
-virtual COM port.
+Service (NUS), requests the fixed device-specific stream (131,072 bytes for
+PPG or 131,076 bytes for ECG), validates the protocol, and relays every
+received NUS notification unchanged to a second interface-MCU virtual COM port.
 
 It is for protocol and interoperability testing, not a production Central.
 
@@ -19,36 +19,38 @@ For the nRF5340 DK:
 
 .. code-block:: powershell
 
-   & 'C:\nathan\NordicMCP\west-ncs.cmd' build `
-     --build-dir 'C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340' `
-     'C:\nathan\MotionSenseHRV4Flash\central_nus_test' `
-     --pristine --board 'nrf5340dk/nrf5340/cpuapp'
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\senselab-tools\vscode-wrapper\ncs-build.ps1 `
+     -ApplicationRoot 'D:\MotionSenseHRV4Flash\central_nus_test' `
+     -Board 'nrf5340dk/nrf5340/cpuapp' `
+     -BuildDirectory 'D:\MotionSenseHRV4Flash\central_nus_test\build_nrf5340' `
+     -Pristine
 
 For the nRF54L15 DK:
 
 .. code-block:: powershell
 
-   & 'C:\nathan\NordicMCP\west-ncs.cmd' build `
-     --build-dir 'C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf54l15' `
-     'C:\nathan\MotionSenseHRV4Flash\central_nus_test' `
-     --pristine --board 'nrf54l15dk/nrf54l15/cpuapp'
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\senselab-tools\vscode-wrapper\ncs-build.ps1 `
+     -ApplicationRoot 'D:\MotionSenseHRV4Flash\central_nus_test' `
+     -Board 'nrf54l15dk/nrf54l15/cpuapp' `
+     -BuildDirectory 'D:\MotionSenseHRV4Flash\central_nus_test\build_nrf54l15' `
+     -Pristine
 
 The nRF5340 build includes the standard HCI IPC Bluetooth Controller image for
 the network core. It produces two domain images, which must both be programmed
 in the order recorded by ``build_nrf5340\domains.yaml``:
 
-* ``C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex``
+* ``D:\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex``
   (network-core controller)
-* ``C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex``
+* ``D:\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex``
   (application-core tester)
 
 For example, when ``nrfutil`` is available and a single DK is attached:
 
 .. code-block:: powershell
 
-   nrfutil device program --firmware C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
-   nrfutil device program --firmware C:\nathan\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP
-   nrfutil device reset --reset-kind=RESET_PIN
+   nrfutil --log-output stdout device program --serial-number <serial-number> --core network --firmware D:\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged_CPUNET.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP,reset=RESET_NONE
+   nrfutil --log-output stdout device program --serial-number <serial-number> --core application --firmware D:\MotionSenseHRV4Flash\central_nus_test\build_nrf5340\merged.hex --options verify=VERIFY_READ,chip_erase_mode=ERASE_CTRL_AP,reset=RESET_NONE
+   nrfutil --log-output stdout device reset --serial-number <serial-number> --core application --reset-kind=RESET_PIN
 
 The nRF54L15 has an application-core-local Bluetooth controller, so its build
 does not produce or require a separate ``merged_CPUNET.hex`` image.
@@ -138,8 +140,8 @@ Useful command-port results include:
    ATT_MTU 498
    NUS_READY mtu=498 tx=0x.... rx=0x.... cccd=0x....
    START_SENT id=1
-   START_ACK type=PPG ... records=2048+4096 ...
-   STREAM_OK id=1 bytes=98304 data_messages=...
+   START_ACK type=PPG ... records=2048+6144 bytes=131072 ...
+   STREAM_OK id=1 bytes=131072 data_messages=...
 
 ``START_RESULT`` is a rejected START, for example ``NOT_RECORDING`` or
 ``HISTORY_NOT_READY``. ``STREAM_END`` means the accepted session did not pass
@@ -156,13 +158,14 @@ is the interval in hundredths of a millisecond, avoiding floating-point output.
 
 When the first forward DATA message arrives, the tester posts a completed
 history-phase summary. A successful END then posts the forward-phase summary
-and the backwards-compatible total summary before ``STREAM_OK``. For example:
+and the backwards-compatible total summary before ``STREAM_OK``. For example,
+the PPG byte counts are:
 
 .. code-block:: text
 
-   THROUGHPUT_HISTORY id=1 active_elapsed_ms=183 request_elapsed_ms=967 data_notifs=68 raw_nus_bytes=33152 sensor_bytes=32768 mean_notif_bytes=487 notif_s=371.5 raw_kib_s=176.9 sensor_kib_s=174.8 max_gap_ms=8
-   THROUGHPUT_FORWARD id=1 active_elapsed_ms=9467 data_notifs=144 raw_nus_bytes=70216 sensor_bytes=65536 mean_notif_bytes=487 notif_s=15.2 raw_kib_s=7.2 sensor_kib_s=6.7 max_gap_ms=76
-   THROUGHPUT id=1 elapsed_ms=10433 data_notifs=212 raw_nus_bytes=103368 sensor_bytes=98304 mean_notif_bytes=487 notif_s=20.3 raw_kib_s=9.6 sensor_kib_s=9.2 max_gap_ms=61
+   THROUGHPUT_HISTORY id=1 ... sensor_bytes=32768 ...
+   THROUGHPUT_FORWARD id=1 ... sensor_bytes=98304 ...
+   THROUGHPUT id=1 ... sensor_bytes=131072 ...
 
 ``raw_nus_bytes`` is the complete received DATA notification, including the
 MotionSense common and DATA headers but excluding ATT and relay framing.
@@ -249,10 +252,11 @@ Expected workflow
    every queued frame to the VCOM UART.
 5. Independently parse the relay frames and verify the raw stream against disk
    records. The tester itself checks framing, START_ACK geometry, DATA
-   sequence/index/phase/count, END counts, and exactly 98,304 sensor bytes.
+   sequence/index/phase/count, END counts, and exactly 131,072 PPG or 131,076
+   ECG sensor bytes.
 
-The peripheral must acquire the 64 KiB future portion before it can finish:
-roughly 16 seconds for PPG and 10.7 seconds for ECG, plus BLE drain time.
+The peripheral must acquire the 96 KiB future portion before it can finish:
+roughly 24 seconds for PPG and 16 seconds for ECG, plus BLE drain time.
 
 Scope limits
 ------------

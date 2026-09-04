@@ -11,15 +11,16 @@ This document specifies an on-demand Bluetooth stream that returns recent and
 future sensor records over a Nordic UART Service (NUS)-compatible GATT service.
 It is the firmware handoff for implementation and verification.
 
-A successful request always returns exactly 96 KiB (98,304 bytes) of sensor
-record payload:
+A successful request returns a device-specific bounded sensor-record payload:
 
+- PPG: exactly 131,072 bytes (128 KiB);
+- ECG: exactly 131,076 bytes;
 - approximately 32 KiB captured before the request from a RAM history ring;
-- approximately 64 KiB captured after the request in a forward buffer.
+- exactly 96 KiB captured after the request in a forward buffer.
 
 The records sent over Bluetooth are byte-for-byte copies of the records
 accepted by the disk-storage pipeline. Protocol framing is additional to the
-98,304 sensor bytes.
+device-specific sensor bytes reported in START_ACK.
 
 The feature is available only while the device is already recording. A stream
 request must never start recording, change acquisition settings, or change
@@ -39,8 +40,9 @@ shared/sensor_stream.c
 Both applications enable `CONFIG_MSENSE_SENSOR_STREAM=y` and disable
 `CONFIG_LOG_BACKEND_BLE`. The shared implementation owns the standard NUS
 service, one dedicated 2,048-byte stream thread stack, three fixed TX slots,
-the 96 KiB capture buffer, command processing, packetization, and session
-cleanup. It performs no dynamic allocation.
+the 131,076-byte capture buffer sized for the larger whole-record payload,
+command processing, packetization, and session cleanup. It performs no dynamic
+allocation.
 
 The PPG and ECG producer integrations call the stream module only after
 `store_data()` accepts the corresponding disk-format record. Recording
@@ -54,9 +56,9 @@ Serial wrapper builds completed successfully for both targets on 2026-09-01:
 
 Static review, configuration inspection, linker inspection, and
 `git diff --check` passed. No new stream-related compiler errors or warnings
-were found. Hardware/on-air interoperability, throughput, chronology,
-disconnect, cancellation, and fault-injection testing remain pending. No
-host-native protocol test suite was added in the initial implementation.
+were found. A source-only CMake regression test guards the exact PPG and ECG
+geometry. Hardware/on-air interoperability, throughput, chronology,
+disconnect, cancellation, and fault-injection testing remain pending.
 
 ## Existing system
 
@@ -134,27 +136,29 @@ that record.
 
 ## Fixed capture geometry
 
-The application allocates exactly 98,304 bytes for sensor records. Protocol TX
-packet buffers and the stream thread stack are separate.
+The shared implementation allocates 131,076 bytes, which fits the larger ECG
+payload. Each START_ACK and END reports its device-specific payload total;
+protocol TX packet buffers and the stream thread stack are separate.
 
 ### PPG geometry
 
 | Portion | Records | Bytes | Nominal duration |
 | --- | ---: | ---: | ---: |
 | History | 2,048 | 32,768 | 8 s |
-| Forward | 4,096 | 65,536 | 16 s |
-| Total | 6,144 | 98,304 | 24 s |
+| Forward | 6,144 | 98,304 | 24 s |
+| Total | 8,192 | 131,072 | 32 s |
 
 ### ECG geometry
 
-Twelve-byte records do not divide both 32 KiB and 64 KiB exactly. The split is
-adjusted by four bytes while preserving an exact 96 KiB total.
+Twelve-byte records do not divide 32 KiB exactly, so the existing 2,731-record
+history remains 32,772 bytes. The 8,192-record forward portion is exactly
+96 KiB; the full payload is therefore four bytes larger than 128 KiB.
 
 | Portion | Records | Bytes | Nominal duration |
 | --- | ---: | ---: | ---: |
 | History | 2,731 | 32,772 | 5.333984375 s |
-| Forward | 5,461 | 65,532 | 10.666015625 s |
-| Total | 8,192 | 98,304 | 16 s |
+| Forward | 8,192 | 98,304 | 16 s |
+| Total | 10,923 | 131,076 | 21.333984375 s |
 
 Compile-time assertions enforce record size, portion counts, portion byte
 sizes, and total byte size. These values are not computed from floating-point
@@ -178,7 +182,7 @@ The shared module owns:
 - the standard NUS GATT service;
 - command validation;
 - stream state and synchronization;
-- the 96 KiB record buffer;
+- the 131,076-byte record buffer;
 - history-ring and forward-buffer cursors;
 - notification packetization and pacing;
 - connection and CCCD state;
@@ -303,12 +307,12 @@ On acceptance:
 7. Route the next configured number of accepted sensor records only to the
    forward portion, never to history.
 8. Transmit whole forward records as they become available.
-9. Queue END/SUCCESS after all 98,304 sensor bytes have been submitted in DATA
-   messages in order.
+9. Queue END/SUCCESS after all configured device-specific sensor bytes have
+    been submitted in DATA messages in order.
 
 ### Rebuilding history without retransmitting the forward window
 
-The 64 KiB forward window is excluded permanently from later history. Reuse
+The 96 KiB forward window is excluded permanently from later history. Reuse
 the history region only after both conditions are true:
 
 - every frozen-history DATA notification has completed and no TX slot refers
@@ -457,8 +461,8 @@ MTU of at least 128.
 | 4 | 4 | Record-rate numerator, `uint32_le` | 256 | 512 |
 | 8 | 4 | Record-rate denominator, `uint32_le` | 1 | 1 |
 | 12 | 4 | History record count, `uint32_le` | 2,048 | 2,731 |
-| 16 | 4 | Forward record count, `uint32_le` | 4,096 | 5,461 |
-| 20 | 4 | Total sensor payload bytes, `uint32_le` | 98,304 | 98,304 |
+| 16 | 4 | Forward record count, `uint32_le` | 6,144 | 8,192 |
+| 20 | 4 | Total sensor payload bytes, `uint32_le` | 131,072 | 131,076 |
 | 24 | 8 | Device ID | Raw `msense_device_identity_bytes()` order |
 | 32 | 1 | Device-name length | 1-16 |
 | 33 | 16 | Device name | UTF-8/ASCII, zero padded, no required terminator |
@@ -481,7 +485,7 @@ The DATA payload begins with a 12-byte data prefix followed by sensor records:
 | Payload offset | Size | Field | Description |
 | ---: | ---: | --- | --- |
 | 0 | 4 | Data sequence | Starts at zero; increments for each DATA message |
-| 4 | 4 | First record index | Zero-based index in the full 96 KiB stream |
+| 4 | 4 | First record index | Zero-based index in the full device-specific stream |
 | 8 | 2 | Record count | Whole records in this message |
 | 10 | 1 | Phase | `0x00=history`, `0x01=forward` |
 | 11 | 1 | Reserved | Zero |
@@ -545,7 +549,7 @@ available. END is terminal for the session. No DATA follows END.
 
 | Value | Name | Meaning |
 | ---: | --- | --- |
-| `0x0000` | `SUCCESS` | Complete 96 KiB stream. |
+| `0x0000` | `SUCCESS` | Complete configured device-specific stream. |
 | `0x0001` | `NOT_RECORDING` | Device is not recording. |
 | `0x0002` | `HISTORY_NOT_READY` | A complete fresh history window is unavailable. |
 | `0x0003` | `NOT_SUBSCRIBED` | TX notifications are not enabled. |
@@ -602,7 +606,8 @@ length, and controller scheduling.
 
 Required behavior under a slow link:
 
-- history and forward capture remain lossless within the fixed 96 KiB window;
+- history and forward capture remain lossless within the fixed device-specific
+  payload window;
 - disk recording remains correct;
 - forward capture stops after its exact record count;
 - BLE may finish draining after capture ends;
@@ -611,10 +616,9 @@ Required behavior under a slow link:
 
 ## Memory requirements
 
-The completed builds, including the 96 KiB record buffer, stream code, three TX
-slots, and 2,048-byte stream thread stack, leave approximately 103 KiB of
-application RAM headroom for PPG and 106 KiB for ECG. These values exceed the
-64 KiB implementation gate.
+The expanded build includes the 131,076-byte capture buffer, stream code,
+three TX slots, and the 2,048-byte stream thread stack. Final linker reports
+must preserve the 64 KiB application-RAM headroom gate for both products.
 
 Remaining memory-validation gates:
 
@@ -657,8 +661,8 @@ ECG firmware builds. It has not yet been exercised over a physical BLE link.
 - All command and TX structs have the specified sizes and offsets.
 - Little-endian encoding is explicit and independent of host alignment.
 - START_ACK contains exact identity/name/commit bytes and zero padding.
-- PPG geometry is 2,048 + 4,096 records and exactly 98,304 bytes.
-- ECG geometry is 2,731 + 5,461 records and exactly 98,304 bytes.
+- PPG geometry is 2,048 + 6,144 records and exactly 131,072 bytes.
+- ECG geometry is 2,731 + 8,192 records and exactly 131,076 bytes.
 - History wrap is emitted oldest-first.
 - START freezes a complete history snapshot.
 - Exactly the configured next records enter forward storage.
@@ -674,12 +678,12 @@ ECG firmware builds. It has not yet been exercised over a physical BLE link.
 
 - Discover the standard NUS service and subscribe to TX.
 - Verify START_ACK name, 64-bit ID, device type, and running firmware commit.
-- Verify exactly 98,304 sensor bytes and a SUCCESS END.
+- Verify exactly 131,072 PPG or 131,076 ECG sensor bytes and a SUCCESS END.
 - Compare every streamed byte against the corresponding persisted disk records.
 - Verify history-to-forward tick continuity, including 32-bit tick wrap tests if
   practical.
-- Confirm PPG response is 24 seconds and ECG response is 16 seconds by record
-  count/ticks.
+- Confirm PPG response is 32 seconds and ECG response is about 21.334 seconds
+  by record count/ticks.
 - Request before history is full and observe `HISTORY_NOT_READY`.
 - Complete a stream, immediately request again, and observe
   `HISTORY_NOT_READY`; retry after the fresh window and succeed without any

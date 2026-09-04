@@ -36,24 +36,30 @@ BUILD_ASSERT(MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE *
 		     MSENSE_SENSOR_STREAM_PPG_HISTORY_RECORDS == 32768U,
 	     "PPG history geometry must be 32 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE *
-		     MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS == 65536U,
-	     "PPG forward geometry must be 64 KiB");
+		     MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS == 98304U,
+	     "PPG forward geometry must be 96 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE *
 		     (MSENSE_SENSOR_STREAM_PPG_HISTORY_RECORDS +
 		      MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS) ==
-		     MSENSE_SENSOR_STREAM_SENSOR_BYTES,
-	     "PPG total geometry must be 96 KiB");
+		     MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES,
+	     "PPG total geometry must be 128 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
 		     MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS == 32772U,
 	     "ECG history geometry must be 32772 bytes");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
-		     MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS == 65532U,
-	     "ECG forward geometry must be 65532 bytes");
+		     MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS == 98304U,
+	     "ECG forward geometry must be 96 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
 		     (MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS +
 		      MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS) ==
-		     MSENSE_SENSOR_STREAM_SENSOR_BYTES,
-	     "ECG total geometry must be 96 KiB");
+		     MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES,
+	     "ECG total geometry must be 131076 bytes");
+BUILD_ASSERT(MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES >=
+		     MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES,
+	     "Capture buffer must fit PPG payload");
+BUILD_ASSERT(MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES >=
+		     MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES,
+	     "Capture buffer must fit ECG payload");
 BUILD_ASSERT(CONFIG_BT_L2CAP_TX_MTU >= STREAM_REQUIRED_ATT_MTU,
 	     "The local NUS stream MTU must support the protocol minimum");
 BUILD_ASSERT(STREAM_TX_SLOT_BYTES >=
@@ -101,6 +107,7 @@ struct stream_runtime {
 	uint32_t record_rate_denominator;
 	uint32_t history_record_count;
 	uint32_t forward_record_count;
+	uint32_t total_sensor_bytes;
 	uint32_t history_count;
 	uint32_t history_write_index;
 	uint32_t frozen_history_start;
@@ -141,7 +148,7 @@ struct stream_runtime {
 };
 
 /* Keep the large zero-initialized payload buffer in .bss, not flash-backed .data. */
-static uint8_t stream_record_buffer[MSENSE_SENSOR_STREAM_SENSOR_BYTES];
+static uint8_t stream_record_buffer[MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES];
 
 static struct stream_runtime stream = {
 	.state = MSENSE_SENSOR_STREAM_STATE_UNINITIALIZED,
@@ -330,9 +337,6 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 
 	total_bytes = (uint64_t)config->record_size *
 		      ((uint64_t)config->history_record_count + config->forward_record_count);
-	if (total_bytes != MSENSE_SENSOR_STREAM_SENSOR_BYTES) {
-		return false;
-	}
 
 	if (config->device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG) {
 		return config->record_size == MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE &&
@@ -341,7 +345,8 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 		       config->history_record_count ==
 			       MSENSE_SENSOR_STREAM_PPG_HISTORY_RECORDS &&
 		       config->forward_record_count ==
-			       MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS;
+			       MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS &&
+		       total_bytes == MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES;
 	}
 	if (config->device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
 		return config->record_size == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE &&
@@ -350,7 +355,8 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 		       config->history_record_count ==
 			       MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS &&
 		       config->forward_record_count ==
-			       MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS;
+			       MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS &&
+		       total_bytes == MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES;
 	}
 
 	return false;
@@ -676,7 +682,7 @@ static int stream_send_start_ack(void)
 	sys_put_le32(stream.record_rate_denominator, &slot->data[20]);
 	sys_put_le32(stream.history_record_count, &slot->data[24]);
 	sys_put_le32(stream.forward_record_count, &slot->data[28]);
-	sys_put_le32(MSENSE_SENSOR_STREAM_SENSOR_BYTES, &slot->data[32]);
+	sys_put_le32(stream.total_sensor_bytes, &slot->data[32]);
 	memcpy(&slot->data[36], stream.device_id, sizeof(stream.device_id));
 	slot->data[44] = stream.device_name_len;
 	memset(&slot->data[45], 0, 16U);
@@ -1388,6 +1394,8 @@ int msense_sensor_stream_init(const struct msense_sensor_stream_config *config)
 	stream.record_rate_denominator = config->record_rate_denominator;
 	stream.history_record_count = config->history_record_count;
 	stream.forward_record_count = config->forward_record_count;
+	stream.total_sensor_bytes = (uint32_t)config->record_size *
+				    (config->history_record_count + config->forward_record_count);
 	memcpy(stream.device_id, config->device_id, sizeof(stream.device_id));
 	memset(stream.device_name, 0, sizeof(stream.device_name));
 	memcpy(stream.device_name, config->device_name, config->device_name_len);

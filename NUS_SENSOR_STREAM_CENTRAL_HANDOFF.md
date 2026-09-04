@@ -48,12 +48,13 @@ recommended timeout and retry values below.
 8. Receive ordered DATA notifications containing history and then forward
    sensor records.
 9. Receive END with SUCCESS.
-10. Confirm that DATA contained exactly 98,304 sensor bytes and the record/count
-   metadata matches START_ACK.
+10. Confirm that DATA contained the device-specific byte total in START_ACK
+    (131,072 for PPG or 131,076 for ECG) and that all record/count metadata
+    matches START_ACK.
 
 The first portion was recorded immediately before START; the second portion is
-captured after START. The peripheral may take approximately 16 seconds (PPG)
-or 10.7 seconds (ECG) merely to acquire the future portion. Do not impose a
+captured after START. The peripheral may take approximately 24 seconds (PPG)
+or 16 seconds (ECG) merely to acquire the future portion. Do not impose a
 short request timeout.
 
 ## Locating the peripheral
@@ -163,7 +164,7 @@ outstanding/recent operations. A random 32-bit value or monotonic counter is
 acceptable. The accepted request ID becomes the session ID in every TX message.
 
 START has no size or duration argument. Every accepted version-1 START requests
-the fixed 96 KiB sensor payload.
+the fixed, device-specific history-plus-forward payload reported in START_ACK.
 
 To cancel, write CANCEL with the active session ID. Do not assume local
 cancellation is complete until END/CANCELLED arrives or the connection closes.
@@ -229,8 +230,8 @@ Version-1 validation expectations:
 
 | Device | Record size | Rate | History records | Forward records | Total bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| PPG | 16 | 256/1 Hz | 2,048 | 4,096 | 98,304 |
-| ECG | 12 | 512/1 Hz | 2,731 | 5,461 | 98,304 |
+| PPG | 16 | 256/1 Hz | 2,048 | 6,144 | 131,072 |
+| ECG | 12 | 512/1 Hz | 2,731 | 8,192 | 131,076 |
 
 Reject START_ACK if:
 
@@ -239,7 +240,7 @@ Reject START_ACK if:
 - the Git commit is not 40 hexadecimal characters;
 - reserved bytes are nonzero;
 - counts multiplied by record size do not equal the total;
-- total is not 98,304 in protocol version 1;
+- total does not match the device type's table value;
 - the device-type record geometry does not match the table.
 
 Render Device ID as 16 uppercase hexadecimal characters by formatting each of
@@ -287,9 +288,9 @@ Append only the bytes after the DATA prefix to the output sensor payload. Do
 not write NUS framing into the raw `.ppg`/`.ecg` stream file unless defining a
 separate container format.
 
-The Central may process records incrementally or retain the 98,304-byte payload
-in memory. Retaining the full payload makes validation and atomic persistence
-simpler.
+The Central may process records incrementally or retain the device-specific
+131,072-byte PPG or 131,076-byte ECG payload in memory. Retaining the full
+payload makes validation and atomic persistence simpler.
 
 ## RESULT
 
@@ -322,7 +323,8 @@ For SUCCESS require:
 
 - history records equal START_ACK history count;
 - forward records equal START_ACK forward count;
-- sensor bytes equal 98,304 and the locally accumulated byte count;
+- sensor bytes equal START_ACK total bytes and the locally accumulated byte
+  count;
 - DATA message count equals the number locally received;
 - detail is zero;
 - all sequence and record-index checks passed.
@@ -376,8 +378,8 @@ Recommended initial Central policy:
 
 - START_ACK/RESULT timeout after successful RX write: 5 seconds.
 - In-session idle timeout while connected: 5 seconds without any DATA or END.
-- Overall PPG transaction timeout: at least 45 seconds.
-- Overall ECG transaction timeout: at least 35 seconds.
+- Overall PPG transaction timeout: at least 60 seconds.
+- Overall ECG transaction timeout: at least 45 seconds.
 
 These are host safety bounds, not expected durations. Reset the idle timer on
 every valid session notification. They are provisional until measured against
@@ -469,7 +471,8 @@ builds; they remain required for Central integration and hardware acceptance.
 - Parse and validate fixed START_ACK metadata for both device types.
 - Confirm Device ID formatting matches the device's `uuid.txt` identity.
 - Confirm Git commit matches the flashed build artifact.
-- Reassemble exactly 98,304 sensor bytes across different negotiated MTUs.
+- Reassemble exactly 131,072 PPG or 131,076 ECG sensor bytes across different
+  negotiated MTUs.
 - Validate sequence, record indices, phase boundary, and END counts.
 - Confirm PPG and ECG record streams parse using their referenced documents.
 - Confirm NOT_RECORDING and HISTORY_NOT_READY handling.

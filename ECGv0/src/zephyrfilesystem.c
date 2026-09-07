@@ -150,7 +150,7 @@ typedef struct MotionSenseFile {
 //File Objects
 //static MotionSenseFile current_file;
 
-/* store_data checks one sample ahead; this flushes 8184-byte ECG chunks. */
+/* ECG pages are written by ecgRecorder.c; this legacy buffer remains for logs. */
 MotionSenseFile ecg_file = {
 	.write_size = 8196,
 	/*
@@ -159,7 +159,7 @@ MotionSenseFile ecg_file = {
 	 */
 	.max_writes = RECORDING_FILE_BYTES / 8196,
 	.sensor_string = "ecg",
-	.sensor_format = "12-byte MAX30001 ECG frames: A5 EC type flags rtc_tick_le raw24 crc8"
+	.sensor_format = "ECB1 4096-byte MAX30001 ECG blocks with CRC-32"
 };
 
 MotionSenseFile log_file = {

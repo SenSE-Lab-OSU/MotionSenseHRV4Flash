@@ -44,8 +44,8 @@ BUILD_ASSERT(MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE *
 		     MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES,
 	     "PPG total geometry must be 128 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
-		     MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS == 32772U,
-	     "ECG history geometry must be 32772 bytes");
+		     MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS == 32768U,
+	     "ECG history geometry must be 32 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
 		     MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS == 98304U,
 	     "ECG forward geometry must be 96 KiB");
@@ -53,7 +53,7 @@ BUILD_ASSERT(MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE *
 		     (MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS +
 		      MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS) ==
 		     MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES,
-	     "ECG total geometry must be 131076 bytes");
+	     "ECG total geometry must be 128 KiB");
 BUILD_ASSERT(MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES >=
 		     MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES,
 	     "Capture buffer must fit PPG payload");
@@ -117,6 +117,7 @@ struct stream_runtime {
 	uint32_t history_data_inflight;
 	uint32_t forward_count;
 	uint32_t forward_tx_index;
+	uint32_t data_byte_offset;
 	uint32_t data_sequence;
 	uint32_t data_message_count;
 	uint32_t session_id;
@@ -129,6 +130,7 @@ struct stream_runtime {
 	uint16_t terminal_status;
 	int32_t terminal_detail;
 	uint8_t device_type;
+	uint8_t protocol_version;
 	uint8_t record_format_version;
 	uint8_t device_name_len;
 	uint8_t git_tree_state;
@@ -142,6 +144,7 @@ struct stream_runtime {
 	bool history_collecting;
 	bool history_tx_finished;
 	bool session_active;
+	bool ecg_start_arming;
 	bool start_ack_pending;
 	bool terminal_pending;
 	bool terminal_submitted;
@@ -218,6 +221,7 @@ static void stream_connected(struct bt_conn *conn, uint8_t err)
 		stream.notifications_enabled = false;
 		stream.session_generation++;
 		stream.session_active = false;
+		stream.ecg_start_arming = false;
 		stream.start_ack_pending = false;
 		stream.terminal_pending = false;
 		stream.terminal_submitted = false;
@@ -256,6 +260,7 @@ static void stream_disconnected(struct bt_conn *conn, uint8_t reason)
 		stream.notifications_enabled = false;
 		stream.session_generation++;
 		stream.session_active = false;
+		stream.ecg_start_arming = false;
 		stream.start_ack_pending = false;
 		stream.terminal_pending = false;
 		stream.terminal_submitted = false;
@@ -347,7 +352,8 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 		      ((uint64_t)config->history_record_count + config->forward_record_count);
 
 	if (config->device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG) {
-		return config->record_size == MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE &&
+		return config->protocol_version == MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_PPG &&
+		       config->record_size == MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE &&
 		       config->record_rate_numerator == 256U &&
 		       config->record_rate_denominator == 1U &&
 		       config->history_record_count ==
@@ -357,7 +363,8 @@ static bool stream_config_is_valid(const struct msense_sensor_stream_config *con
 		       total_bytes == MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES;
 	}
 	if (config->device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
-		return config->record_size == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE &&
+		return config->protocol_version == MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG &&
+		       config->record_size == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE &&
 		       config->record_rate_numerator == 512U &&
 		       config->record_rate_denominator == 1U &&
 		       config->history_record_count ==
@@ -403,6 +410,7 @@ static void stream_reset_session_locked(void)
 {
 	stream.session_generation++;
 	stream.session_active = false;
+	stream.ecg_start_arming = false;
 	stream.start_ack_pending = false;
 	stream.terminal_pending = false;
 	stream.terminal_submitted = false;
@@ -413,6 +421,7 @@ static void stream_reset_session_locked(void)
 	stream.history_tx_index = 0U;
 	stream.forward_count = 0U;
 	stream.forward_tx_index = 0U;
+	stream.data_byte_offset = 0U;
 	stream.data_sequence = 0U;
 	stream.data_message_count = 0U;
 	stream.retry_count = 0U;
@@ -449,9 +458,9 @@ static void stream_begin_terminal_locked(uint16_t status, int32_t detail,
 	stream.terminal_detail = detail;
 	stream.terminal_history_sent = stream.history_tx_index;
 	stream.terminal_forward_captured = stream.forward_count;
-	stream.terminal_bytes_sent =
-		(stream.history_tx_index + stream.forward_tx_index) * stream.record_size;
+	stream.terminal_bytes_sent = stream.data_byte_offset;
 	stream.terminal_data_messages = stream.data_message_count;
+	stream.ecg_start_arming = false;
 	stream.terminal_pending = true;
 	stream.state = MSENSE_SENSOR_STREAM_STATE_ABORTING;
 
@@ -542,12 +551,12 @@ static void stream_release_tx_slot(struct stream_tx_slot *slot, uintptr_t comple
 	k_spin_unlock(&stream.lock, key);
 }
 
-static void stream_write_header(uint8_t *message, uint8_t message_type,
-				uint32_t session_id, uint16_t payload_len)
+static void stream_write_header(uint8_t *message, uint8_t protocol_version,
+				uint8_t message_type, uint32_t session_id, uint16_t payload_len)
 {
 	message[0] = MSENSE_SENSOR_STREAM_MAGIC0;
 	message[1] = MSENSE_SENSOR_STREAM_MAGIC1;
-	message[2] = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION;
+	message[2] = protocol_version;
 	message[3] = message_type;
 	sys_put_le32(session_id, &message[4]);
 	sys_put_le16(payload_len, &message[8]);
@@ -672,12 +681,14 @@ static bool stream_finalize_terminal(void)
 		stream.terminal_pending = false;
 		stream.terminal_submitted = false;
 		stream.terminal_complete = false;
+		stream.ecg_start_arming = false;
 		stream.history_tx_finished = false;
 		stream.history_data_inflight = 0U;
 		stream.frozen_history_start = 0U;
 		stream.history_tx_index = 0U;
 		stream.forward_count = 0U;
 		stream.forward_tx_index = 0U;
+		stream.data_byte_offset = 0U;
 		stream.data_sequence = 0U;
 		stream.data_message_count = 0U;
 		stream.state = stream_post_terminal_state_locked();
@@ -723,7 +734,8 @@ static int stream_send_start_ack(void)
 
 	session_generation = stream.session_generation;
 	session_id = stream.session_id;
-	stream_write_header(slot->data, MSENSE_SENSOR_STREAM_MESSAGE_START_ACK, session_id,
+	stream_write_header(slot->data, stream.protocol_version,
+			    MSENSE_SENSOR_STREAM_MESSAGE_START_ACK, session_id,
 			    MSENSE_SENSOR_STREAM_START_ACK_BYTES);
 	slot->data[12] = stream.device_type;
 	slot->data[13] = stream.record_format_version;
@@ -805,7 +817,8 @@ static int stream_send_terminal(void)
 
 	session_generation = stream.session_generation;
 	session_id = stream.session_id;
-	stream_write_header(slot->data, MSENSE_SENSOR_STREAM_MESSAGE_END, session_id,
+	stream_write_header(slot->data, stream.protocol_version,
+			    MSENSE_SENSOR_STREAM_MESSAGE_END, session_id,
 			    MSENSE_SENSOR_STREAM_END_BYTES);
 	sys_put_le16(stream.terminal_status, &slot->data[12]);
 	slot->data[14] = stream_post_terminal_state_locked();
@@ -889,7 +902,8 @@ static int stream_send_pending_result(void)
 		return 0;
 	}
 
-	stream_write_header(slot->data, MSENSE_SENSOR_STREAM_MESSAGE_RESULT,
+	stream_write_header(slot->data, stream.protocol_version,
+			    MSENSE_SENSOR_STREAM_MESSAGE_RESULT,
 			    result.session_id, MSENSE_SENSOR_STREAM_RESULT_BYTES);
 	sys_put_le16(result.status, &slot->data[12]);
 	slot->data[14] = result.state;
@@ -937,14 +951,19 @@ static int stream_send_data(void)
 	uint32_t source_index;
 	uint32_t record_index;
 	uint32_t remaining;
+	uint32_t block_offset;
 	uint16_t max_records;
 	uint16_t record_count;
+	uint16_t max_fragment_bytes;
+	uint16_t fragment_bytes;
 	uint16_t payload_length;
 	uint16_t message_length;
 	uintptr_t completion_token = 0U;
 	uint16_t mtu;
 	uint8_t phase;
+	uint8_t fragment_flags;
 	bool history_data;
+	bool ecg_fragments;
 	int ret;
 	uint16_t i;
 	k_spinlock_key_t key;
@@ -967,13 +986,13 @@ static int stream_send_data(void)
 		return 1;
 	}
 
-	max_records = (mtu - STREAM_ATT_NOTIFY_OVERHEAD -
-		       MSENSE_SENSOR_STREAM_HEADER_BYTES -
-		       MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES) / stream.record_size;
-	if (max_records == 0U) {
+	max_fragment_bytes = mtu - STREAM_ATT_NOTIFY_OVERHEAD -
+		MSENSE_SENSOR_STREAM_HEADER_BYTES - MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES;
+	if (max_fragment_bytes == 0U) {
 		bt_conn_unref(conn);
 		return 0;
 	}
+	max_records = max_fragment_bytes / stream.record_size;
 
 	slot = stream_claim_tx_slot();
 	if (slot == NULL) {
@@ -991,17 +1010,27 @@ static int stream_send_data(void)
 		return 1;
 	}
 
+	ecg_fragments = stream.protocol_version == MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG;
+	if (!ecg_fragments && max_records == 0U) {
+		k_spin_unlock(&stream.lock, key);
+		stream_release_tx_slot(slot, 0U);
+		bt_conn_unref(conn);
+		return 0;
+	}
+
 	if (stream.history_tx_index < stream.history_record_count) {
 		phase = 0U;
 		record_index = stream.history_tx_index;
 		remaining = stream.history_record_count - stream.history_tx_index;
-		record_count = (uint16_t)MIN((uint32_t)max_records, remaining);
+		record_count = ecg_fragments ? 1U : (uint16_t)MIN((uint32_t)max_records,
+							     remaining);
 		history_data = true;
 	} else if (stream.forward_tx_index < stream.forward_count) {
 		phase = 1U;
 		record_index = stream.history_record_count + stream.forward_tx_index;
 		remaining = stream.forward_count - stream.forward_tx_index;
-		record_count = (uint16_t)MIN((uint32_t)max_records, remaining);
+		record_count = ecg_fragments ? 1U : (uint16_t)MIN((uint32_t)max_records,
+							     remaining);
 		history_data = false;
 	} else {
 		k_spin_unlock(&stream.lock, key);
@@ -1010,32 +1039,69 @@ static int stream_send_data(void)
 		return 0;
 	}
 
+	block_offset = ecg_fragments ? stream.data_byte_offset % stream.record_size : 0U;
+	fragment_bytes = ecg_fragments ? (uint16_t)MIN((uint32_t)max_fragment_bytes,
+							 stream.record_size - block_offset) : 0U;
+	if (ecg_fragments && fragment_bytes == 0U) {
+		k_spin_unlock(&stream.lock, key);
+		stream_release_tx_slot(slot, 0U);
+		bt_conn_unref(conn);
+		return 0;
+	}
+
 	payload_length = MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES +
-			 record_count * stream.record_size;
+			 (ecg_fragments ? fragment_bytes : record_count * stream.record_size);
 	message_length = MSENSE_SENSOR_STREAM_HEADER_BYTES + payload_length;
 	session_generation = stream.session_generation;
-	stream_write_header(slot->data, MSENSE_SENSOR_STREAM_MESSAGE_DATA, stream.session_id,
+	stream_write_header(slot->data, stream.protocol_version,
+			    MSENSE_SENSOR_STREAM_MESSAGE_DATA, stream.session_id,
 			    payload_length);
 	sys_put_le32(stream.data_sequence, &slot->data[12]);
-	sys_put_le32(record_index, &slot->data[16]);
-	sys_put_le16(record_count, &slot->data[20]);
+	sys_put_le32(ecg_fragments ? stream.data_byte_offset : record_index, &slot->data[16]);
+	sys_put_le16(ecg_fragments ? fragment_bytes : record_count, &slot->data[20]);
 	slot->data[22] = phase;
-	slot->data[23] = 0U;
+	fragment_flags = 0U;
+	if (ecg_fragments) {
+		if (block_offset == 0U) {
+			fragment_flags |= MSENSE_SENSOR_STREAM_ECG_FRAGMENT_FLAG_BLOCK_START;
+		}
+		if (block_offset + fragment_bytes == stream.record_size) {
+			fragment_flags |= MSENSE_SENSOR_STREAM_ECG_FRAGMENT_FLAG_BLOCK_END;
+		}
+	}
+	slot->data[23] = fragment_flags;
 
-	for (i = 0U; i < record_count; i++) {
+	if (ecg_fragments) {
 		if (history_data) {
-			source_index = stream.frozen_history_start + stream.history_tx_index + i;
+			source_index = stream.frozen_history_start + stream.history_tx_index;
 			if (source_index >= stream.history_record_count) {
 				source_index -= stream.history_record_count;
 			}
-			memcpy(&slot->data[24U + i * stream.record_size],
-			       &stream_history_buffer()[source_index * stream.record_size],
-			       stream.record_size);
+			memcpy(&slot->data[24U],
+			       &stream_history_buffer()[source_index * stream.record_size + block_offset],
+			       fragment_bytes);
 		} else {
-			source_index = stream.forward_tx_index + i;
-			memcpy(&slot->data[24U + i * stream.record_size],
-			       &stream_forward_buffer()[source_index * stream.record_size],
-			       stream.record_size);
+			source_index = stream.forward_tx_index;
+			memcpy(&slot->data[24U],
+			       &stream_forward_buffer()[source_index * stream.record_size + block_offset],
+			       fragment_bytes);
+		}
+	} else {
+		for (i = 0U; i < record_count; i++) {
+			if (history_data) {
+				source_index = stream.frozen_history_start + stream.history_tx_index + i;
+				if (source_index >= stream.history_record_count) {
+					source_index -= stream.history_record_count;
+				}
+				memcpy(&slot->data[24U + i * stream.record_size],
+				       &stream_history_buffer()[source_index * stream.record_size],
+				       stream.record_size);
+			} else {
+				source_index = stream.forward_tx_index + i;
+				memcpy(&slot->data[24U + i * stream.record_size],
+				       &stream_forward_buffer()[source_index * stream.record_size],
+				       stream.record_size);
+			}
 		}
 	}
 
@@ -1076,20 +1142,33 @@ static int stream_send_data(void)
 
 	key = k_spin_lock(&stream.lock);
 	if (stream.session_active && stream.session_generation == session_generation) {
-		if (history_data) {
+		if (ecg_fragments) {
+			stream.data_byte_offset += fragment_bytes;
+			if (block_offset + fragment_bytes == stream.record_size) {
+				if (history_data) {
+					stream.history_tx_index++;
+					if (stream.history_tx_index == stream.history_record_count) {
+						stream.history_tx_finished = true;
+					}
+				} else {
+					stream.forward_tx_index++;
+				}
+			}
+		} else if (history_data) {
 			stream.history_tx_index += record_count;
+			stream.data_byte_offset += record_count * stream.record_size;
 			if (stream.history_tx_index == stream.history_record_count) {
 				stream.history_tx_finished = true;
 			}
 		} else {
 			stream.forward_tx_index += record_count;
+			stream.data_byte_offset += record_count * stream.record_size;
 		}
 		stream.data_sequence++;
 		stream.data_message_count++;
 		if (stream.terminal_pending || stream.terminal_submitted) {
 			stream.terminal_history_sent = stream.history_tx_index;
-			stream.terminal_bytes_sent =
-				(stream.history_tx_index + stream.forward_tx_index) * stream.record_size;
+			stream.terminal_bytes_sent = stream.data_byte_offset;
 			stream.terminal_data_messages = stream.data_message_count;
 		}
 		stream_maybe_start_fresh_history_locked();
@@ -1148,10 +1227,14 @@ static void stream_process_start(const struct stream_command *command)
 		stream.history_data_inflight = 0U;
 		stream.forward_count = 0U;
 		stream.forward_tx_index = 0U;
+		stream.data_byte_offset = 0U;
 		stream.data_sequence = 0U;
 		stream.data_message_count = 0U;
 		stream.retry_count = 0U;
-		stream.history_collecting = false;
+		/* A finalized ECB1 block defines the post-START stream boundary. */
+		stream.ecg_start_arming =
+			stream.protocol_version == MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG;
+		stream.history_collecting = stream.ecg_start_arming;
 		stream.history_tx_finished = false;
 		stream.start_ack_pending = true;
 		stream.terminal_pending = false;
@@ -1267,7 +1350,8 @@ static bool stream_maybe_begin_success_terminal(void)
 
 	if (stream.session_active && stream.state == MSENSE_SENSOR_STREAM_STATE_ACTIVE &&
 	    !stream.start_ack_pending && !stream.terminal_pending &&
-	    !stream.terminal_submitted && stream.history_tx_index == stream.history_record_count &&
+	    !stream.terminal_submitted && !stream.ecg_start_arming &&
+	    stream.history_tx_index == stream.history_record_count &&
 	    stream.history_data_inflight == 0U && stream.history_collecting &&
 	    stream.forward_count == stream.forward_record_count &&
 	    stream.forward_tx_index == stream.forward_record_count) {
@@ -1285,6 +1369,7 @@ static bool stream_can_send_data(void)
 
 	active = stream.session_active && stream.state == MSENSE_SENSOR_STREAM_STATE_ACTIVE &&
 		 !stream.start_ack_pending && !stream.terminal_pending && !stream.terminal_submitted &&
+		 !stream.ecg_start_arming &&
 		 (stream.history_tx_index < stream.history_record_count ||
 		  stream.forward_tx_index < stream.forward_count);
 	k_spin_unlock(&stream.lock, key);
@@ -1348,6 +1433,7 @@ static ssize_t stream_rx_write(struct bt_conn *conn, const struct bt_gatt_attr *
 {
 	const uint8_t *command_bytes = buf;
 	struct stream_command command = { 0 };
+	uint8_t protocol_version;
 	k_spinlock_key_t key;
 
 	ARG_UNUSED(attr);
@@ -1368,6 +1454,7 @@ static ssize_t stream_rx_write(struct bt_conn *conn, const struct bt_gatt_attr *
 		return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
 	}
 	command.connection_generation = stream.connection_generation;
+	protocol_version = stream.protocol_version;
 	k_spin_unlock(&stream.lock, key);
 	command.session_id = sys_get_le32(&command_bytes[4]);
 
@@ -1375,7 +1462,7 @@ static ssize_t stream_rx_write(struct bt_conn *conn, const struct bt_gatt_attr *
 	    command_bytes[1] != MSENSE_SENSOR_STREAM_MAGIC1 || command.session_id == 0U) {
 		command.kind = STREAM_COMMAND_RESULT;
 		command.result_status = MSENSE_SENSOR_STREAM_STATUS_INVALID_COMMAND;
-	} else if (command_bytes[2] != MSENSE_SENSOR_STREAM_PROTOCOL_VERSION) {
+	} else if (command_bytes[2] != protocol_version) {
 		command.kind = STREAM_COMMAND_RESULT;
 		command.result_status = MSENSE_SENSOR_STREAM_STATUS_UNSUPPORTED_VERSION;
 	} else if (command_bytes[3] == MSENSE_SENSOR_STREAM_OPCODE_START) {
@@ -1440,6 +1527,7 @@ int msense_sensor_stream_init(const struct msense_sensor_stream_config *config)
 	}
 
 	stream.device_type = config->device_type;
+	stream.protocol_version = config->protocol_version;
 	stream.record_format_version = config->record_format_version;
 	stream.device_name_len = (uint8_t)config->device_name_len;
 	stream.record_size = config->record_size;
@@ -1536,6 +1624,13 @@ int msense_sensor_stream_accept_record(const void *record, size_t record_size)
 			wake = true;
 		} else if (stream.history_collecting) {
 			stream_append_history_locked(record_bytes);
+			if (stream.ecg_start_arming) {
+				/* Keep this complete boundary block in history before freezing it. */
+				stream.ecg_start_arming = false;
+				stream.history_collecting = false;
+				stream.frozen_history_start = stream.history_write_index;
+				wake = true;
+			}
 		}
 	} else if (stream.state == MSENSE_SENSOR_STREAM_STATE_ABORTING &&
 		   stream.session_active && stream.history_collecting) {

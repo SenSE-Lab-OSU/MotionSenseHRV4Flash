@@ -69,7 +69,6 @@ target_sources(app PRIVATE
 	src/accelRecorder.c
 	src/accelTimingEstimator.c
 	src/batterymonitordt.c
-	src/ecgRecordFormat.c
 	src/ecgRecorder.c
 	src/filesystemlogging_policy.c
 	src/icm20948_accel.c

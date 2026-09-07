@@ -10,10 +10,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
+#include <ff.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
@@ -26,6 +29,9 @@ LOG_MODULE_REGISTER(ecg_recorder, CONFIG_LOG_LEVEL_MAX30001);
 #define ECG_RECORD_THREAD_STACK_SIZE 4096
 #define ECG_RECORD_THREAD_PRIORITY 5
 #define ECG_RECORD_ANCHOR_TIMEOUT_MS 100
+#define ECG_RECORD_BUFFER_COUNT 4U
+#define ECG_RECORD_SYNC_INTERVAL_BLOCKS 8U
+#define ECG_RECORD_PATH_MAX 96U
 
 static const struct gpio_dt_spec ecg_intb =
 	GPIO_DT_SPEC_GET(ECG_RECORD_MAX30001_NODE, intb_gpios);
@@ -57,8 +63,42 @@ static atomic_t ecg_anchor_state;
 static atomic_t ecg_anchor_error;
 static uint32_t ecg_anchor_rtc_tick;
 static uint32_t ecg_next_rtc_tick;
+static uint32_t ecg_next_sample_index;
+static uint64_t ecg_record_session_id;
 static ecg_recorder_fault_handler_t ecg_record_fault_handler;
 static void *ecg_record_fault_context;
+
+enum ecg_record_block_state {
+	ECG_RECORD_BLOCK_FREE,
+	ECG_RECORD_BLOCK_FILLING,
+	ECG_RECORD_BLOCK_QUEUED,
+	ECG_RECORD_BLOCK_WRITING,
+};
+
+struct ecg_record_block {
+	struct k_work work;
+	uint8_t data[MSENSE_ECG_BLOCK_BYTES];
+	atomic_t state;
+	uint16_t sample_count;
+	uint32_t first_rtc_tick;
+	uint32_t first_sample_index;
+	bool sync_after_write;
+};
+
+static struct ecg_record_block ecg_record_blocks[ECG_RECORD_BUFFER_COUNT] __aligned(4);
+static struct ecg_record_block *ecg_record_filling_block;
+static struct fs_file_t ecg_record_file;
+static uint8_t ecg_record_metadata_page[MSENSE_ECG_BLOCK_BYTES] __aligned(4);
+static bool ecg_record_writer_initialized;
+static bool ecg_record_file_open;
+static atomic_t ecg_record_writer_error;
+static uint32_t ecg_record_chunk_index;
+static uint32_t ecg_record_chunk_block_count;
+static uint64_t ecg_record_chunk_sample_count;
+static uint32_t ecg_record_chunk_first_sample_index;
+static uint32_t ecg_record_chunk_next_sample_index;
+static uint32_t ecg_record_session_full_block_count;
+static char ecg_record_path[ECG_RECORD_PATH_MAX];
 
 enum ecg_record_anchor_state {
 	ECG_RECORD_ANCHOR_IDLE = 0,
@@ -246,45 +286,321 @@ static int ecg_record_wait_for_anchor(uint32_t *rtc_tick)
 	return -EIO;
 }
 
-/**
- * @brief Serialize one ECG sample into a framed record and queue it for
- *        storage.
- *
- * Packs the sample into a fixed 12-byte frame designed to be robust when
- * read back from raw storage:
- *
- *   [0]  sync byte 0xA5        [1]  sync byte 0xEC
- *   [2]  record type (0x01)    [3]  ETAG (bits 0-2) | PTAG (bits 3-5)
- *   [4-7]  32-bit 512 Hz collection RTC tick, little-endian
- *   [8-10] 24-bit raw ECG sample, big-endian
- *   [11] CRC-8 over bytes 2-10
- *
- * The two sync bytes let a parser resynchronize mid-stream and the CRC
- * catches corruption. The timestamp is assigned when this time-valid FIFO
- * sample is persisted, not when it was read from the batched FIFO.
- *
- * @param sample Decoded ECG sample to store.
- * @param rtc_tick Collection RTC tick associated with sample.
- */
-static int ecg_record_store_sample(const struct max30001_ecg_sample *sample,
-				   uint32_t rtc_tick)
+static void ecg_record_report_writer_fault(int error)
 {
-	uint8_t frame[ECG_RECORD_FORMAT_FRAME_BYTES];
+	if (atomic_cas(&ecg_record_writer_error, 0, error == 0 ? -EIO : error)) {
+		msense_sensor_stream_storage_failed(error == 0 ? -EIO : error);
+		LOG_ERR("ECG block storage failed: %d", error == 0 ? -EIO : error);
+	}
+}
+
+static void ecg_record_block_work_handler(struct k_work *work)
+{
+	struct ecg_record_block *block =
+		CONTAINER_OF(work, struct ecg_record_block, work);
+	ssize_t written;
+	int ret = 0;
+
+	atomic_set(&block->state, ECG_RECORD_BLOCK_WRITING);
+	if (!ecg_record_file_open) {
+		ret = -EIO;
+	} else {
+		written = fs_write(&ecg_record_file, block->data, MSENSE_ECG_BLOCK_BYTES);
+		if (written != (ssize_t)MSENSE_ECG_BLOCK_BYTES) {
+			ret = written < 0 ? (int)written : -EIO;
+		} else if (block->sync_after_write) {
+			ret = fs_sync(&ecg_record_file);
+		}
+	}
+
+	if (ret != 0) {
+		ecg_record_report_writer_fault(ret);
+	}
+	atomic_set(&block->state, ECG_RECORD_BLOCK_FREE);
+}
+
+static void ecg_record_writer_initialize(void)
+{
+	size_t index;
+
+	if (ecg_record_writer_initialized) {
+		return;
+	}
+
+	for (index = 0U; index < ARRAY_SIZE(ecg_record_blocks); index++) {
+		k_work_init(&ecg_record_blocks[index].work, ecg_record_block_work_handler);
+		atomic_set(&ecg_record_blocks[index].state, ECG_RECORD_BLOCK_FREE);
+	}
+	ecg_record_writer_initialized = true;
+}
+
+static struct ecg_record_block *ecg_record_take_free_block(void)
+{
+	size_t index;
+
+	for (index = 0U; index < ARRAY_SIZE(ecg_record_blocks); index++) {
+		if (atomic_cas(&ecg_record_blocks[index].state, ECG_RECORD_BLOCK_FREE,
+			       ECG_RECORD_BLOCK_FILLING)) {
+			memset(ecg_record_blocks[index].data, 0, sizeof(ecg_record_blocks[index].data));
+			ecg_record_blocks[index].sample_count = 0U;
+			ecg_record_blocks[index].first_rtc_tick = 0U;
+			ecg_record_blocks[index].first_sample_index = 0U;
+			ecg_record_blocks[index].sync_after_write = false;
+			return &ecg_record_blocks[index];
+		}
+	}
+
+	return NULL;
+}
+
+static int ecg_record_open_current_chunk(void)
+{
+	struct fs_dirent entry;
+	FRESULT fatfs_ret;
+	ssize_t written;
 	int ret;
 
-	BUILD_ASSERT(ECG_RECORD_FORMAT_FRAME_BYTES == MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE,
-		     "ECG record must match the sensor stream contract");
-
-	ecg_record_format_build_sample_frame(frame, sample->etag, sample->ptag,
-					 sample->raw, rtc_tick);
-
-	ret = store_data(frame, sizeof(frame), ecg);
+	ret = filesystem_make_recording_chunk_path(ecg_record_path, sizeof(ecg_record_path),
+						  "ecg", ecg_record_session_id,
+						  ecg_record_chunk_index);
 	if (ret != 0) {
-		msense_sensor_stream_storage_failed(ret);
 		return ret;
 	}
-	(void)msense_sensor_stream_accept_record(frame, sizeof(frame));
+	ret = fs_stat(ecg_record_path, &entry);
+	if (ret == 0) {
+		return -EEXIST;
+	}
+	if (ret != -ENOENT) {
+		return ret;
+	}
+
+	fs_file_t_init(&ecg_record_file);
+	ret = fs_open(&ecg_record_file, ecg_record_path, FS_O_CREATE | FS_O_WRITE);
+	if (ret != 0) {
+		return ret;
+	}
+	ecg_record_file_open = true;
+	fatfs_ret = f_expand((FIL *)ecg_record_file.filep, MSENSE_ECG_FILE_BYTES, 1);
+	if (fatfs_ret != FR_OK) {
+		ret = -EIO;
+		goto fail;
+	}
+
+	msense_ecg_file_header_build(ecg_record_metadata_page, ecg_record_session_id,
+					     ecg_record_chunk_index);
+	written = fs_write(&ecg_record_file, ecg_record_metadata_page,
+			   MSENSE_ECG_FILE_HEADER_BYTES);
+	if (written != (ssize_t)MSENSE_ECG_FILE_HEADER_BYTES) {
+		ret = written < 0 ? (int)written : -EIO;
+		goto fail;
+	}
+	ret = fs_sync(&ecg_record_file);
+	if (ret != 0) {
+		goto fail;
+	}
+
+	LOG_INF("ECG recording to %s", ecg_record_path);
 	return 0;
+
+fail:
+	(void)fs_close(&ecg_record_file);
+	ecg_record_file_open = false;
+	return ret;
+}
+
+static int ecg_record_close_current_chunk(bool clean_close)
+{
+	ssize_t written;
+	int ret = 0;
+	int close_ret;
+
+	if (!ecg_record_file_open) {
+		return 0;
+	}
+	if (clean_close) {
+		msense_ecg_file_trailer_build(ecg_record_metadata_page,
+					      ecg_record_chunk_block_count,
+					      ecg_record_chunk_sample_count,
+					      ecg_record_chunk_first_sample_index,
+					      ecg_record_chunk_next_sample_index, true);
+		ret = fs_seek(&ecg_record_file, MSENSE_ECG_FILE_TRAILER_OFFSET, FS_SEEK_SET);
+		if (ret == 0) {
+			written = fs_write(&ecg_record_file, ecg_record_metadata_page,
+					   MSENSE_ECG_FILE_TRAILER_BYTES);
+			if (written != (ssize_t)MSENSE_ECG_FILE_TRAILER_BYTES) {
+				ret = written < 0 ? (int)written : -EIO;
+			}
+		}
+		if (ret == 0) {
+			ret = fs_sync(&ecg_record_file);
+		}
+	}
+
+	close_ret = fs_close(&ecg_record_file);
+	ecg_record_file_open = false;
+	if (ret == 0 && close_ret != 0) {
+		ret = close_ret;
+	}
+	return ret;
+}
+
+static int ecg_record_rotate_chunk(void)
+{
+	int ret;
+
+	if (ecg_record_chunk_block_count != MSENSE_ECG_FILE_DATA_BLOCKS) {
+		return 0;
+	}
+	ret = k_work_queue_drain(&my_work_q, false);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = atomic_get(&ecg_record_writer_error);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = ecg_record_close_current_chunk(true);
+	if (ret != 0) {
+		return ret;
+	}
+
+	ecg_record_chunk_index++;
+	ecg_record_chunk_block_count = 0U;
+	ecg_record_chunk_sample_count = 0U;
+	ecg_record_chunk_first_sample_index = 0U;
+	ecg_record_chunk_next_sample_index = 0U;
+	return ecg_record_open_current_chunk();
+}
+
+static int ecg_record_take_filling_block(void)
+{
+	int ret;
+
+	if (ecg_record_filling_block != NULL) {
+		return 0;
+	}
+	ret = ecg_record_rotate_chunk();
+	if (ret != 0) {
+		return ret;
+	}
+	ecg_record_filling_block = ecg_record_take_free_block();
+	return ecg_record_filling_block == NULL ? -ENOMEM : 0;
+}
+
+static int ecg_record_queue_finalized_block(struct ecg_record_block *block)
+{
+	int ret;
+
+	if (ecg_record_chunk_block_count >= MSENSE_ECG_FILE_DATA_BLOCKS) {
+		return -ENOSPC;
+	}
+	block->sync_after_write =
+		(block->sample_count != MSENSE_ECG_BLOCK_SAMPLES_PER_FULL_BLOCK) ||
+		((ecg_record_session_full_block_count % ECG_RECORD_SYNC_INTERVAL_BLOCKS) == 0U);
+	atomic_set(&block->state, ECG_RECORD_BLOCK_QUEUED);
+	ret = k_work_submit_to_queue(&my_work_q, &block->work);
+	if (ret != 1) {
+		atomic_set(&block->state, ECG_RECORD_BLOCK_FREE);
+		return ret < 0 ? ret : -EALREADY;
+	}
+
+	if (ecg_record_chunk_block_count == 0U) {
+		ecg_record_chunk_first_sample_index = block->first_sample_index;
+	}
+	ecg_record_chunk_block_count++;
+	ecg_record_chunk_sample_count += block->sample_count;
+	ecg_record_chunk_next_sample_index = block->first_sample_index + block->sample_count;
+	return 0;
+}
+
+static int ecg_record_finalize_filling_block(void)
+{
+	struct ecg_record_block *block = ecg_record_filling_block;
+	int ret;
+
+	if (block == NULL || block->sample_count == 0U) {
+		return 0;
+	}
+	ret = msense_ecg_block_finalize(block->data, block->sample_count);
+	if (ret != 0) {
+		atomic_set(&block->state, ECG_RECORD_BLOCK_FREE);
+		ecg_record_filling_block = NULL;
+		return ret;
+	}
+	if (block->sample_count == MSENSE_ECG_BLOCK_SAMPLES_PER_FULL_BLOCK) {
+		ecg_record_session_full_block_count++;
+	}
+	ret = msense_sensor_stream_accept_record(block->data, MSENSE_ECG_BLOCK_BYTES);
+	if (ret != 0) {
+		atomic_set(&block->state, ECG_RECORD_BLOCK_FREE);
+		ecg_record_filling_block = NULL;
+		return ret;
+	}
+	ret = ecg_record_queue_finalized_block(block);
+	if (ret != 0) {
+		ecg_record_report_writer_fault(ret);
+		atomic_set(&block->state, ECG_RECORD_BLOCK_FREE);
+		ecg_record_filling_block = NULL;
+		return ret;
+	}
+	ecg_record_filling_block = NULL;
+	return 0;
+}
+
+static int ecg_record_finish_file(bool clean_close)
+{
+	int ret;
+
+	if (!clean_close && ecg_record_filling_block != NULL) {
+		atomic_set(&ecg_record_filling_block->state, ECG_RECORD_BLOCK_FREE);
+		ecg_record_filling_block = NULL;
+	}
+	ret = k_work_queue_drain(&my_work_q, false);
+	if (ret != 0) {
+		return ret;
+	}
+	if (clean_close) {
+		ret = atomic_get(&ecg_record_writer_error);
+		if (ret != 0) {
+			clean_close = false;
+		}
+	}
+	return ecg_record_close_current_chunk(clean_close);
+}
+
+/* Append one time-valid FIFO word to the current immutable ECB1 page. */
+static int ecg_record_store_sample(const struct max30001_ecg_sample *sample)
+{
+	struct ecg_record_block *block;
+	int ret;
+
+	if (sample == NULL || !sample->time_valid) {
+		return -EINVAL;
+	}
+	ret = ecg_record_take_filling_block();
+	if (ret != 0) {
+		return ret;
+	}
+	block = ecg_record_filling_block;
+	if (block->sample_count == 0U) {
+		block->first_rtc_tick = ecg_next_rtc_tick;
+		block->first_sample_index = ecg_next_sample_index;
+		msense_ecg_block_begin(block->data, block->first_rtc_tick,
+				       block->first_sample_index, 0U);
+	}
+
+	ret = msense_ecg_block_append_sample(block->data, block->sample_count, sample->raw);
+	if (ret != 0) {
+		return ret;
+	}
+	block->sample_count++;
+	ecg_next_rtc_tick++;
+	ecg_next_sample_index++;
+	if (block->sample_count != MSENSE_ECG_BLOCK_SAMPLES_PER_FULL_BLOCK) {
+		return 0;
+	}
+
+	return ecg_record_finalize_filling_block();
 }
 
 /**
@@ -303,17 +619,17 @@ static int ecg_record_process_samples(const struct max30001_ecg_sample *samples,
 				      size_t count)
 {
 	int ret;
+	size_t index;
 
-	for (size_t i = 0; i < count; i++) {
-		if (!samples[i].time_valid) {
+	for (index = 0U; index < count; index++) {
+		if (!samples[index].time_valid) {
 			continue;
 		}
 
-		ret = ecg_record_store_sample(&samples[i], ecg_next_rtc_tick);
+		ret = ecg_record_store_sample(&samples[index]);
 		if (ret != 0) {
 			return ret;
 		}
-		ecg_next_rtc_tick++;
 	}
 
 	return 0;
@@ -342,8 +658,14 @@ static int ecg_record_process_samples(const struct max30001_ecg_sample *samples,
 static int ecg_record_drain_fifo(void)
 {
 	int ret;
+	int pass;
 
-	for (int pass = 0; pass < 4; pass++) {
+	ret = atomic_get(&ecg_record_writer_error);
+	if (ret != 0) {
+		return ret;
+	}
+
+	for (pass = 0; pass < 4; pass++) {
 		struct max30001_ecg_sample samples[MAX30001_ECG_FIFO_MAX_SAMPLES];
 		size_t count = 0;
 
@@ -392,16 +714,38 @@ static int ecg_record_run(void)
 {
 	int ret;
 	int stop_ret;
+	int drain_ret;
+	int close_ret;
 	uint32_t rtc_tick;
 	bool sensor_configured = false;
 	bool anchor_ready = false;
 	bool start_reported = false;
+	bool writer_open = false;
 
 	if (!file_system_ready) {
 		LOG_ERR("Filesystem is not ready for ECG recording");
 		ret = -ENODEV;
 		goto out;
 	}
+	ecg_record_writer_initialize();
+	if (ecg_record_file_open) {
+		ret = -EALREADY;
+		goto out;
+	}
+	atomic_clear(&ecg_record_writer_error);
+	ecg_record_filling_block = NULL;
+	ecg_record_chunk_index = 0U;
+	ecg_record_chunk_block_count = 0U;
+	ecg_record_chunk_sample_count = 0U;
+	ecg_record_chunk_first_sample_index = 0U;
+	ecg_record_chunk_next_sample_index = 0U;
+	ecg_record_session_full_block_count = 0U;
+	ret = ecg_record_open_current_chunk();
+	if (ret != 0) {
+		LOG_ERR("Failed to create ECG recording chunk: %d", ret);
+		goto out;
+	}
+	writer_open = true;
 
 	ret = ecg_record_configure_intb();
 	if (ret != 0) {
@@ -421,6 +765,7 @@ static int ecg_record_run(void)
 	atomic_set(&ecg_anchor_state, ECG_RECORD_ANCHOR_WAITING);
 	ecg_anchor_rtc_tick = 0U;
 	ecg_next_rtc_tick = 0U;
+	ecg_next_sample_index = 0U;
 
 	/* Fail before touching the sensor if collection timing is not active. */
 	ret = rtc0_collection_counter_get(&rtc_tick);
@@ -484,6 +829,10 @@ static int ecg_record_run(void)
 	start_reported = true;
 
 	while (atomic_get(&ecg_record_requested) != 0) {
+		ret = atomic_get(&ecg_record_writer_error);
+		if (ret != 0) {
+			goto out;
+		}
 		ret = k_sem_take(&ecg_fifo_sem, K_SECONDS(1));
 		if (ret == 0) {
 			ret = ecg_record_drain_fifo();
@@ -498,7 +847,7 @@ out:
 	ecg_record_disable_gpio_interrupts();
 	if (anchor_ready && ret == 0 &&
 	    atomic_get(&ecg_record_requested) == 0) {
-		int drain_ret = ecg_record_drain_fifo();
+		drain_ret = ecg_record_drain_fifo();
 
 		if (drain_ret != 0) {
 			LOG_ERR("MAX30001 ECG final FIFO drain failed: %d", drain_ret);
@@ -510,6 +859,23 @@ out:
 		if (ret == 0 && stop_ret != 0) {
 			ret = stop_ret;
 		}
+	}
+	if (writer_open) {
+		if (ret == 0 && anchor_ready &&
+		    atomic_get(&ecg_record_requested) == 0) {
+			ret = ecg_record_finalize_filling_block();
+		}
+		if (ret == 0 && anchor_ready &&
+		    atomic_get(&ecg_record_requested) == 0) {
+			ret = ecg_record_finish_file(true);
+		} else {
+			close_ret = ecg_record_finish_file(false);
+
+			if (ret == 0 && close_ret != 0) {
+				ret = close_ret;
+			}
+		}
+		writer_open = false;
 	}
 	atomic_set(&ecg_anchor_state, ECG_RECORD_ANCHOR_IDLE);
 	if (!start_reported) {
@@ -606,13 +972,14 @@ static void ecg_record_thread(void *arg1, void *arg2, void *arg3)
  * confirmation cancels the submitted request and requires the corresponding
  * terminal stopped acknowledgement before it returns an ordinary setup error.
  *
+ * @param session_id Collection ID recorded in the ECF1 header and filename.
  * @retval 0 if recording was started.
  * @retval -ENODEV if the filesystem is not ready.
  * @retval -EBUSY if a prior submitted request has no consumed terminal stop
  *         acknowledgement.
  * @retval Other negative errno from recorder setup or start confirmation.
  */
-int ecg_recorder_start(void)
+int ecg_recorder_start(uint64_t session_id)
 {
 	int start_ret;
 	int stop_ret;
@@ -627,6 +994,7 @@ int ecg_recorder_start(void)
 	}
 
 	if (atomic_cas(&ecg_record_requested, 0, 1)) {
+		ecg_record_session_id = session_id;
 		k_sem_reset(&ecg_record_stopped_sem);
 		k_sem_reset(&ecg_record_started_sem);
 		atomic_set(&ecg_record_stop_confirmation_pending, 1);

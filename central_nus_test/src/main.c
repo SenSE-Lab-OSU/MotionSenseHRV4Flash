@@ -31,6 +31,7 @@
 
 #include "msense_dfu_engine.h"
 #include "msense_dfu_wire.h"
+#include "msense_ecg_block_format.h"
 #include "msense_smp_central.h"
 #include "msense_sensor_stream_protocol.h"
 
@@ -84,6 +85,12 @@
 #define DATA_RESERVED_OFFSET 11U
 #define DATA_PHASE_HISTORY 0U
 #define DATA_PHASE_FORWARD 1U
+#define ECG_FRAGMENT_BLOCK_START \
+	MSENSE_SENSOR_STREAM_ECG_FRAGMENT_FLAG_BLOCK_START
+#define ECG_FRAGMENT_BLOCK_END \
+	MSENSE_SENSOR_STREAM_ECG_FRAGMENT_FLAG_BLOCK_END
+#define ECG_RX_BLOCK_SLOT_COUNT 2U
+#define ECG_RX_BLOCK_SLOT_NONE 0xffU
 
 #define END_STATUS_OFFSET 0U
 #define END_STATE_OFFSET 2U
@@ -153,6 +160,36 @@ enum relay_tx_terminal {
 	RELAY_TX_ABORTED,
 };
 
+enum ecg_rx_block_state {
+	ECG_RX_BLOCK_FREE,
+	ECG_RX_BLOCK_FILLING,
+	ECG_RX_BLOCK_VALIDATING,
+};
+
+struct ecg_rx_block_slot {
+	struct k_work work;
+	uint8_t data[MSENSE_ECG_BLOCK_BYTES];
+	uint32_t session_id;
+	uint32_t capture_generation;
+	atomic_t state;
+};
+
+struct ecg_end_completion_work {
+	struct k_work work;
+	uint32_t session_id;
+	uint32_t capture_generation;
+};
+
+struct pending_stream_end {
+	uint16_t status;
+	uint8_t peripheral_state;
+	uint32_t history_sent;
+	uint32_t forward_captured;
+	uint32_t sensor_bytes;
+	uint32_t data_messages;
+	int32_t detail;
+};
+
 struct stream_metadata {
 	uint32_t history_records;
 	uint32_t forward_records;
@@ -161,12 +198,17 @@ struct stream_metadata {
 	uint32_t rate_denominator;
 	uint32_t expected_sequence;
 	uint32_t expected_record_index;
+	uint32_t expected_byte_offset;
+	uint32_t validated_block_count;
 	uint32_t received_sensor_bytes;
 	uint32_t received_data_messages;
 	uint32_t session_id;
 	uint16_t record_size;
 	uint8_t device_type;
 	uint8_t record_format_version;
+	uint8_t ecg_filling_slot;
+	bool ecg_previous_block_valid;
+	struct msense_ecg_block_info ecg_previous_block;
 	uint8_t device_id[8];
 	uint8_t git_tree_state;
 	char device_name[17];
@@ -225,8 +267,10 @@ struct tester_context {
 	uint32_t relay_sequence;
 	uint32_t relay_dropped;
 	uint32_t last_command_session_id;
+	uint32_t capture_generation;
 	uint16_t att_mtu;
 	uint8_t last_command_opcode;
+	uint8_t expected_protocol_version;
 	bool subscribed;
 	bool write_pending;
 	bool nus_discovery_complete;
@@ -235,6 +279,8 @@ struct tester_context {
 	bool peer_ready_reported;
 	bool reconnect_enabled;
 	bool peer_address_valid;
+	bool ecg_end_pending;
+	struct pending_stream_end ecg_end;
 	bt_addr_le_t peer_address;
 	char peer_name[17];
 };
@@ -258,6 +304,8 @@ static uint8_t command_write_data[MSENSE_SENSOR_STREAM_COMMAND_BYTES];
 static char command_rx_buffer[COMMAND_LINE_BYTES];
 static size_t command_rx_length;
 static bool command_rx_overlong;
+static struct ecg_rx_block_slot ecg_rx_slots[ECG_RX_BLOCK_SLOT_COUNT];
+static struct ecg_end_completion_work ecg_end_completion;
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command_line), 8, 4);
 K_MSGQ_DEFINE(control_event_queue, sizeof(struct control_event), 16, 4);
@@ -294,6 +342,9 @@ static struct bt_conn *connection_ref(void);
 static void command_write_complete(struct bt_conn *conn, uint8_t err,
 				   struct bt_gatt_write_params *params);
 static void mark_protocol_failure(const char *reason);
+static void ecg_complete_pending_end(uint32_t session_id, uint32_t capture_generation);
+static void ecg_block_validate_work_handler(struct k_work *work);
+static void ecg_end_complete_work_handler(struct k_work *work);
 
 static const char *tester_state_name(enum tester_state state)
 {
@@ -1180,6 +1231,7 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 	struct stream_metadata metadata;
 	char device_id[17];
 	uint16_t mtu;
+	uint8_t protocol_version;
 	k_spinlock_key_t key;
 
 	if (length != MSENSE_SENSOR_STREAM_START_ACK_BYTES || !parse_start_ack(payload, &metadata)) {
@@ -1193,8 +1245,23 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 		mark_protocol_failure("unexpected START_ACK");
 		return;
 	}
+	protocol_version = tester.expected_protocol_version;
+	if ((metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG &&
+	     protocol_version != MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_PPG) ||
+	    (metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG &&
+	     protocol_version != MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG)) {
+		k_spin_unlock(&tester.lock, key);
+		mark_protocol_failure("START_ACK protocol/device mismatch");
+		return;
+	}
 	metadata.session_id = session_id;
+	metadata.ecg_filling_slot = ECG_RX_BLOCK_SLOT_NONE;
 	tester.metadata = metadata;
+	tester.capture_generation++;
+	if (tester.capture_generation == 0U) {
+		tester.capture_generation = 1U;
+	}
+	tester.ecg_end_pending = false;
 	tester.state = TESTER_RECEIVING;
 	mtu = tester.att_mtu;
 	k_spin_unlock(&tester.lock, key);
@@ -1208,17 +1275,170 @@ static void handle_start_ack(uint32_t session_id, const uint8_t *payload, uint16
 		   mtu);
 }
 
+static uint8_t ecg_claim_rx_slot_locked(uint32_t session_id)
+{
+	uint8_t index;
+
+	for (index = 0U; index < ECG_RX_BLOCK_SLOT_COUNT; index++) {
+		if (atomic_cas(&ecg_rx_slots[index].state, ECG_RX_BLOCK_FREE,
+			       ECG_RX_BLOCK_FILLING)) {
+			ecg_rx_slots[index].session_id = session_id;
+			ecg_rx_slots[index].capture_generation = tester.capture_generation;
+			return index;
+		}
+	}
+
+	return ECG_RX_BLOCK_SLOT_NONE;
+}
+
+static void ecg_complete_pending_end(uint32_t session_id, uint32_t capture_generation)
+{
+	struct pending_stream_end end;
+	struct stream_statistics statistics;
+	struct phase_statistics history_statistics;
+	uint32_t expected_blocks;
+	int64_t request_start_ms;
+	bool request_started;
+	bool report_history = false;
+	bool success;
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&tester.lock);
+	if (!tester.ecg_end_pending || tester.state != TESTER_RECEIVING ||
+	    session_id != tester.metadata.session_id ||
+	    capture_generation != tester.capture_generation) {
+		k_spin_unlock(&tester.lock, key);
+		return;
+	}
+	expected_blocks = tester.metadata.history_records + tester.metadata.forward_records;
+	if (tester.metadata.validated_block_count != expected_blocks) {
+		k_spin_unlock(&tester.lock, key);
+		return;
+	}
+
+	end = tester.ecg_end;
+	success = end.status == MSENSE_SENSOR_STREAM_STATUS_SUCCESS && end.detail == 0 &&
+		  end.history_sent == tester.metadata.history_records &&
+		  end.forward_captured == tester.metadata.forward_records &&
+		  end.sensor_bytes == tester.metadata.total_sensor_bytes &&
+		  end.sensor_bytes == tester.metadata.received_sensor_bytes &&
+		  end.data_messages == tester.metadata.received_data_messages &&
+		  tester.metadata.expected_byte_offset == tester.metadata.total_sensor_bytes;
+	tester.ecg_end_pending = false;
+	tester.state = success ? TESTER_COMPLETE : TESTER_FAILED;
+	if (!tester.statistics.history_reported && tester.statistics.history.has_data) {
+		tester.statistics.history_reported = true;
+		history_statistics = tester.statistics.history;
+		request_start_ms = tester.statistics.request_start_ms;
+		request_started = tester.statistics.request_started;
+		report_history = true;
+	}
+	statistics = tester.statistics;
+	k_spin_unlock(&tester.lock, key);
+
+	if (report_history) {
+		post_throughput_history(session_id, &history_statistics, request_start_ms,
+					request_started);
+	}
+	if (success) {
+		post_throughput_forward(session_id, &statistics.forward);
+		post_throughput_summary(session_id, &statistics.total);
+		post_event("STREAM_OK id=%u bytes=%u data_messages=%u", session_id,
+			   end.sensor_bytes, end.data_messages);
+	} else {
+		post_event("STREAM_END status=%s(0x%04x) peripheral_state=%u bytes=%u data=%u "
+			   "detail=%d", status_name(end.status), end.status, end.peripheral_state,
+			   end.sensor_bytes, end.data_messages, end.detail);
+	}
+}
+
+static void ecg_block_validate_work_handler(struct k_work *work)
+{
+	struct ecg_rx_block_slot *slot = CONTAINER_OF(work, struct ecg_rx_block_slot, work);
+	struct msense_ecg_block_info block;
+	uint32_t session_id;
+	uint32_t capture_generation;
+	int ret;
+	bool failed = false;
+	k_spinlock_key_t key;
+
+	ret = msense_ecg_block_validate(slot->data, &block);
+	key = k_spin_lock(&tester.lock);
+	if (atomic_get(&slot->state) != ECG_RX_BLOCK_VALIDATING ||
+	    tester.state != TESTER_RECEIVING || slot->session_id != tester.metadata.session_id ||
+	    slot->capture_generation != tester.capture_generation) {
+		atomic_set(&slot->state, ECG_RX_BLOCK_FREE);
+		k_spin_unlock(&tester.lock, key);
+		return;
+	}
+	if (ret == 0 && tester.metadata.ecg_previous_block_valid) {
+		ret = msense_ecg_block_validate_continuity(&tester.metadata.ecg_previous_block,
+							    &block);
+	}
+	if (ret != 0) {
+		tester.state = TESTER_FAILED;
+		tester.ecg_end_pending = false;
+		failed = true;
+	} else {
+		tester.metadata.ecg_previous_block = block;
+		tester.metadata.ecg_previous_block_valid = true;
+		tester.metadata.validated_block_count++;
+	}
+	session_id = slot->session_id;
+	capture_generation = slot->capture_generation;
+	atomic_set(&slot->state, ECG_RX_BLOCK_FREE);
+	k_spin_unlock(&tester.lock, key);
+
+	if (failed) {
+		post_event("PROTOCOL_ERROR ECB1 validation failed (%d)", ret);
+		return;
+	}
+	ecg_complete_pending_end(session_id, capture_generation);
+}
+
+static void ecg_end_complete_work_handler(struct k_work *work)
+{
+	uint32_t session_id;
+	uint32_t capture_generation;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(work);
+	key = k_spin_lock(&tester.lock);
+	session_id = ecg_end_completion.session_id;
+	capture_generation = ecg_end_completion.capture_generation;
+	k_spin_unlock(&tester.lock, key);
+	ecg_complete_pending_end(session_id, capture_generation);
+}
+
+static void ecg_rx_initialize(void)
+{
+	uint8_t index;
+
+	for (index = 0U; index < ECG_RX_BLOCK_SLOT_COUNT; index++) {
+		k_work_init(&ecg_rx_slots[index].work, ecg_block_validate_work_handler);
+		atomic_set(&ecg_rx_slots[index].state, ECG_RX_BLOCK_FREE);
+	}
+	k_work_init(&ecg_end_completion.work, ecg_end_complete_work_handler);
+}
+
 static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t length,
 			uint16_t raw_nus_length, int64_t received_ms)
 {
 	struct phase_statistics history_statistics;
+	struct ecg_rx_block_slot *ecg_slot = NULL;
 	uint32_t sequence;
 	uint32_t first_record;
 	uint32_t expected_end;
 	uint32_t sensor_bytes;
+	uint32_t block_offset;
+	uint32_t history_bytes;
 	uint16_t record_count;
 	uint16_t expected_length;
+	uint16_t fragment_bytes;
 	uint8_t phase;
+	uint8_t expected_phase;
+	uint8_t fragment_flags;
+	uint8_t slot_index;
 	int64_t request_start_ms;
 	bool request_started;
 	bool report_history = false;
@@ -1230,13 +1450,101 @@ static void handle_data(uint32_t session_id, const uint8_t *payload, uint16_t le
 	}
 
 	key = k_spin_lock(&tester.lock);
-	if (tester.state != TESTER_RECEIVING || session_id != tester.metadata.session_id) {
+	if (tester.state != TESTER_RECEIVING || session_id != tester.metadata.session_id ||
+	    tester.ecg_end_pending) {
 		k_spin_unlock(&tester.lock, key);
 		mark_protocol_failure("unexpected DATA");
 		return;
 	}
 
 	sequence = sys_get_le32(&payload[DATA_SEQUENCE_OFFSET]);
+	if (tester.metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
+		first_record = sys_get_le32(&payload[DATA_FIRST_RECORD_OFFSET]);
+		fragment_bytes = sys_get_le16(&payload[DATA_RECORD_COUNT_OFFSET]);
+		phase = payload[DATA_PHASE_OFFSET];
+		fragment_flags = payload[DATA_RESERVED_OFFSET];
+		history_bytes = tester.metadata.history_records * tester.metadata.record_size;
+		if (fragment_bytes == 0U ||
+		    (fragment_flags & ~(ECG_FRAGMENT_BLOCK_START | ECG_FRAGMENT_BLOCK_END)) != 0U ||
+		    length != MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES + fragment_bytes ||
+		    sequence != tester.metadata.expected_sequence ||
+		    first_record != tester.metadata.expected_byte_offset ||
+		    fragment_bytes > tester.metadata.total_sensor_bytes ||
+		    first_record > tester.metadata.total_sensor_bytes - fragment_bytes) {
+			k_spin_unlock(&tester.lock, key);
+			mark_protocol_failure("ECG DATA prefix/sequence/offset");
+			return;
+		}
+		expected_phase = first_record < history_bytes ? DATA_PHASE_HISTORY :
+				 DATA_PHASE_FORWARD;
+		block_offset = first_record % tester.metadata.record_size;
+		if (phase != expected_phase ||
+		    fragment_bytes > tester.metadata.record_size - block_offset ||
+		    ((fragment_flags & ECG_FRAGMENT_BLOCK_START) != 0U) != (block_offset == 0U) ||
+		    ((fragment_flags & ECG_FRAGMENT_BLOCK_END) != 0U) !=
+			(block_offset + fragment_bytes == tester.metadata.record_size)) {
+			k_spin_unlock(&tester.lock, key);
+			mark_protocol_failure("ECG DATA block boundaries");
+			return;
+		}
+
+		if (block_offset == 0U) {
+			if (tester.metadata.ecg_filling_slot != ECG_RX_BLOCK_SLOT_NONE) {
+				k_spin_unlock(&tester.lock, key);
+				mark_protocol_failure("ECG DATA overlapping block");
+				return;
+			}
+			slot_index = ecg_claim_rx_slot_locked(session_id);
+			if (slot_index == ECG_RX_BLOCK_SLOT_NONE) {
+				k_spin_unlock(&tester.lock, key);
+				mark_protocol_failure("ECG DATA validation backlog");
+				return;
+			}
+			tester.metadata.ecg_filling_slot = slot_index;
+		} else {
+			slot_index = tester.metadata.ecg_filling_slot;
+			if (slot_index == ECG_RX_BLOCK_SLOT_NONE ||
+			    atomic_get(&ecg_rx_slots[slot_index].state) != ECG_RX_BLOCK_FILLING) {
+				k_spin_unlock(&tester.lock, key);
+				mark_protocol_failure("ECG DATA missing block start");
+				return;
+			}
+		}
+
+		memcpy(&ecg_rx_slots[slot_index].data[block_offset],
+		       &payload[MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES], fragment_bytes);
+		tester.metadata.expected_sequence++;
+		tester.metadata.expected_byte_offset += fragment_bytes;
+		tester.metadata.expected_record_index =
+			tester.metadata.expected_byte_offset / tester.metadata.record_size;
+		tester.metadata.received_sensor_bytes += fragment_bytes;
+		tester.metadata.received_data_messages++;
+		if (phase == DATA_PHASE_FORWARD && !tester.statistics.history_reported) {
+			tester.statistics.history_reported = true;
+			history_statistics = tester.statistics.history;
+			request_start_ms = tester.statistics.request_start_ms;
+			request_started = tester.statistics.request_started;
+			report_history = true;
+		}
+		stream_statistics_record_data(&tester.statistics, phase, raw_nus_length,
+					      fragment_bytes, received_ms);
+		if ((fragment_flags & ECG_FRAGMENT_BLOCK_END) != 0U) {
+			ecg_slot = &ecg_rx_slots[slot_index];
+			tester.metadata.ecg_filling_slot = ECG_RX_BLOCK_SLOT_NONE;
+			atomic_set(&ecg_slot->state, ECG_RX_BLOCK_VALIDATING);
+		}
+		k_spin_unlock(&tester.lock, key);
+
+		if (report_history) {
+			post_throughput_history(session_id, &history_statistics, request_start_ms,
+						request_started);
+		}
+		if (ecg_slot != NULL && k_work_submit(&ecg_slot->work) != 1) {
+			mark_protocol_failure("ECG DATA validation submit");
+		}
+		return;
+	}
+
 	first_record = sys_get_le32(&payload[DATA_FIRST_RECORD_OFFSET]);
 	record_count = sys_get_le16(&payload[DATA_RECORD_COUNT_OFFSET]);
 	phase = payload[DATA_PHASE_OFFSET];
@@ -1351,6 +1659,7 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 	bool success;
 	bool request_started;
 	bool report_history = false;
+	int submit_ret;
 	k_spinlock_key_t key;
 
 	if (length != MSENSE_SENSOR_STREAM_END_BYTES || payload[END_RESERVED_OFFSET] != 0U) {
@@ -1372,6 +1681,13 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 
 	key = k_spin_lock(&tester.lock);
 	if (tester.state != TESTER_RECEIVING || session_id != tester.metadata.session_id) {
+		if (tester.state == TESTER_FAILED &&
+		    tester.metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG &&
+		    session_id == tester.metadata.session_id) {
+			k_spin_unlock(&tester.lock, key);
+			atomic_set(&relay_close_after_notification, 1);
+			return;
+		}
 		k_spin_unlock(&tester.lock, key);
 		mark_protocol_failure("unexpected END");
 		return;
@@ -1383,8 +1699,30 @@ static void handle_end(uint32_t session_id, const uint8_t *payload, uint16_t len
 		  sensor_bytes == tester.metadata.total_sensor_bytes &&
 		  sensor_bytes == tester.metadata.received_sensor_bytes &&
 		  data_messages == tester.metadata.received_data_messages &&
-		  tester.metadata.expected_record_index ==
-			  tester.metadata.history_records + tester.metadata.forward_records;
+		  (tester.metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ?
+			   tester.metadata.expected_byte_offset == tester.metadata.total_sensor_bytes :
+			   tester.metadata.expected_record_index == tester.metadata.history_records +
+				   tester.metadata.forward_records);
+	if (success && tester.metadata.device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
+		tester.ecg_end.status = status;
+		tester.ecg_end.peripheral_state = peripheral_state;
+		tester.ecg_end.history_sent = history_sent;
+		tester.ecg_end.forward_captured = forward_captured;
+		tester.ecg_end.sensor_bytes = sensor_bytes;
+		tester.ecg_end.data_messages = data_messages;
+		tester.ecg_end.detail = detail;
+		tester.ecg_end_pending = true;
+		ecg_end_completion.session_id = session_id;
+		ecg_end_completion.capture_generation = tester.capture_generation;
+		/* Let the NUS callback enqueue END into MRLY before closing the relay. */
+		atomic_set(&relay_close_after_notification, 1);
+		k_spin_unlock(&tester.lock, key);
+		submit_ret = k_work_submit(&ecg_end_completion.work);
+		if (submit_ret < 0) {
+			mark_protocol_failure("ECG END completion submit");
+		}
+		return;
+	}
 	tester.state = success ? TESTER_COMPLETE : TESTER_FAILED;
 	if (!tester.statistics.history_reported && tester.statistics.history.has_data) {
 		tester.statistics.history_reported = true;
@@ -1419,10 +1757,16 @@ static void handle_notification(const uint8_t *data, uint16_t length, int64_t re
 	uint16_t flags;
 	uint32_t session_id;
 	uint8_t message_type;
+	uint8_t expected_protocol_version;
+	k_spinlock_key_t key;
+
+	key = k_spin_lock(&tester.lock);
+	expected_protocol_version = tester.expected_protocol_version;
+	k_spin_unlock(&tester.lock, key);
 
 	if (length < MSENSE_SENSOR_STREAM_HEADER_BYTES ||
 	    data[0] != MSENSE_SENSOR_STREAM_MAGIC0 || data[1] != MSENSE_SENSOR_STREAM_MAGIC1 ||
-	    data[2] != MSENSE_SENSOR_STREAM_PROTOCOL_VERSION) {
+	    expected_protocol_version == 0U || data[2] != expected_protocol_version) {
 		mark_protocol_failure("invalid common header");
 		return;
 	}
@@ -1898,6 +2242,18 @@ static bool name_is_msense(const char *name)
 	return strncmp(name, MSENSE_NAME_PREFIX, sizeof(MSENSE_NAME_PREFIX) - 1U) == 0;
 }
 
+static uint8_t protocol_version_for_name(const char *name)
+{
+	if (strncmp(name, "MSense4PPG-", 11U) == 0) {
+		return MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_PPG;
+	}
+	if (strncmp(name, "MSense4ECG-", 11U) == 0) {
+		return MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG;
+	}
+
+	return 0U;
+}
+
 static bool name_matches_target(const char *name, enum scan_target target)
 {
 	if (target == SCAN_TARGET_PPG) {
@@ -1916,6 +2272,7 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	enum scan_target target;
 	char address_text[BT_ADDR_LE_STR_LEN];
 	struct bt_conn *connection = NULL;
+	uint8_t protocol_version;
 	int err;
 	k_spinlock_key_t key;
 
@@ -1929,6 +2286,7 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	if (!name.present || !name_is_msense(name.value)) {
 		return;
 	}
+	protocol_version = protocol_version_for_name(name.value);
 
 	key = k_spin_lock(&tester.lock);
 	if (tester.state != TESTER_SCANNING) {
@@ -1940,12 +2298,12 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 		tester.state = TESTER_IDLE;
 	} else if (target == SCAN_TARGET_RECONNECT) {
 		if (!tester.peer_address_valid ||
-		    bt_addr_le_cmp(address, &tester.peer_address) != 0) {
+		    bt_addr_le_cmp(address, &tester.peer_address) != 0 || protocol_version == 0U) {
 			k_spin_unlock(&tester.lock, key);
 			return;
 		}
 		tester.state = TESTER_CONNECTING;
-	} else if (name_matches_target(name.value, target)) {
+	} else if (name_matches_target(name.value, target) && protocol_version != 0U) {
 		tester.state = TESTER_CONNECTING;
 	} else {
 		k_spin_unlock(&tester.lock, key);
@@ -1978,6 +2336,7 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	tester.att_mtu = 0U;
 	tester.peer_address = *address;
 	tester.peer_address_valid = true;
+	tester.expected_protocol_version = protocol_version;
 	memset(tester.peer_name, 0, sizeof(tester.peer_name));
 	strncpy(tester.peer_name, name.value, sizeof(tester.peer_name) - 1U);
 	memset(&tester.link, 0, sizeof(tester.link));
@@ -2120,6 +2479,7 @@ static int issue_nus_command(uint8_t opcode, uint32_t session_id)
 {
 	struct bt_conn *connection;
 	int err;
+	uint8_t protocol_version;
 	k_spinlock_key_t key;
 
 	connection = connection_ref();
@@ -2133,6 +2493,12 @@ static int issue_nus_command(uint8_t opcode, uint32_t session_id)
 		bt_conn_unref(connection);
 		return -EBUSY;
 	}
+	protocol_version = tester.expected_protocol_version;
+	if (protocol_version == 0U) {
+		k_spin_unlock(&tester.lock, key);
+		bt_conn_unref(connection);
+		return -EPROTONOSUPPORT;
+	}
 	tester.write_pending = true;
 	tester.last_command_opcode = opcode;
 	tester.last_command_session_id = session_id;
@@ -2144,7 +2510,7 @@ static int issue_nus_command(uint8_t opcode, uint32_t session_id)
 
 	command_write_data[0] = MSENSE_SENSOR_STREAM_MAGIC0;
 	command_write_data[1] = MSENSE_SENSOR_STREAM_MAGIC1;
-	command_write_data[2] = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION;
+	command_write_data[2] = protocol_version;
 	command_write_data[3] = opcode;
 	sys_put_le32(session_id, &command_write_data[4]);
 	memset(&command_write_params, 0, sizeof(command_write_params));
@@ -2585,6 +2951,7 @@ int main(void)
 	};
 	int err;
 
+	ecg_rx_initialize();
 	err = uart_initialize();
 	if (err != 0) {
 		printk("FATAL UART initialization %d\n", err);
@@ -2625,7 +2992,7 @@ int main(void)
 		}
 	}
 
-	command_printf("MSENSE_CENTRAL_READY nus_protocol=1 dfu_protocol=1; use help");
+	command_printf("MSENSE_CENTRAL_READY nus_protocol=PPG1/ECG2 dfu_protocol=1; use help");
 	while (true) {
 		while (k_msgq_get(&control_event_queue, &event, K_NO_WAIT) == 0) {
 			command_printf("%s", event.text);

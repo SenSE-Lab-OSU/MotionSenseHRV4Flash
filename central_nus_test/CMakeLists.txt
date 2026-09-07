@@ -9,6 +9,7 @@ target_sources(app PRIVATE
   src/msense_dfu_wire.c
   src/msense_smp_central.c
   src/msense_dfu_engine.c
+  ../shared/ecg_block_format.c
 )
 
 include(CTest)

@@ -1,4 +1,4 @@
-# Source-only regression guard for the version-1 bounded stream geometry.
+# Source-only regression guard for PPGv1 and ECGv2 bounded stream geometry.
 
 if(NOT DEFINED MSENSE_SOURCE_ROOT OR MSENSE_SOURCE_ROOT STREQUAL "")
 	message(FATAL_ERROR "MSENSE_SOURCE_ROOT must identify the repository root")
@@ -21,8 +21,8 @@ endfunction()
 math(EXPR ppg_history_bytes "2048 * 16")
 math(EXPR ppg_forward_bytes "6144 * 16")
 math(EXPR ppg_total_bytes "${ppg_history_bytes} + ${ppg_forward_bytes}")
-math(EXPR ecg_history_bytes "2731 * 12")
-math(EXPR ecg_forward_bytes "8192 * 12")
+math(EXPR ecg_history_bytes "8 * 4096")
+math(EXPR ecg_forward_bytes "24 * 4096")
 math(EXPR ecg_total_bytes "${ecg_history_bytes} + ${ecg_forward_bytes}")
 
 if(NOT ppg_history_bytes EQUAL 32768 OR NOT ppg_forward_bytes EQUAL 98304 OR
@@ -30,8 +30,8 @@ if(NOT ppg_history_bytes EQUAL 32768 OR NOT ppg_forward_bytes EQUAL 98304 OR
 	message(FATAL_ERROR "Unexpected PPG stream geometry")
 endif()
 
-if(NOT ecg_history_bytes EQUAL 32772 OR NOT ecg_forward_bytes EQUAL 98304 OR
-   NOT ecg_total_bytes EQUAL 131076)
+if(NOT ecg_history_bytes EQUAL 32768 OR NOT ecg_forward_bytes EQUAL 98304 OR
+   NOT ecg_total_bytes EQUAL 131072)
 	message(FATAL_ERROR "Unexpected ECG stream geometry")
 endif()
 
@@ -44,22 +44,38 @@ require_text("shared/include/msense_sensor_stream_protocol.h"
 require_text("shared/include/msense_sensor_stream_protocol.h"
 	"#define MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES 131072U")
 require_text("shared/include/msense_sensor_stream_protocol.h"
-	"#define MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE 12U")
+	"#define MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG 2U")
 require_text("shared/include/msense_sensor_stream_protocol.h"
-	"#define MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS 2731U")
+	"#define MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_PPG 1U")
 require_text("shared/include/msense_sensor_stream_protocol.h"
-	"#define MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS 8192U")
+	"MSENSE_SENSOR_STREAM_ECG_FRAGMENT_FLAG_BLOCK_START")
 require_text("shared/include/msense_sensor_stream_protocol.h"
-	"#define MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES 131076U")
+	"#define MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE 4096U")
+require_text("shared/include/msense_sensor_stream_protocol.h"
+	"#define MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS 8U")
+require_text("shared/include/msense_sensor_stream_protocol.h"
+	"#define MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS 24U")
+require_text("shared/include/msense_sensor_stream_protocol.h"
+	"#define MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES 131072U")
 require_text("shared/include/msense_sensor_stream_protocol.h"
 	"MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES")
 require_text("shared/sensor_stream.c"
 	"MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS == 98304U")
 require_text("shared/sensor_stream.c"
-	"MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS == 98304U")
+	"MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS == 32768U")
 require_text("shared/sensor_stream.c"
 	"MSENSE_SENSOR_STREAM_CAPTURE_BUFFER_BYTES")
+require_text("shared/sensor_stream.c"
+	"MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG")
+require_text("shared/sensor_stream.c"
+	"stream.history_collecting = stream.ecg_start_arming")
+require_text("shared/sensor_stream.c"
+	"!stream.ecg_start_arming")
+require_text("shared/include/msense_ecg_block_format.h"
+	"#define MSENSE_ECG_BLOCK_BYTES 4096U")
 require_text("central_nus_test/src/main.c"
 	"MSENSE_SENSOR_STREAM_PPG_TOTAL_SENSOR_BYTES")
 require_text("central_nus_test/src/main.c"
 	"MSENSE_SENSOR_STREAM_ECG_TOTAL_SENSOR_BYTES")
+require_text("central_nus_test/src/main.c"
+	"msense_ecg_block_validate")

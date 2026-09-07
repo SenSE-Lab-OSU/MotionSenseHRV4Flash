@@ -165,7 +165,8 @@ static int initialize_sensor_stream(void)
 {
 	const struct msense_sensor_stream_config config = {
 		.device_type = MSENSE_SENSOR_STREAM_DEVICE_ECG,
-		.record_format_version = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION,
+		.protocol_version = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_ECG,
+		.record_format_version = 1U,
 		.record_size = MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE,
 		.record_rate_numerator = 512U,
 		.record_rate_denominator = 1U,
@@ -1231,7 +1232,7 @@ int enter_ecg_collection_mode(void)
 	msense_sensor_stream_recording_started();
 	stream_started = true;
 	ecg_start_submitted = true;
-	ret = ecg_recorder_start();
+	ret = ecg_recorder_start(session_id);
 	if (ret != 0) {
 		LOG_ERR("Failed to start ECG recorder: %d", ret);
 		goto start_failed;

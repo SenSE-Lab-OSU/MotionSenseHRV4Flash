@@ -8,6 +8,7 @@ import serial
 
 COMMAND_PORT = "COM23"
 RELAY_PORT = "COM22"
+TARGET_NAME = "MSense4ECG-0ATEJ"
 CAPTURE_PATH = pathlib.Path(__file__).parent / "captures" / "ecg_nrf54l15_live.mrly"
 
 
@@ -77,10 +78,17 @@ def main():
             if not re.search(r"state=IDLE", status):
                 send(command, "disconnect")
                 collect(command, 5, r"DISCONNECTED|ERR")
-            send(command, "connect ecg")
-            connection = collect(command, 40, r"NUS_READY|ERROR|DISCONNECTED")
-            if "NUS_READY" not in connection:
-                print("TEST_FAIL ECG did not reach NUS_READY")
+            connection = ""
+            for _ in range(12):
+                send(command, "connect ecg")
+                connection = collect(command, 12, r"NUS_READY|ERROR|DISCONNECTED")
+                if "NUS_READY" in connection and TARGET_NAME in connection:
+                    break
+                if "NUS_READY" in connection:
+                    send(command, "disconnect")
+                    collect(command, 4, r"DISCONNECTED")
+            if "NUS_READY" not in connection or TARGET_NAME not in connection:
+                print(f"TEST_FAIL {TARGET_NAME} did not reach NUS_READY")
                 return 3
 
         send(command, "start")
@@ -103,10 +111,19 @@ def main():
     CAPTURE_PATH.write_bytes(relay_data)
     frames, payload_bytes = relay_frames(relay_data)
     terminal = re.search(r"(STREAM_OK|STREAM_END|START_RESULT|PROTOCOL_ERROR)[^\r\n]*", response)
+    metadata_ok = re.search(r"START_ACK type=ECG[^\r\n]*records=8\+24 bytes=131072", response)
+    stream_ok = re.search(r"STREAM_OK[^\r\n]*bytes=131072", response)
     print(f"RELAY_CAPTURE path={CAPTURE_PATH} bytes={len(relay_data)} "
           f"frames={frames} payload_bytes={payload_bytes}")
     print(f"TERMINAL_RESULT={terminal.group(0) if terminal else 'none'}")
-    return 0 if terminal and terminal.group(1) == "STREAM_OK" else 4
+    if not metadata_ok:
+        print("TEST_FAIL ECG v2 geometry was not reported")
+        return 5
+    if not stream_ok or frames == 0 or payload_bytes == 0:
+        print("TEST_FAIL complete validated 128 KiB relay was not observed")
+        return 6
+    print("TEST_PASS ECG2 geometry, ECB1 validation, and 128 KiB relay completed")
+    return 0
 
 
 if __name__ == "__main__":

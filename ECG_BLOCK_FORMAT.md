@@ -624,9 +624,9 @@ already occurred. Its payload is exactly 96 bytes:
 | 2 | 2 | `block_bytes` | `4096`, `uint16_le` |
 | 4 | 4 | `sample_rate_numerator` | `512`, `uint32_le` |
 | 8 | 4 | `sample_rate_denominator` | `1`, `uint32_le` |
-| 12 | 4 | `history_block_count` | `2`, `uint32_le` |
-| 16 | 4 | `forward_block_count` | `4`, `uint32_le` |
-| 20 | 4 | `total_ecg_bytes` | `24576`, `uint32_le` |
+| 12 | 4 | `history_block_count` | `8`, `uint32_le` |
+| 16 | 4 | `forward_block_count` | `24`, `uint32_le` |
+| 20 | 4 | `total_ecg_bytes` | `131072`, `uint32_le` |
 | 24 | 8 | `device_id` | Raw `msense_device_identity_bytes()` byte order |
 | 32 | 1 | `device_name_length` | `1..16` |
 | 33 | 16 | `device_name` | UTF-8/ASCII, zero padded after the declared length |
@@ -694,9 +694,9 @@ maximum_fragment_bytes = att_mtu - 3 - 12 - 12
 The sender additionally limits that value so a fragment ends at, but never
 crosses, the next 4,096-byte block boundary.
 
-On a successful fixed-geometry stream, byte offsets `0..8191` have phase 0 and
-offsets `8192..24575` have phase 1. The first message has sequence and byte
-offset zero. The last fragment ends at byte offset 24,576.
+On a successful fixed-geometry stream, byte offsets `0..32767` have phase 0 and
+offsets `32768..131071` have phase 1. The first message has sequence and byte
+offset zero. The last fragment ends at byte offset 131,072.
 
 ### Version 2 RESULT and END
 
@@ -717,9 +717,9 @@ same session. Its payload is exactly 24 bytes:
 | 0 | 2 | `final_status` | Zero for success, `uint16_le` |
 | 2 | 1 | `post_terminal_state` | Stream state after cleanup |
 | 3 | 1 | Reserved | Zero |
-| 4 | 4 | `history_blocks_sent` | `2`, `uint32_le` |
-| 8 | 4 | `forward_blocks_captured` | `4`, `uint32_le` |
-| 12 | 4 | `total_ecg_bytes_sent` | `24576`, `uint32_le` |
+| 4 | 4 | `history_blocks_sent` | `8`, `uint32_le` |
+| 8 | 4 | `forward_blocks_captured` | `24`, `uint32_le` |
+| 12 | 4 | `total_ecg_bytes_sent` | `131072`, `uint32_le` |
 | 16 | 4 | `data_message_count` | Number of DATA messages, `uint32_le` |
 | 20 | 4 | `detail` | Zero on success; otherwise signed Zephyr errno, `int32_le` |
 
@@ -740,17 +740,20 @@ The required ECG stream geometry is:
 
 | Phase | Blocks | Bytes | Samples when full | Nominal duration |
 |---|---:|---:|---:|---:|
-| History | 2 | 8,192 | 2,716 | 5.3046875 s |
-| Forward | 4 | 16,384 | 5,432 | 10.609375 s |
-| Total | 6 | 24,576 | 8,148 | 15.9140625 s |
+| History | 8 | 32,768 | 10,864 | 21.21875 s |
+| Forward | 24 | 98,304 | 32,592 | 63.65625 s |
+| Total | 32 | 131,072 | 43,456 | 84.875 s |
 
-This approximately preserves the existing ECG stream's 5.334-second history,
-10.666-second forward, and 16-second total time windows while reducing sensor
-payload and capture RAM from 98,304 bytes to 24,576 bytes.
+The byte geometry deliberately matches the current PPG capture-buffer split:
+32 KiB of history followed by 96 KiB of forward capture. It is also four bytes
+smaller than the current ECG protocol-v1 total of 131,076 bytes, whose 12-byte
+record size cannot divide the nominal 32 KiB history allocation exactly.
 
-If a product intentionally retains a 96 KiB ECG payload, it would contain 24
-blocks: eight history and sixteen forward. That would increase the time window
-to approximately 63.66 seconds. This is not the default version 2 geometry.
+Because a common ECG block is exactly one 4 KiB NAND page, both phase sizes are
+exact multiples of the block size. No record-size rounding or partial block is
+needed. Packing many more samples into the same byte budget increases the ECG
+time windows; matching byte geometry across PPG and ECG is intentional and
+takes precedence over preserving the protocol-v1 ECG durations.
 
 ### Block-boundary request semantics
 
@@ -758,18 +761,18 @@ A request can arrive while the encoder is filling a block. Splitting that
 block would violate the common-format and identical-byte requirements.
 Therefore version 2 ECG stream activation is aligned to a block boundary:
 
-1. While recording, keep a ring containing the last two completely finalized
+1. While recording, keep a ring containing the last eight completely finalized
    blocks.
 2. On a valid START command, enter a pending/arming state. If a block already
    contains samples, continue filling it normally. If the current block is
    empty, the boundary is already established and no extra block is awaited.
 3. When a partially filled current block is finalized, include it in the
-   rolling history, then freeze the most recent two completed blocks as
-   history. At an already-empty boundary, freeze the two most recent completed
+   rolling history, then freeze the most recent eight completed blocks as
+   history. At an already-empty boundary, freeze the eight most recent completed
    blocks immediately.
 4. The boundary immediately after that finalized block is the history/forward
-   boundary. The next four blocks are forward blocks.
-5. Send the two history blocks followed by the four forward blocks. Every block
+   boundary. The next 24 blocks are forward blocks.
+5. Send the eight history blocks followed by the 24 forward blocks. Every block
    remains in chronological order and every phase change occurs between
    blocks.
 
@@ -779,7 +782,7 @@ period, 2.65234375 seconds, to arm. START_ACK is sent immediately when the
 request is accepted. The existing `ACTIVE` state includes this bounded arming
 interval; DATA begins only after the block boundary is established.
 
-If fewer than two completed blocks exist when requested, return the existing
+If fewer than eight completed blocks exist when requested, return the existing
 `HISTORY_NOT_READY` status. Do not construct synthetic or partially filled
 history blocks.
 
@@ -842,18 +845,20 @@ block format reduces the effective full-block byte rate by about 24.595%.
 ### Streaming efficiency
 
 The common block removes per-sample sync, type, repeated timestamp, and CRC-8
-bytes. The version 2 stream geometry also reduces captured ECG sensor bytes
-from 96 KiB to 24 KiB while preserving approximately the same time window.
+bytes. The version 2 stream deliberately retains the current approximately
+128 KiB capture-byte budget while aligning it exactly to 32 common blocks.
 This gives:
 
-- 75% less ECG history/forward capture RAM;
-- 75% fewer sensor-payload bytes sent for a requested ECG capture;
+- the same 32 KiB history and 96 KiB forward buffer split as PPG;
+- 131,072 ECG sensor bytes per capture, four fewer than protocol version 1;
+- substantially longer ECG time coverage within essentially unchanged RAM and
+  transmitted-byte budgets;
 - fewer producer-to-stream calls if publication occurs once per block rather
   than once per sample; and
 - an end-to-end CRC-32 for every reassembled block.
 
 Transport framing overhead depends on negotiated ATT MTU and is additional to
-the 24,576 sensor bytes. It must be measured separately and does not alter the
+the 131,072 sensor bytes. It must be measured separately and does not alter the
 block format.
 
 ### MCU work
@@ -944,16 +949,19 @@ A future implementation must update all of the following together:
 - `shared/include/msense_sensor_stream_protocol.h`: define sensor stream
   protocol version 2, block geometry, fragment semantics, and revised capture
   geometry.
-- `shared/sensor_stream.c`: accept finalized blocks, maintain a two-block ECG
-  history ring, collect four forward blocks, and fragment blocks for NUS.
+- `shared/sensor_stream.c`: accept finalized blocks, maintain an eight-block ECG
+  history ring, collect 24 forward blocks, and fragment blocks for NUS while
+  preserving disconnect-time TX-slot reclamation and late-completion-token
+  protection.
 - `central_nus_test`: parse protocol v2 fragments, enforce offsets/flags, and
   run the common block decoder after reassembly.
 - Host extraction tools: add `ECF1` file and raw `ECB1` stream paths using one
   shared block-decoding implementation.
 - Device information text and documentation: identify ECG block format v1
   rather than the temporary 12-byte frame format.
-- Tests: replace temporary ECG frame tests and extend stream tests with the
-  minimum interoperability cases above.
+- Tests: replace temporary ECG frame tests, extend stream tests with the
+  minimum interoperability cases above, enforce the 8/24-block geometry, and
+  cover disconnect/reconnect while notifications are in flight.
 
 The format change and stream-protocol change must ship atomically. Firmware
 must not advertise stream protocol v1 while sending `ECB1` fragments, and a

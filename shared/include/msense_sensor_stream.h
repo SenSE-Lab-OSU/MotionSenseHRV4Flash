@@ -14,6 +14,7 @@
 
 struct msense_sensor_stream_config {
 	uint8_t device_type;
+	uint8_t protocol_version;
 	uint8_t record_format_version;
 	uint16_t record_size;
 	uint32_t record_rate_numerator;

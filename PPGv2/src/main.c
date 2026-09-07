@@ -158,6 +158,7 @@ static int initialize_sensor_stream(void)
 {
 	const struct msense_sensor_stream_config config = {
 		.device_type = MSENSE_SENSOR_STREAM_DEVICE_PPG,
+		.protocol_version = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION_PPG,
 		.record_format_version = MSENSE_SENSOR_STREAM_PROTOCOL_VERSION,
 		.record_size = MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE,
 		.record_rate_numerator = 256U,

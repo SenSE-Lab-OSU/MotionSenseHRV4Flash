@@ -22,6 +22,8 @@
 #include "common.h"
 #include "BLEService.h"
 #include "msense_device_identity.h"
+#include "msense_sensor_stream.h"
+#include "msense_git_metadata.h"
 #include "zephyrfilesystem.h"
 #include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -151,6 +153,18 @@ static const struct msense_device_identity_config device_identity_config = {
 	.ble_name_len = MSENSE_PRODUCT_BLE_NAME_LEN,
 	.dis_model = CONFIG_BT_DIS_MODEL,
 };
+
+static int initialize_sensor_stream(void)
+{
+	const struct msense_sensor_stream_config config = {
+		.device_type = MSENSE_SENSOR_STREAM_DEVICE_PPG,
+		.record_size = MSENSE_SENSOR_STREAM_PPG_RECORD_SIZE,
+		.history_record_count = MSENSE_SENSOR_STREAM_PPG_HISTORY_RECORDS,
+		.forward_record_count = MSENSE_SENSOR_STREAM_PPG_FORWARD_RECORDS,
+	};
+
+	return msense_sensor_stream_init(&config);
+}
 static bool uuid_ble_address_update_needed;
 static bool uuid_ble_address_msc_deferred;
 
@@ -601,6 +615,7 @@ int main(void)
 {
 	int identity_err;
 	int ret;
+	int stream_ret;
 	int teardown_ret;
 	int uuid_ret = 0;
 	bool boot_storage_ready = false;
@@ -619,6 +634,11 @@ int main(void)
 						   &device_identity_config);
 	if (identity_err) {
 		LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
+	} else {
+		stream_ret = initialize_sensor_stream();
+		if (stream_ret != 0) {
+			LOG_ERR("Unable to initialize NUS sensor stream: %d", stream_ret);
+		}
 	}
   
   

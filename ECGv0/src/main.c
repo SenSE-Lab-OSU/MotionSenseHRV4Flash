@@ -26,7 +26,10 @@
 #include "icm20948_accel.h"
 #include "BLEService.h"
 #include "ecgRecorder.h"
+#include "ecgRecordFormat.h"
 #include "msense_device_identity.h"
+#include "msense_sensor_stream.h"
+#include "msense_git_metadata.h"
 #include "zephyrfilesystem.h"
 #include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -158,6 +161,18 @@ static const struct msense_device_identity_config device_identity_config = {
 	.ble_name_len = MSENSE_PRODUCT_BLE_NAME_LEN,
 	.dis_model = CONFIG_BT_DIS_MODEL,
 };
+
+static int initialize_sensor_stream(void)
+{
+	const struct msense_sensor_stream_config config = {
+		.device_type = MSENSE_SENSOR_STREAM_DEVICE_ECG,
+		.record_size = MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE,
+		.history_record_count = MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS,
+		.forward_record_count = MSENSE_SENSOR_STREAM_ECG_FORWARD_RECORDS,
+	};
+
+	return msense_sensor_stream_init(&config);
+}
 static bool uuid_ble_address_update_needed;
 static bool uuid_ble_address_msc_deferred;
 
@@ -676,6 +691,7 @@ static void accel_record_fault_handler(void *context)
 void request_ecg_storage_fault(void)
 {
 	/* Safe from producer and log callbacks: only latch, gate, and wake. */
+	msense_sensor_stream_storage_failed(-EIO);
 	atomic_set(&msc_ownership_faulted, 1);
 	atomic_clear(&ecg_storage_runtime_ready);
 	atomic_clear(&ecg_collection_transition_requested);
@@ -1152,9 +1168,9 @@ int enter_ecg_collection_mode(void)
 	bool collection_mount_ready = false;
 	bool ecg_start_submitted = false;
 	bool ecg_started = false;
+	bool stream_started = false;
 	bool fsync_started = false;
 	bool icm_started = false;
-	bool rtc_started = false;
 
 	k_mutex_lock(&collection_mode_lock, K_FOREVER);
 	if (atomic_get(&ecg_storage_runtime_ready) == 0) {
@@ -1197,15 +1213,10 @@ int enter_ecg_collection_mode(void)
 	}
 	k_work_queue_unplug(&my_work_q);
 
-	ret = rtc0_collection_counter_start();
-	if (ret != 0) {
-		LOG_ERR("Failed to start RTC0 collection counter: %d", ret);
-		goto start_failed;
-	}
-	rtc_started = true;
-
+	msense_sensor_stream_recording_started();
+	stream_started = true;
 	ecg_start_submitted = true;
-	ret = ecg_recorder_start();
+	ret = ecg_recorder_start(session_id);
 	if (ret != 0) {
 		LOG_ERR("Failed to start ECG recorder: %d", ret);
 		goto start_failed;
@@ -1259,6 +1270,15 @@ start_failed:
 	start_ret = ret;
 	ecg_filesystem_log_disable_and_wait();
 	cleanup_ret = 0;
+	if (ecg_started) {
+		ret = ecg_recorder_stop();
+		if (cleanup_ret == 0 && ret != 0) {
+			cleanup_ret = ret;
+		}
+	}
+	if (stream_started) {
+		msense_sensor_stream_recording_stopped();
+	}
 	if (fsync_started) {
 		imu_fsync_timing_stop();
 	}
@@ -1278,12 +1298,6 @@ start_failed:
 			cleanup_ret = ret;
 		}
 	}
-	if (ecg_started) {
-		ret = ecg_recorder_stop();
-		if (cleanup_ret == 0 && ret != 0) {
-			cleanup_ret = ret;
-		}
-	}
 	/*
 	 * A failed ecg_recorder_start() may have submitted a start token even
 	 * though it never returned success.  Its failure path must consume the
@@ -1295,9 +1309,7 @@ start_failed:
 			cleanup_ret = (start_ret != 0) ? start_ret : -EIO;
 		}
 	}
-	if (rtc_started) {
-		rtc0_collection_counter_stop();
-	}
+	rtc0_collection_counter_stop();
 	if (cleanup_ret == 0) {
 		cleanup_ret = shutdown_ecg_filesystem_after_start_failure(
 			collection_mount_ready);
@@ -1382,6 +1394,12 @@ int exit_ecg_collection_mode(void)
 		if (stop_ret == 0) {
 			stop_ret = ret;
 		}
+	}
+	if (ret == 0) {
+		/* The final boundary block has reached the stream before this transition. */
+		msense_sensor_stream_recording_stopped();
+	} else {
+		msense_sensor_stream_storage_failed(ret);
 	}
 	rtc0_collection_counter_stop();
 
@@ -1523,6 +1541,7 @@ int main(void)
 {
   int ret;
 	int identity_err;
+	int stream_ret;
 	int uuid_ret = 0;
 	bool uuid_write_ready = false;
 	bool uuid_address_present = false;
@@ -1543,10 +1562,21 @@ int main(void)
     return ret;
   }
 
+	ret = rtc0_collection_counter_start();
+	if (ret != 0) {
+		LOG_ERR("Failed to start boot RTC0 counter: %d", ret);
+		return ret;
+	}
+
   identity_err = msense_device_identity_init(&device_identity,
 						 &device_identity_config);
   if (identity_err) {
     LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
+	} else {
+		stream_ret = initialize_sensor_stream();
+		if (stream_ret != 0) {
+			LOG_ERR("Unable to initialize NUS sensor stream: %d", stream_ret);
+		}
   }
   
 

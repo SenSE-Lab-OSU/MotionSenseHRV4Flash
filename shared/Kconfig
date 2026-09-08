@@ -39,3 +39,40 @@ menuconfig SPI_NOR_CUSTOM_DRIVER
 	bool
 	prompt "Custom spi NOR driver, modified from spi_nor.c to be more generic and customizable."
 	default n
+
+menuconfig MSENSE_SENSOR_STREAM
+	bool "Bounded NUS sensor stream"
+	depends on BT
+	default n
+	help
+	  Provide the MotionSense version-0 sensor record stream over a
+	  NUS-compatible GATT service. The application supplies recording lifecycle
+	  events and mirrors finalized whole records from its single producer.
+
+if MSENSE_SENSOR_STREAM
+
+config MSENSE_SENSOR_STREAM_INGRESS_SLOTS
+	int "Stream ingress slots"
+	default 4
+	range 2 64
+	help
+	  Complete-record handoff slots. ECG's default is four 4096-byte records;
+	  PPG overrides the record storage size and slot count in its application.
+
+config MSENSE_SENSOR_STREAM_INGRESS_RECORD_BYTES
+	int "Stream ingress record bytes"
+	default 4096
+	range 16 4096
+	help
+	  Storage reserved by each complete-record handoff slot. It must be at
+	  least the selected product record size.
+
+config MSENSE_SENSOR_STREAM_NO_PROGRESS_TIMEOUT_MS
+	int "Stream no-progress timeout (ms)"
+	default 15000
+	range 1000 60000
+	help
+	  End a stalled v0 stream when notifications remain ready or in flight
+	  without a completion for this duration. Recording continues independently.
+
+endif # MSENSE_SENSOR_STREAM

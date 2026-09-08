@@ -143,8 +143,10 @@ int rtc0_collection_counter_start(void)
 	nrfx_rtc_config_t config = NRFX_RTC_DEFAULT_CONFIG;
 	nrfx_err_t err;
 
-	if (atomic_get(&rtc0_collection_counter_started) != 0 ||
-	    nrfx_rtc_init_check(&rtc0_collection_counter)) {
+	if (atomic_get(&rtc0_collection_counter_started) != 0) {
+		return 0;
+	}
+	if (nrfx_rtc_init_check(&rtc0_collection_counter)) {
 		return -EALREADY;
 	}
 
@@ -182,15 +184,8 @@ int rtc0_collection_counter_start(void)
 
 void rtc0_collection_counter_stop(void)
 {
-	if (!atomic_cas(&rtc0_collection_counter_started, 1, 0)) {
-		return;
-	}
-
+	/* Keep the boot-relative counter and its 24-bit overflow extension alive. */
 	rtc0_collection_notify_stop();
-	nrfx_rtc_overflow_disable(&rtc0_collection_counter);
-	nrfx_rtc_disable(&rtc0_collection_counter);
-	nrfx_rtc_uninit(&rtc0_collection_counter);
-	LOG_INF("RTC0 collection counter stopped");
 }
 
 int rtc0_collection_counter_get(uint32_t *ticks)

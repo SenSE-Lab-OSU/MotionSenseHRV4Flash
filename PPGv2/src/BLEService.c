@@ -22,6 +22,7 @@
 #include <nrfx_timer.h>
 #include "BLEService.h"
 #include "msense_msc_media.h"
+#include "msense_sensor_stream.h"
 
 #include <nrfx_rtc.h>
 
@@ -354,7 +355,8 @@ void ppg_collection_enable_runtime_transitions(void)
 
 void ppg_collection_latch_storage_fault(void)
 {
-  atomic_set(&ppg_collection_ownership_faulted, 1);
+	msense_sensor_stream_storage_failed(-EIO);
+	atomic_set(&ppg_collection_ownership_faulted, 1);
   atomic_clear(&ppg_collection_transition_requested);
   atomic_clear(&ppg_collection_producer_gate);
   k_sem_give(&ppg_collection_transition_request_sem);
@@ -982,7 +984,8 @@ static int enter_ppg_collection_mode(void)
   }
   rtc_started = true;
 
-  atomic_set(&ppg_collection_producer_gate, 1);
+	msense_sensor_stream_recording_started();
+	atomic_set(&ppg_collection_producer_gate, 1);
   collecting_data = true;
   host_wants_collection = true;
   ppg_filesystem_log_enable();
@@ -1035,9 +1038,10 @@ static int exit_ppg_collection_mode(bool retain_host_request)
     return 0;
   }
 
-  LOG_INF("Leaving PPG collection mode");
-  ppg_filesystem_log_disable_and_wait();
-  ppg_stop_producers();
+	LOG_INF("Leaving PPG collection mode");
+	ppg_filesystem_log_disable_and_wait();
+	msense_sensor_stream_recording_stopped();
+	ppg_stop_producers();
   if (ppg_collection_faulted()) {
     ppg_storage_transition_fault("PPG collection ownership fault", -EIO);
     k_mutex_unlock(&ppg_collection_transition_lock);

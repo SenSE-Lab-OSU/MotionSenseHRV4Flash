@@ -67,15 +67,14 @@ void status_reg_ble_notification();
 int storage_ble_notification(uint8_t* data, uint8_t len);
 
 /**
- * @brief Start the collection-local RTC0 counter at 512 Hz.
+ * @brief Start the boot-relative RTC0 counter at 512 Hz.
  *
- * The counter is cleared before it starts. This API is called only by the
- * collection-mode lifecycle while its mutex is held.
+ * The first call clears the counter at boot; later calls are idempotent.
  */
 int rtc0_collection_counter_start(void);
 
 /**
- * @brief Stop and uninitialize the collection-local RTC0 counter.
+ * @brief Stop collection timing notifications while retaining the RTC0 counter.
  */
 void rtc0_collection_counter_stop(void);
 
@@ -84,7 +83,7 @@ void rtc0_collection_counter_stop(void);
  *
  * The 24-bit hardware counter is extended in software and wraps naturally
  * after 2^32 ticks. Callers must provide a non-NULL output pointer and must
- * tolerate -EACCES outside collection mode.
+ * tolerate -EACCES before the boot-time counter initialization succeeds.
  */
 int rtc0_collection_counter_get(uint32_t *ticks);
 

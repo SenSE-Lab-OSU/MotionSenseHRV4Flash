@@ -34,6 +34,12 @@ if(BUILD_TESTING)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/../shared/tests/cmake/test_uuid_ble_address_contract.cmake"
 	)
 	add_test(
+		NAME msense_sensor_stream_geometry
+		COMMAND ${CMAKE_COMMAND}
+			"-DMSENSE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/../shared/tests/cmake/test_sensor_stream_geometry.cmake"
+	)
+	add_test(
 		NAME msense_phase4_contracts
 		COMMAND ${CMAKE_COMMAND}
 			"-DMSENSE_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/.."
@@ -63,7 +69,6 @@ target_sources(app PRIVATE
 	src/accelRecorder.c
 	src/accelTimingEstimator.c
 	src/batterymonitordt.c
-	src/ecgRecordFormat.c
 	src/ecgRecorder.c
 	src/filesystemlogging_policy.c
 	src/icm20948_accel.c

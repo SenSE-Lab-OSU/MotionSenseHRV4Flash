@@ -4,5 +4,5 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ecg_record_format)
 
-target_sources(app PRIVATE src/main.c ../../src/ecgRecordFormat.c)
-target_include_directories(app PRIVATE ../../src)
+target_sources(app PRIVATE src/main.c ../../../shared/ecg_block_format.c)
+target_include_directories(app PRIVATE ../../src ../../../shared/include)

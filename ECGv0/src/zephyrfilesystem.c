@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include "BLEService.h"
 #include "msense_git_metadata.h"
+#include "msense_uuid_file.h"
 #include "zephyrfilesystem.h"
 
 
@@ -936,20 +937,20 @@ int flush_data_buffer(enum sensor_type sensor){
 }
 
 
-int write_device_info_file(const char *device_name,
-				   const char *device_id_hex, const char *dis_model)
+int write_device_info_file(const char *device_name, const char *device_id_hex,
+			   const char *dis_model, bool *ble_address_present)
 {
 	struct fs_mount_t *mp = &fs_mnt;
-	struct fs_file_t name_file;
 	char uuid_name[32];
 	char uuid_contents[UUID_CONTENTS_MAX_SIZE];
 	int rc;
 	int written;
-	ssize_t bytes_written;
 
-	if (device_name == NULL || device_id_hex == NULL || dis_model == NULL) {
+	if (device_name == NULL || device_id_hex == NULL || dis_model == NULL ||
+	    ble_address_present == NULL) {
 		return -EINVAL;
 	}
+	*ble_address_present = false;
 	if (!file_system_ready || !filesystem_mounted) {
 		return -EACCES;
 	}
@@ -959,10 +960,10 @@ int write_device_info_file(const char *device_name,
 		return -ENAMETOOLONG;
 	}
 
-	fs_file_t_init(&name_file);
-	rc = fs_open(&name_file, uuid_name, FS_O_READ);
+	rc = msense_uuid_file_ble_address_present(uuid_name,
+						   ble_address_present);
 	if (rc == 0) {
-		return fs_close(&name_file);
+		return 0;
 	}
 	if (rc != -ENOENT) {
 		LOG_WRN("Unable to check uuid.txt: %d", rc);
@@ -982,38 +983,25 @@ int write_device_info_file(const char *device_name,
 		return -ENOSPC;
 	}
 
-	rc = fs_open(&name_file, uuid_name, FS_O_CREATE | FS_O_WRITE);
-	if (rc != 0) {
-		LOG_WRN("Unable to create uuid.txt: %d", rc);
-		return rc;
+	return msense_uuid_file_create(uuid_name, uuid_contents, (size_t)written);
+}
+
+int write_device_info_ble_address(const char *ble_address)
+{
+	struct fs_mount_t *mp = &fs_mnt;
+	char uuid_name[32];
+	int written;
+
+	if (!file_system_ready || !filesystem_mounted) {
+		return -EACCES;
 	}
 
-	bytes_written = fs_write(&name_file, uuid_contents, written);
-	if (bytes_written < 0) {
-		rc = (int)bytes_written;
-	} else if (bytes_written != written) {
-		rc = -EIO;
-	} else {
-		rc = 0;
+	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
+	if (written < 0 || written >= sizeof(uuid_name)) {
+		return -ENAMETOOLONG;
 	}
 
-	{
-		int sync_rc = 0;
-		int close_rc;
-
-		if (rc == 0) {
-			sync_rc = fs_sync(&name_file);
-		}
-		close_rc = fs_close(&name_file);
-		if (rc == 0 && sync_rc != 0) {
-			rc = sync_rc;
-		}
-		if (rc == 0 && close_rc != 0) {
-			rc = close_rc;
-		}
-	}
-
-	return rc;
+	return msense_uuid_file_prepend_ble_address(uuid_name, ble_address);
 }
 
 static int close_all_files(void)

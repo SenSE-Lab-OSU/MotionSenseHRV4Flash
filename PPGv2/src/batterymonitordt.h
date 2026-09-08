@@ -74,7 +74,7 @@
 extern int battery_level;
 
 
-void dt_update_battery(const struct device *dev, bool extra_debug);
+void dt_update_battery(const struct device *dev, bool log_summary);
 
 
 
@@ -95,9 +95,6 @@ extern struct ble_battery_info my_battery ;  // work-queue instance for batter l
 extern int bq274xx_gauge_init(struct bq274xx_config* batterMonitorConfig);
 extern int bq274xx_sample_fetch(struct bq274xx_data *bq274xx, enum sensor_channel chan);
 extern void bas_notify(struct k_work *);
-
-
-                                   
 
 
 

@@ -50,6 +50,7 @@ bool panic_single_thread;
 
 #define MAX_BUFFER_SIZE 9000
 #define UUID_CONTENTS_MAX_SIZE 640U
+#define STORAGE_SLOW_WRITE_LOG_THRESHOLD_MS 50
 
 //#undef GET_FATTIME
 //#define GET_FATTIME() (DWORD)get_current_unix_time()
@@ -575,7 +576,6 @@ int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor)
 		}
 
 		// Now that we created the file name, open it and write the data
-		LOG_INF("Creating new file for %d", sensor);
 		if ((sensor == ecg) && collection_id_valid) {
 			struct fs_dirent entry;
 			int stat_ret = fs_stat(MSenseFile->file_name, &entry);
@@ -621,7 +621,6 @@ int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor)
 	total_written = fs_write(&MSenseFile->self_file, data, size);
 	if (total_written == (ssize_t)size){
 		MSenseFile->current_writes++;
-		LOG_INF("successfully wrote to file for %d, bytes = %i, writes = %i !", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -724,15 +723,29 @@ void work_write(struct k_work* item){
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
 	int write_ret;
+	int64_t time_value;
+	bool first_write;
 
-	LOG_INF("Processing packet %i", container->packet_num);
+	first_write = ((container->sensor == ecg) &&
+		       (ecg_file.current_writes == 0)) ||
+		      ((container->sensor == customlog) &&
+		       (log_file.current_writes == 0));
 	start_timer();
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	write_ret = sensor_write_to_file(container->address, container->size,
 					 container->sensor);
-	int64_t time_value = stop_timer();
-	LOG_INF("write timer: %lli", time_value);
+	time_value = stop_timer();
+	if (write_ret == 0) {
+		if (first_write) {
+			LOG_INF("storage: file started for sensor %d; first write %zu bytes in %lli ms",
+				container->sensor, container->size, time_value);
+		} else if (time_value > STORAGE_SLOW_WRITE_LOG_THRESHOLD_MS) {
+			LOG_WRN("storage: slow write for sensor %d; packet %d, %zu bytes in %lli ms",
+				container->sensor, container->packet_num, container->size,
+				time_value);
+		}
+	}
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -793,7 +806,6 @@ int submit_write(const void* data, size_t size, enum sensor_type type){
 			upload_timeout_errors);
 		return (ret < 0) ? ret : -EALREADY;
 	}
-	LOG_INF("ret value for %i: %i", type, ret);
 	return 0;
 }
 
@@ -855,7 +867,6 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 			request_ecg_storage_fault();
 			return -ENOTSUP;
 		}
-		LOG_INF("Submitting Write!");
 		ret = submit_write(current_buffer->data_upload_buffer,
 					   current_buffer->current_size, sensor);
 		if (ret != 0) {
@@ -908,7 +919,6 @@ int flush_data_buffer(enum sensor_type sensor){
 				LOG_ERR("Cannot verify a direct flush during panic mode");
 				return -ENOTSUP;
 			}
-			LOG_INF("Submitting Write!");
 			int ret = submit_write(current_buffer->data_upload_buffer,
 					       current_buffer->current_size, sensor);
 			if (ret != 0) {
@@ -1317,7 +1327,7 @@ DWORD get_fattime(void)
 			   (DWORD)stm->tm_min << 5 |
 			   (DWORD)stm->tm_sec >> 1;
 	}
-	LOG_WRN("date time not set, returning nothing for fatfs date");
+	LOG_WRN_ONCE("FAT date/time is unset; recording timestamps will be invalid");
 	return 0;
 }
 
@@ -1331,6 +1341,5 @@ void start_timer(){
 int64_t stop_timer(){
 	int64_t length = k_uptime_get() - start_time;
 	start_time = 0;
-	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }

@@ -1182,7 +1182,8 @@ uint16_t offset, uint8_t flags){
   } else if (val == 132) {
     ret = request_ppg_storage_reset(true);
   } else if (val == 121) {
-    ret = request_ppg_storage_reboot();
+    NVIC_SystemReset();
+    return len;
   } else {
     return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
   }

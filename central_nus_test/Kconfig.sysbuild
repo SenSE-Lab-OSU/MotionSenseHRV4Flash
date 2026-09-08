@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# An nRF5340 Bluetooth host on the application core needs the standard HCI IPC
+# controller image on the network core.  These defaults match Nordic's BLE
+# Central samples and make the wrapper's merged image runnable on a clean DK.
+source "${ZEPHYR_BASE}/share/sysbuild/Kconfig"
+
+config NRF_DEFAULT_IPC_RADIO
+	default y
+
+config NETCORE_IPC_RADIO_BT_HCI_IPC
+	default y

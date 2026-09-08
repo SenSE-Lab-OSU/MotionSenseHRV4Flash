@@ -1,0 +1,4 @@
+/* P1.01/P1.00 belong to application-core UARTE1 in this tester. */
+&uart0 {
+	status = "disabled";
+};

@@ -85,5 +85,9 @@ require_text("shared/sensor_stream.c"
 forbid_text("shared/sensor_stream.c" "start_arming")
 forbid_text("shared/include/msense_sensor_stream_protocol.h"
 	"enum msense_sensor_stream_state")
+require_text("central_nus_test/src/main.c"
+	"MSENSE_SENSOR_STREAM_FINITE_BYTES")
+require_text("central_nus_test/src/main.c"
+	"msense_ecg_block_validate")
 require_text("shared/include/msense_sensor_stream_protocol.h"
 	"#define MSENSE_SENSOR_STREAM_PROTOCOL_VERSION 0U")

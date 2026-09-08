@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  ICM-20948 SPI interface on the MotionSense PPG PCB. The retained PPGv2
+  driver accesses the SPI bus directly; this binding records the hardware
+  contract without enabling a competing sensor driver.
+
+compatible: "invensense,icm20948"
+
+include: spi-device.yaml
+
+properties:
+  int-gpios:
+    type: phandle-array
+    required: true
+    description: ICM-20948 INT1 data-ready signal.
+
+  fsync-gpios:
+    type: phandle-array
+    required: true
+    description: ICM-20948 FSYNC signal driven by the host.

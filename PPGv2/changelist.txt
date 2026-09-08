@@ -1,0 +1,184 @@
+
+
+This file contains a summary list of all the changes that were made when updating this project
+from MotionSense3 to MotionSense4. It should be used as a reference guide for other devlopers who may want to 
+back port additional features from 3 to 4, or vice versa; go back from 4 to 3, but keep some other code from 4. 
+
+
+NrfConnect SDK 1.4 -> NrfConnect SDK 2.5
+
+
+Simplified Cmake to use GLOB_RECURSE,
+deleted out all find cxx directories, and compiler options, since those were only necessary for tensorflow lite micro,
+which we aren't using anymore
+
+KConfigs
+Commented out all SPI1=y, SPI2=y, since these are now specified in the app/device tree overlays instead.
+
+Changed all references to <zephyr.h> to <zephyr/kernel.h>
+https://github.com/zephyrproject-rtos/zephyr/issues/49578
+as per this commit, they are equivalent, and zephyr.h was deprecated.
+
+The include directory for zephyr has now moved to be outside the folder "zephyr".
+As such, all zephyr includes have to include the zephyr folder path
+This means pretyy much everything has been renamed: bluetooth/xx.h is now
+zephyr/bluetooth/xx.h, driver/spi.h is now zephyr/driver/spi.h... etc for every
+single include file.
+
+spi_cs_control struct changed the fields. the GPIO information is now inside a seperate struct called gpio_dt_spec.
+and it is defined as:
+
+struct gpio_dt_spec {
+	/** GPIO device controlling the pin */
+	const struct device *port;
+	/** The pin's number on the device */
+	gpio_pin_t pin;
+	/** The pin's configuration flags as specified in devicetree */
+	gpio_dt_flags_t dt_flags;
+};
+
+
+the fields for both imu_cs and ppg_cs were changed to match this.
+the field for gpio_dev has changed name to 
+
+
+
+bq274xx_command_reg_read: in .h file function declaration features int16_t, however in the 
+implementation it is uint16_t. corrected to uint because that seemed to be the type it was actually called with.
+
+
+
+
+changed all device object checking calls (gpioHandle_CS_ppg == NULL) to the better specified check: !device_is_ready(gpioHandle_CS_ppg)
+this was done for most device objects, ppg gpio was just used for demonstration purposes.
+
+
+Timers apparently don't work very well (crash?) when setting frequency with enums, altered code to just manually enter the 1Mhz frequency
+
+
+
+The following KConfigs were added to provide USB and Filesystem Support:
+
+
+Zephyr does not allow for alternative USB sizes. Hence, you will need to insert these lines in msc.c in zephyr/subsys/usb/class/msc.c 
+
+#ifdef CONFIG_FS_FATFS_MAX_SS
+#define BLOCK_SIZE	CONFIG_FS_FATFS_MAX_SS
+#else
+#define BLOCK_SIZE 512
+#endif
+
+
+Device Tree:
+
+pins are now specified with the pin cntrl api
+
+entered in config settings for ppg through spi3 and imu through spi4
+
+changed qspi device to new flash specs
+
+
+to veiw the partitions on windows, use the below command. If the watch/lfs partition is recognized, the partition number will list as one not zero.
+wmic diskdrive list brief
+
+The littlefs partition is configured as the following:
+--read_size=16
+       --prog_size=16 
+       --block_size=4096 (I think this is one page on the hardware level of NOR) - gives 1000 hex addresses 
+       --block_count=variable depends on the size flash we are using. block_count*block_size = total storage 
+       --cache_size=64 
+       --lookahead_size=32
+	   sector size of 512
+block size is the total size of a block, read and program size are usually the same
+
+
+Fatfs has been configured as such:
+
+CONFIG_PM_OVERRIDE_EXTERNAL_DRIVER_CHECK=y
+CONFIG_MASS_STORAGE_DISK_NAME="SD"
+#CONFIG_FILE_SYSTEM_LITTLEFS=y
+CONFIG_FAT_FILESYSTEM_ELM=y
+
+CONFIG_FS_FATFS_READ_ONLY=n
+# below config is necessary because this determines the buffer fatfs internally uses to store reads which we do at a size of 4096
+CONFIG_FS_FATFS_MAX_SS=4096
+CONFIG_FS_FATFS_EXFAT=n
+CONFIG_FS_FATFS_MAX_ROOT_ENTRIES=4096
+CONFIG_FS_FATFS_LFN=y
+
+I'll describe some of the most important ones breifly:
+
+I configured the driver to write a sector size as determined by the disk size. Our 
+nand flash is 4096, hence the value.
+FAT fs typically only allows a certain amount of files in the root directory, so we have to
+bump it up to fix this.
+
+
+
+
+https://docs.nordicsemi.com/bundle/ncs-latest/page/nrf/config_and_build/config_and_build_system.html
+
+
+
+
+nrf-connect sdk v2.5.3 to v2.9.3 changelog
+
+Migration Changes:
+
+2.5.3->2.6
+CONFIG_NRFX_GPIOTE=y -> removed as it's not implicitly set to y if it's used in the project.
+Removed CMSIS DSP Configs as they are no longer needed.
+
+2.6->2.7
+-header file for battery changed to #include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h> (added /ti, it is now inside a subdirectory for nrf)
+re-enabled CMSIS DSP Configs, I guess they got reverted back
+-Verified that that current DFU host tools support the dfu_application.zip file with the new format version (1), which was introduced in this version
+-prepped to migrate to sysbuild, it appears partition manager might be disabled now in this version?
+-child image changed from rpmsg to ipc: changed child image conf file from hci_rpmsg to hci_ipc. Also removed most KConfigs since there were no necessary settings anyway that we use (previous KConifgs were just for testing).
+removed the call to bt_disable() within bt_reset, as the sdk changed bt_disable to no longer be an async call and tied it to threads, causing a deadlock if disable is called on an bt thread (bt_reset is BT_RX thread). Instead, we now just disconnect from the current host and disable advertising (TODO: ultamitely, we should keep bt_disable and just process things via a different thread).
+added CONFIG_RESET_ON_FATAL_ERROR=y since apparently it was implicitly set to no or turned off
+
+2.7->2.8
+CONFIG_NFCT_PINS_AS_GPIOS=y deprecated, moved to device tree instead: 
+&uicr {
+    nfct-pins-as-gpios;
+};
+DCDC CONFIGs deprecated, moved to device tree instead:
+
+&vregmain {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+&vregradio {
+	regulator-initial-mode = <NRF5X_REG_MODE_LDO>;
+};
+
+default system changed to sys-build: refactored project to work with this system:
+moved MCU Bootloader configs to sysbuild folder (sysbuild/mcuboot.conf)
+since DCDC KConfigs update inside mcuboot (but as mentioned, those KConfigs were deprecated), moved the device tree implementation (just like above) to mcuboot.overlay
+added sysbuild.conf, where the image and boot loaders are specified. See file for how images and MCU boot with dfu are setup.
+TODOs: mcuboot configs in mcuboot.conf are not really used anymore, they should eventually be taken out. 
+Same with prj.conf, I don't think these configs are needed anymore, but I still left them in for backwards compatibility:CONFIG_BOOTLOADER_MCUBOOT=y,
+CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU=y
+Partition manager configs have also moved to sysbuild, but we don't use partition manager anymore. However, if we do decide to use it, we must move KConfigs over to sysbuild following the guide: https://nrfconnectdocs.nordicsemi.com/ncs/latest/nrf/releases_and_maturity/migration/migration_sysbuild.html
+also note that device USB appears not to work when not using the MCU bootloader. This is a non issue since we will always use MCU bootloader.
+
+2.8 -> 2.9
+include from ssize_t changed from zephyr/types.h to sys/types.h, included the mentioned file to fix.
+
+NCS v2.9.3 LFXO bypass SDK change
+
+The nRF53 SoC Kconfig now defines CONFIG_SOC_LFXO_BYPASS. It depends on
+CONFIG_SOC_ENABLE_LFXO and defaults to n. When enabled, the nRF53 SoC
+initialization forces NRF_OSCILLATORS_LFXO_CAP_EXTERNAL, enables LFXO bypass for
+a rail-to-rail external clock source, and assigns XL2 to the application core.
+The Kconfig load-capacitance choice retains its upstream options and default;
+when bypass is enabled, soc.c ignores that selection and programs the external
+capacitance setting. When bypass is disabled, the SDK retains its standard
+capacitance selection and peripheral ownership of XL2.
+
+MSenseDevice/prj.conf explicitly sets CONFIG_SOC_LFXO_BYPASS=n. MCUboot and
+the HCI IPC image use the default-disabled value.
+
+The standalone file msense_ncs_v2.9.3_lfxo_bypass.patch contains only this
+Kconfig and soc.c SDK change.

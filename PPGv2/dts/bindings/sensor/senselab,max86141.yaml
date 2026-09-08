@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  MAX86141 optical sensor connected to SPI. PPGv2 retains its existing direct
+  transport implementation, so this binding describes the device without
+  selecting a separate Zephyr sensor driver.
+
+compatible: "senselab,max86141"
+
+include: spi-device.yaml

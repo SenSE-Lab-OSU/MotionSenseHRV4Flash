@@ -1,0 +1,7 @@
+tests:
+  app.accel_recorder:
+    tags:
+      - accel
+      - filesystem
+    platform_allow:
+      - ecgv0/nrf5340/cpuapp

@@ -1,0 +1,14 @@
+# Enable the core architecture features needed by the HCI IPC network image.
+# The SoC package itself is selected in Kconfig.ecgv0.
+CONFIG_ARM_MPU=y
+CONFIG_HW_STACK_PROTECTION=y
+CONFIG_GPIO=y
+
+# The network core shares ECGv0's externally-driven LFXO and common HFXO.
+CONFIG_SOC_ENABLE_LFXO=y
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_20PPM=y
+CONFIG_SOC_LFXO_CAP_EXTERNAL=y
+CONFIG_SOC_LFXO_BYPASS=y
+CONFIG_SOC_HFXO_CAP_INTERNAL=y
+CONFIG_SOC_HFXO_CAP_INT_VALUE_X2=25

@@ -1,0 +1,45 @@
+description: |
+  SenseLab raw NAND disk implemented by identical SPI NAND packages on one SPI
+  controller. The controller's cs-gpios array describes the physical package
+  population; the child properties describe one package exactly. The driver
+  derives total logical capacity from individual-size and num-flashchips, so a
+  4 GiB population never needs to be represented in a 32-bit byte property.
+
+compatible: "senselab,nanddisk"
+
+include: ["spi-device.yaml", "jedec,spi-nor-common.yaml"]
+
+properties:
+  reg:
+    required: true
+
+  jedec-id:
+    required: true
+
+  individual-size:
+    type: int
+    required: true
+    description: |
+      Exact capacity in bytes of one NAND package.
+
+  num-flashchips:
+    type: int
+    required: true
+    description: |
+      Number of populated, identical NAND packages. This must equal the parent
+      SPI controller's cs-gpios array length.
+
+  dies-per-flash:
+    type: int
+    required: true
+    description: Number of independently selected dies in each NAND package.
+
+  page-size:
+    type: int
+    required: true
+    description: Exact NAND page size in bytes; this is the raw disk sector size.
+
+  pages-per-erase-block:
+    type: int
+    required: true
+    description: Exact number of pages in one NAND erase block.

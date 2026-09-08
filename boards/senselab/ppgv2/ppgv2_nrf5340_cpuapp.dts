@@ -179,3 +179,17 @@ zephyr_udc0: &usbd {
 /* MCUboot and the application image use the standard nRF5340 CPUAPP
  * flash/SRAM partition layout. This is logical SoC memory, not DK wiring. */
 #include "../common/nrf5340_cpuapp_partition.dtsi"
+
+/* Keep the final 512 bytes below the IPC window across application resets. */
+&sram0_image {
+	reg = <0x20000000 0x6fe00>;
+};
+
+/ {
+	msense_fatal_retention: memory@2006fe00 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x2006fe00 0x200>;
+		zephyr,memory-region = "MSENSE_FATAL_RETENTION";
+		status = "okay";
+	};
+};

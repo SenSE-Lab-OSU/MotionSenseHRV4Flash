@@ -30,6 +30,7 @@
 #include "msense_device_identity.h"
 #include "msense_sensor_stream.h"
 #include "msense_git_metadata.h"
+#include "msense_fatal_retention.h"
 #include "zephyrfilesystem.h"
 #include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -710,6 +711,9 @@ void request_ecg_collection_mode(bool enable)
 		LOG_ERR("Rejecting ECG collection restart while storage is unavailable");
 		return;
 	}
+	if (enable) {
+		msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_REQUEST);
+	}
 
 	atomic_set(&ecg_collection_transition_requested, enable ? 1 : 0);
 	k_sem_give(&ecg_collection_transition_sem);
@@ -1021,7 +1025,7 @@ static int reset_ecg_storage_and_reboot(bool reset_bad_blocks)
 		goto erase_failed;
 	}
 	LOG_INF("Storage erase complete; resetting while MSC remains absent");
-	NVIC_SystemReset();
+	msense_normal_reset();
 	ret = -EIO;
 
 erase_failed:
@@ -1039,7 +1043,7 @@ static int reboot_ecg_after_storage_teardown(void)
 		return -EIO;
 	}
 	LOG_INF("Resetting while MSC remains absent");
-	NVIC_SystemReset();
+	msense_normal_reset();
 	ecg_storage_transition_fault("ECG reboot", -EIO);
 	return -EIO;
 }
@@ -1187,6 +1191,7 @@ int enter_ecg_collection_mode(void)
 	}
 
 	LOG_INF("Entering ECG collection mode");
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_ENTER);
 	blink_collection_mode_pattern();
 
 	if (usb_enabled) {
@@ -1199,6 +1204,7 @@ int enter_ecg_collection_mode(void)
 	}
 
 	set_firmware_disk_writable();
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_STORAGE_MOUNT);
 	ret = setup_disk();
 	if (ret != 0) {
 		LOG_ERR("Failed to mount ECG filesystem: %d", ret);
@@ -1216,6 +1222,7 @@ int enter_ecg_collection_mode(void)
 	msense_sensor_stream_recording_started();
 	stream_started = true;
 	ecg_start_submitted = true;
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_ECG_START);
 	ret = ecg_recorder_start(session_id);
 	if (ret != 0) {
 		LOG_ERR("Failed to start ECG recorder: %d", ret);
@@ -1223,6 +1230,7 @@ int enter_ecg_collection_mode(void)
 	}
 	ecg_started = true;
 
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_ACCEL_START);
 	ret = accel_recorder_start(session_id);
 	if (ret != 0) {
 		LOG_ERR("Failed to start accelerometer recorder: %d", ret);
@@ -1236,6 +1244,7 @@ int enter_ecg_collection_mode(void)
 		goto start_failed;
 	}
 
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_IMU_START);
 	ret = icm20948_accel_start();
 	if (ret != 0) {
 		LOG_ERR("Failed to start ICM-20948 accelerometer: %d", ret);
@@ -1243,6 +1252,7 @@ int enter_ecg_collection_mode(void)
 	}
 	icm_started = true;
 
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_FSYNC_START);
 	ret = imu_fsync_timing_start();
 	if (ret != 0) {
 		LOG_ERR("Failed to start IMU FSYNC timing: %d", ret);
@@ -1250,6 +1260,7 @@ int enter_ecg_collection_mode(void)
 	}
 	fsync_started = true;
 
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_BLE_TIMING_START);
 	ret = rtc0_collection_notification_start();
 	if (ret != 0) {
 		LOG_ERR("Failed to start RTC0 BLE timing notifications: %d", ret);
@@ -1262,6 +1273,7 @@ int enter_ecg_collection_mode(void)
 
 	collecting_data = true;
 	host_wants_collection = true;
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_READY);
 	ecg_filesystem_log_enable();
 	k_mutex_unlock(&collection_mode_lock);
 	return 0;
@@ -1554,6 +1566,8 @@ int main(void)
   printk("Starting Application... \n");
   LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
   LOG_INF("Starting Logging...");
+	msense_fatal_retention_report();
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_BOOT);
 
   ret = button0_init();
   if (ret != 0)
@@ -1562,6 +1576,7 @@ int main(void)
     return ret;
   }
 
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_RTC_START);
 	ret = rtc0_collection_counter_start();
 	if (ret != 0) {
 		LOG_ERR("Failed to start boot RTC0 counter: %d", ret);

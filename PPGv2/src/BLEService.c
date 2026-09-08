@@ -23,6 +23,7 @@
 #include "BLEService.h"
 #include "msense_msc_media.h"
 #include "msense_sensor_stream.h"
+#include "msense_fatal_retention.h"
 
 #include <nrfx_rtc.h>
 
@@ -367,6 +368,9 @@ void request_ppg_collection_mode(bool enable)
   if (enable && ppg_collection_faulted()) {
     LOG_ERR("Rejecting PPG collection restart while MSC ownership is faulted");
     return;
+  }
+  if (enable) {
+    msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_REQUEST);
   }
 
   atomic_set(&ppg_collection_transition_requested, enable ? 1 : 0);
@@ -801,7 +805,7 @@ static int reset_ppg_storage_and_reboot(bool reset_bad_blocks)
 
   set_firmware_disk_read_only();
   LOG_INF("Storage erase complete; resetting while MSC remains absent");
-  NVIC_SystemReset();
+  msense_normal_reset();
   ret = -EIO;
 
 erase_failed:
@@ -814,7 +818,7 @@ static int reboot_ppg_after_storage_teardown(void)
 {
   set_firmware_disk_read_only();
   LOG_INF("Resetting while MSC remains absent");
-  NVIC_SystemReset();
+  msense_normal_reset();
   ppg_storage_transition_fault("PPG reboot", -EIO);
   return -EIO;
 }
@@ -944,6 +948,7 @@ static int enter_ppg_collection_mode(void)
   }
 
   LOG_INF("Entering PPG collection mode");
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_ENTER);
   if (atomic_get(&ppg_collection_msc_enabled) != 0) {
     ret = msense_msc_media_claim_for_firmware();
     if (ret != 0) {
@@ -954,6 +959,7 @@ static int enter_ppg_collection_mode(void)
   }
 
   set_firmware_disk_writable();
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_STORAGE_MOUNT);
   ret = setup_disk();
   if (ret != 0) {
     LOG_ERR("Failed to mount PPG filesystem: %d", ret);
@@ -971,13 +977,16 @@ static int enter_ppg_collection_mode(void)
     goto start_failed;
   }
 
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_PPG_START);
   ppg_config();
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_IMU_START);
   motion_config();
   sensors_configured = true;
   global_counter = 0;
   gyro_first_read = 0;
   ppg_read = 0;
 
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_RTC_START);
   ret = ppg_rtc_start_source();
   if (ret != 0) {
     goto start_failed;
@@ -988,6 +997,7 @@ static int enter_ppg_collection_mode(void)
 	atomic_set(&ppg_collection_producer_gate, 1);
   collecting_data = true;
   host_wants_collection = true;
+  msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_READY);
   ppg_filesystem_log_enable();
   k_mutex_unlock(&ppg_collection_transition_lock);
   return 0;

@@ -1,0 +1,5 @@
+msense_fatal_retention:
+  placement:
+    before: [rpmsg_nrf53_sram]
+  size: 0x200
+  region: sram_primary

@@ -16,6 +16,11 @@ list(APPEND ZEPHYR_EXTRA_MODULES "${CMAKE_CURRENT_SOURCE_DIR}/../shared")
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ECGv0)
 
+preprocess_pm_yml(
+	"${CMAKE_CURRENT_SOURCE_DIR}/pm.yml"
+	"${CMAKE_CURRENT_BINARY_DIR}/pm.yml.msense_fatal_retention"
+)
+
 include("${ZEPHYR_MSENSE_SHARED_MODULE_DIR}/cmake/msense_git_metadata.cmake")
 msense_add_git_metadata("${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -76,6 +81,7 @@ target_sources(app PRIVATE
 	src/main.c
 	src/zephyrfilesystem.c
 	src/drivers/ecg/max30001.c
+	../shared/fatal_retention.c
 )
 
 #if(CONFIG_BUILD_WITH_TFM)

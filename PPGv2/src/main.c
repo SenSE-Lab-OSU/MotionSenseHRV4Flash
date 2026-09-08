@@ -24,6 +24,7 @@
 #include "msense_device_identity.h"
 #include "msense_sensor_stream.h"
 #include "msense_git_metadata.h"
+#include "msense_fatal_retention.h"
 #include "zephyrfilesystem.h"
 #include "msense_msc_media.h"
 #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -629,6 +630,8 @@ int main(void)
 
 	LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
 	LOG_INF("Starting application");
+	msense_fatal_retention_report();
+	msense_fatal_stage_set(MSENSE_FATAL_STAGE_BOOT);
 
 	identity_err = msense_device_identity_init(&device_identity,
 						   &device_identity_config);

@@ -21,6 +21,7 @@
 #include <hal/nrf_rtc.h>
 #include <nrfx_rtc.h>
 #include "BLEService.h"
+#include "msense_fatal_retention.h"
 #include "imuFsyncTiming.h"
 
 

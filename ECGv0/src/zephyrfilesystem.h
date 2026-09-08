@@ -1,5 +1,5 @@
-#ifndef ZEPHYR_FILESYSTEM_H_
-#define ZEPHYR_FILESYSTEM_H_
+#ifndef ECGV0_ZEPHYR_FILESYSTEM_H_
+#define ECGV0_ZEPHYR_FILESYSTEM_H_
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,8 +15,6 @@ extern bool file_system_ready;
 
 extern bool panic_single_thread;
 
-
-extern bool file_system_ready;
 
 enum sensor_type {ecg, passthrough, customlog};
 
@@ -43,8 +41,6 @@ bool filesystem_is_mounted(void);
 int create_test_file(int writes);
 
 int create_test_files(int number_of_files);
-
-int sensor_write_to_file(const void* data, size_t size, enum sensor_type);
 
 int write_to_file(const void* data, size_t size);
 
@@ -83,9 +79,9 @@ uint64_t get_current_unix_time();
 
 void set_date_time_bt(uint64_t value);
 
-void start_timer();
+void start_timer(int64_t *start_time_ref);
 
-int64_t stop_timer();
+int64_t stop_timer(int64_t *start_time_ref);
 
 void enable_read_only(bool enable);
 
@@ -102,4 +98,4 @@ extern uint64_t set_date_time;
 extern memory_container ecg_work_item;
 extern memory_container log_work_item;
 
-#endif /* ZEPHYR_FILESYSTEM_H_ */
+#endif /* ECGV0_ZEPHYR_FILESYSTEM_H_ */

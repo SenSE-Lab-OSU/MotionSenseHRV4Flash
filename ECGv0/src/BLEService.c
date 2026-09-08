@@ -354,7 +354,7 @@ BT_GATT_SERVICE_DEFINE(status_service,
   BT_GATT_PRIMARY_SERVICE(&bt_uuid_status_service),
   BT_GATT_CHARACTERISTIC(&bt_uuid_read_storage.uuid,//18,19
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
-    read_generic_four, NULL, &storage_percent_full),
+    read_generic_one, NULL, &storage_percent_full),
     BT_GATT_CHARACTERISTIC(&bt_uuid_read_status.uuid,
     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_READ,
     update_ble_status_register, NULL, &ble_status_register_send),
@@ -545,6 +545,9 @@ uint16_t offset, uint8_t flags){
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 
   }
+  if (len != 1) {
+    return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+  }
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("write: %i", val);
   request_ecg_collection_mode(val != 0U);
@@ -567,7 +570,7 @@ uint16_t offset, uint8_t flags){
 
   }
 
-  uint64_t val = *((uint64_t *)buff);
+  uint64_t val = sys_get_le64(buff);
   LOG_INF("writing: %llu", val);
   set_date_time_bt(val);
   return len;
@@ -592,7 +595,7 @@ uint16_t offset, uint8_t flags){
 
   }
 
-  int val = *((int *)buff);
+  int val = (int)sys_get_le32(buff);
   LOG_INF("new patient id write: %d", val);
   patient_num = val;
   return len;
@@ -785,37 +788,50 @@ static ssize_t read_generic_eight(struct bt_conn *conn,const struct bt_gatt_attr
 }
 
 void status_reg_ble_notification(){
+  struct bt_conn *conn;
 
   for (int x = 0; x < num_of_status_registers; x++){
     ble_status_register_send[x] = *status_registers[x];
   }
   const struct bt_gatt_attr *attr = &status_service.attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+  conn = collection_notification_connection_get();
+  if (conn == NULL) {
+    return;
+  }
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending status reg...");
-    int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
-    if (ret != 0){
-      printk("Error, unable to send notification\n");
-    }
-  } 
-}
-
-int storage_ble_notification(uint8_t* data, uint8_t len){
-  // if there is no notification, then we technically have an error.
-  int ret = -1;
-  const struct bt_gatt_attr *attr = &status_service.attrs[2];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
-    LOG_INF("sending ennmo...");
-    int ret = bt_gatt_notify(my_connection, attr, data, len);
+    int ret = bt_gatt_notify(conn, attr, ble_status_register_send, sizeof(ble_status_register_send));
     if (ret != 0){
       printk("Error, unable to send notification\n");
     }
   }
+  bt_conn_unref(conn);
+}
+
+int storage_ble_notification(uint8_t* data, uint8_t len){
+  struct bt_conn *conn;
+  // if there is no notification, then we technically have an error.
+  int ret = -1;
+  const struct bt_gatt_attr *attr = &status_service.attrs[2];
+  conn = collection_notification_connection_get();
+  if (conn == NULL) {
+    return ret;
+  }
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+    LOG_INF("sending ennmo...");
+    ret = bt_gatt_notify(conn, attr, data, len);
+    if (ret != 0){
+      printk("Error, unable to send notification\n");
+    }
+  }
+  bt_conn_unref(conn);
   return ret; 
 }
 
 
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic){
 
+  struct bt_conn *conn;
   int ret = 0;
   
   const struct bt_gatt_service_static* selected_service;
@@ -825,12 +841,17 @@ int general_ble_notification(uint8_t* data, uint8_t len, int service, int charac
 
   }
   const struct bt_gatt_attr *attr = &selected_service->attrs[characteristic];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+  conn = collection_notification_connection_get();
+  if (conn == NULL) {
+    return ret;
+  }
+  if(bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");
-    ret = bt_gatt_notify(my_connection, attr, data, len);
+    ret = bt_gatt_notify(conn, attr, data, len);
     if (ret != 0){
       printk("Error, unable to send notification\n");
     }
   }
+  bt_conn_unref(conn);
   return ret; 
 }

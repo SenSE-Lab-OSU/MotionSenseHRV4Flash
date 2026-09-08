@@ -1,3 +1,11 @@
+#ifndef PPGV2_ZEPHYR_FILESYSTEM_H_
+#define PPGV2_ZEPHYR_FILESYSTEM_H_
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <zephyr/kernel.h>
 
 extern bool reset_lock;
 
@@ -5,8 +13,6 @@ extern bool file_system_ready;
 
 extern bool panic_single_thread;
 
-
-extern bool file_system_ready;
 
 enum sensor_type {ppg, 
 accelorometer, passthrough, customlog};
@@ -63,14 +69,11 @@ void work_write(struct k_work* item);
 
 uint64_t get_current_unix_time();
 
-uint64_t get_current_unix_time_ms();
-
-/* Accepts Unix time in milliseconds. */
 void set_date_time_bt(uint64_t value);
 
-void start_timer(int64_t* start_time_ref);
+void start_timer(int64_t *start_time_ref);
 
-int64_t stop_timer(int64_t* start_time_ref);
+int64_t stop_timer(int64_t *start_time_ref);
 
 void print_out_page(int page_num);
 
@@ -89,3 +92,5 @@ extern uint64_t set_date_time;
 extern memory_container ppg_work_item;
 extern memory_container accel_work_item;
 extern memory_container log_work_item;
+
+#endif /* PPGV2_ZEPHYR_FILESYSTEM_H_ */

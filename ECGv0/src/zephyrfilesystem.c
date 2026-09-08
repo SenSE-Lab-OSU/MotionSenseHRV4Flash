@@ -118,6 +118,12 @@ static int data_counter;
 char file_name[50] = "";
 static bool first_write = false;
 static struct fs_file_t file;
+static int64_t file_system_timer;
+
+static void filesystem_latch_fault(void)
+{
+	request_ecg_storage_fault();
+}
 
 
 
@@ -492,7 +498,7 @@ static int sensor_write_failure(enum sensor_type sensor, const char *operation,
 	return ret;
 }
 
-int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
+static int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
 	int close_ret;
@@ -640,7 +646,7 @@ int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor)
 		//fp->flag |= 0x40; // = FA_MODIFIED
 		sync_ret = fs_sync(&MSenseFile->self_file);
 		close_ret = fs_close(&MSenseFile->self_file);
-		LOG_INF("closing file\n");
+		LOG_INF("closing file");
 		if (sync_ret != 0) {
 			return sensor_write_failure(sensor, "File rollover sync", sync_ret);
 		}
@@ -731,12 +737,12 @@ void work_write(struct k_work* item){
 		       (ecg_file.current_writes == 0)) ||
 		      ((container->sensor == customlog) &&
 		       (log_file.current_writes == 0));
-	start_timer();
+	start_timer(&file_system_timer);
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	write_ret = sensor_write_to_file(container->address, container->size,
 					 container->sensor);
-	time_value = stop_timer();
+	time_value = stop_timer(&file_system_timer);
 	if (write_ret == 0) {
 		if (first_write) {
 			LOG_INF("storage: file started for sensor %d; first write %zu bytes in %lli ms",
@@ -758,7 +764,7 @@ void work_write(struct k_work* item){
 	if (write_ret != 0) {
 		LOG_ERR("Filesystem write failed for sensor %d: %d", container->sensor,
 			write_ret);
-		request_ecg_storage_fault();
+		filesystem_latch_fault();
 	}
 
 }
@@ -825,7 +831,7 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	else{
 		LOG_WRN("sensor type unknown");
-		request_ecg_storage_fault();
+		filesystem_latch_fault();
 		return -EINVAL;
 	}
 
@@ -837,13 +843,13 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 	if (current_buffer->current_size >= MSenseFile->write_size) {
 		LOG_ERR("Completed buffer for %d is still awaiting ownership", sensor);
-		request_ecg_storage_fault();
+		filesystem_latch_fault();
 		return -EBUSY;
 	}
 	if (size > sizeof(current_buffer->data_upload_buffer) -
 		    current_buffer->current_size) {
 		LOG_ERR("Buffer capacity exceeded for %d", sensor);
-		request_ecg_storage_fault();
+		filesystem_latch_fault();
 		return -ENOSPC;
 	}
 
@@ -865,14 +871,14 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 		}
 		if (panic_single_thread) {
 			LOG_ERR("Cannot verify a direct buffer write during panic mode");
-			request_ecg_storage_fault();
+			filesystem_latch_fault();
 			return -ENOTSUP;
 		}
 		ret = submit_write(current_buffer->data_upload_buffer,
 					   current_buffer->current_size, sensor);
 		if (ret != 0) {
 			LOG_ERR("Unable to submit completed buffer for %d: %d", sensor, ret);
-			request_ecg_storage_fault();
+			filesystem_latch_fault();
 			return ret;
 		}
 		if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
@@ -1044,7 +1050,7 @@ static int setup_flash(struct fs_mount_t *mnt)
 	id = STORAGE_PARTITION_ID;
 
 	rc = flash_area_open(id, &pfa);
-	LOG_INF("Area %u at 0x%x on %s for %u bytes\n",
+	LOG_INF("Area %u at 0x%x on %s for %u bytes",
 	       id, (unsigned int)pfa->fa_off, pfa->fa_dev->name,
 	       (unsigned int)pfa->fa_size);
 
@@ -1277,9 +1283,16 @@ int read_storage_percent_full(){
 	return storage_percent_full;
 }
 
+#define FAT_UNIX_TIME_MIN_SECONDS 315532800ULL
+#define FAT_UNIX_TIME_MAX_SECONDS 4354819199ULL
 
 void set_date_time_bt(uint64_t value){
-	
+	if (value < FAT_UNIX_TIME_MIN_SECONDS ||
+	    value > FAT_UNIX_TIME_MAX_SECONDS) {
+		LOG_WRN("rejected invalid Unix time in seconds: %llu", value);
+		return;
+	}
+
 	set_date_time = value;
 	last_time_update_sent = k_uptime_get() / 1000;
 	LOG_INF("new datetime sent, value is %llu, seconds uptime is %llu", set_date_time, last_time_update_sent);
@@ -1321,13 +1334,28 @@ DWORD get_fattime(void)
 
 int64_t start_time;
 
-void start_timer(){
-	start_time = k_uptime_get();
+void start_timer(int64_t *start_time_ref){
+	if (start_time_ref != NULL){
+		if (*start_time_ref != 0){
+			LOG_WRN("timer was executed again before it could finish!");
+		}
+		*start_time_ref = k_uptime_get();
+	}
+	else{
+		start_time = k_uptime_get();
+	}
 }
 
 
-int64_t stop_timer(){
-	int64_t length = k_uptime_get() - start_time;
-	start_time = 0;
+int64_t stop_timer(int64_t *start_time_ref){
+	int64_t length;
+	if (start_time_ref != NULL){
+		length = k_uptime_get() - *start_time_ref;
+		*start_time_ref = 0;
+	}
+	else{
+		length = k_uptime_get() - start_time;
+		start_time = 0;
+	}
 	return length;
 }

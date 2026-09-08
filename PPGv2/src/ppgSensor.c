@@ -148,7 +148,7 @@ void spiReadWritePPG(uint8_t *tx_buffer,
       .count = 1};
   err = spi_transceive(spi_dev_ppg, &spi_cfg_ppg, &tx, &rx);
   if (err)
-    LOG_ERR("SPI error: %d\n", err);
+    LOG_ERR("SPI error: %d", err);
 }
 
 void spiWritePPG(uint8_t *tx_buffer, uint8_t txLen)
@@ -162,7 +162,7 @@ void spiWritePPG(uint8_t *tx_buffer, uint8_t txLen)
       .count = 1};
   err = spi_transceive(spi_dev_ppg, &spi_cfg_ppg, &tx, NULL);
   if (err)
-    LOG_ERR("SPI error: %d\n", err);
+    LOG_ERR("SPI error: %d", err);
 }
 
 void read_ppg_chip_id(){
@@ -172,7 +172,7 @@ void read_ppg_chip_id(){
     tx_buffer[1] = READMASTER;
     tx_buffer[2] = 0x00;
     spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
-    LOG_INF("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
+    LOG_INF("Chip ID from ppg sensor=%x,%x,%x", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
 }
 
 
@@ -484,10 +484,10 @@ void ppg_led_update(void)
         }
       
       // If the adaptation flag is disabled and data quality is bad when the sensor is not moving
-      LOG_DBG("adapt_flag: %d\n", adapt_Ch2);
-      LOG_DBG("green mean: %f \n", (double)meanGreen);
-      LOG_DBG("IR mean: %f \n", (double)meanIR);
-      LOG_DBG("bad counter: %d\n", badDataCounterCh2);
+      LOG_DBG("adapt_flag: %d", adapt_Ch2);
+      LOG_DBG("green mean: %f", (double)meanGreen);
+      LOG_DBG("IR mean: %f", (double)meanIR);
+      LOG_DBG("bad counter: %d", badDataCounterCh2);
       
         /* if we are not currently doing any adaptation, check to see if our data is bad */   
         if (adapt_Ch1 == 0)
@@ -532,7 +532,7 @@ void ppg_led_update(void)
         spiWritePPG(cmd_array, txLen);
 
         adapt_counterCh1++;
-        LOG_DBG("adapt counter length: %d\n", adapt_counterCh1);
+        LOG_DBG("adapt counter length: %d", adapt_counterCh1);
         if (adapt_counterCh1 > adaptIterMax)
         {
           LOG_INF("finished adapting! New IR Intensity: %d", ppgConfig.infraRed_intensity);
@@ -549,7 +549,7 @@ void ppg_led_update(void)
             &low_ch2, &up_ch2, ppgConfig.green_intensity, green_steps);
         txLen = 3;
         cmd_array[0] = PPG_LED2_PA;
-        LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
+        LOG_DBG("new ppg green intensity: %d", ppgConfig.green_intensity);
         cmd_array[2] = ppgConfig.green_intensity; // Green 49.9mA
         spiWritePPG(cmd_array, txLen);
 
@@ -558,7 +558,7 @@ void ppg_led_update(void)
         adapt_counterCh2++;
         if (adapt_counterCh2 > adaptIterMax)
         {
-          LOG_INF("finished adapting! new ppg green intensity: %d\n", ppgConfig.green_intensity);
+          LOG_INF("finished adapting! new ppg green intensity: %d", ppgConfig.green_intensity);
           adapt_counterCh2 = adaptIterMax;
           adapt_Ch2 = 0;
           goodCh2 = 1;
@@ -731,9 +731,9 @@ void read_ppg_fifo_buffer(struct k_work *item)
   if (ppg_print_counter >= 24)
   {
     LOG_DBG("sample count: %d", sampleCount[2]);
-    LOG_DBG("ppg led1A %d \n 1b %d \n 2a %d 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
-    LOG_DBG("new ppg green intensity: %d\n", ppgConfig.green_intensity);
-    LOG_DBG("new IR intensity: %d\n", ppgConfig.infraRed_intensity);
+    LOG_DBG("ppg led1A %d, 1b %d, 2a %d, 2b %d", led1A[0], led1B[0], led2A[0], led2B[0]);
+    LOG_DBG("new ppg green intensity: %d", ppgConfig.green_intensity);
+    LOG_DBG("new IR intensity: %d", ppgConfig.infraRed_intensity);
   }
   #if CONFIG_LOG
   static int last_ppg_count = 0;

@@ -1,3 +1,13 @@
+#ifndef ZEPHYR_FILESYSTEM_H_
+#define ZEPHYR_FILESYSTEM_H_
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <zephyr/kernel.h>
+
+#define RECORDING_FILE_BYTES (4U * 1024U * 1024U)
 
 extern bool reset_lock;
 
@@ -8,8 +18,8 @@ extern bool panic_single_thread;
 
 extern bool file_system_ready;
 
-enum sensor_type {ppg, 
-accelorometer, passthrough, customlog};
+enum sensor_type {ppg,
+ecg, passthrough, customlog};
 
 typedef struct memory_container {
 	const void* address;
@@ -50,6 +60,16 @@ void store_data(const void* data, size_t size, enum sensor_type sensor);
 
 void flush_data_buffer(enum sensor_type sensor);
 
+void filesystem_set_collection_id(uint64_t collection_id);
+void filesystem_clear_collection_id(void);
+int filesystem_make_recording_path(char *path, size_t path_size,
+				   const char *stream_prefix,
+				   uint64_t collection_id);
+int filesystem_make_recording_chunk_path(char *path, size_t path_size,
+					 const char *stream_prefix,
+					 uint64_t collection_id,
+					 uint32_t chunk_index);
+
 int get_storage_percent_full();
 
 extern uint8_t storage_percent_full;
@@ -64,11 +84,9 @@ uint64_t get_current_unix_time();
 
 void set_date_time_bt(uint64_t value);
 
-void start_timer(int64_t* start_time_ref);
+void start_timer();
 
-int64_t stop_timer(int64_t* start_time_ref);
-
-void print_out_page(int page_num);
+int64_t stop_timer();
 
 void enable_read_only(bool enable);
 
@@ -83,5 +101,7 @@ extern int patient_num;
 extern uint64_t set_date_time;
 
 extern memory_container ppg_work_item;
-extern memory_container accel_work_item;
+extern memory_container ecg_work_item;
 extern memory_container log_work_item;
+
+#endif /* ZEPHYR_FILESYSTEM_H_ */

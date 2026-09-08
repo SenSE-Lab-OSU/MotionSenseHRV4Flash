@@ -87,7 +87,9 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 };
 
 &button0 {
-	status = "disabled";
+	status = "okay";
+	gpios = <&gpio0 1 (GPIO_ACTIVE_LOW)>;
+	label = "User button";
 };
 
 &button1 {
@@ -123,6 +125,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 / {
 	aliases {
 		customspi = &spi1;
+		ecg = &max30001;
 		spi-flash0 = &mt29;
 		spi-flash1 = &mx25u80;
 	};
@@ -153,9 +156,18 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio0 26 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&spi1_default>;
-	pinctrl-1 = <&spi1_sleep>;
+	pinctrl-0 = <&icm20948_spi_default>;
+	pinctrl-1 = <&icm20948_spi_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	icm20948: icm20948@0 {
+		compatible = "invensense,icm20948";
+		reg = <0>;
+		spi-max-frequency = <4000000>;
+		int-gpios = <&gpio0 29 GPIO_ACTIVE_HIGH>;
+		fsync-gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
 };
 
 // We need to disable i2c1, since we are already using spi1 and it is no longer needed (can't have 2 devices on the same unit).
@@ -163,7 +175,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-twim";
 	status = "okay";
 
-	/* The bq27441-G1 requires 1-byte writes above 100 kHz. */
+	/* The BQ27441 requires 1-byte writes above 100 kHz; this driver uses multi-byte writes. */
 	clock-frequency = <I2C_BITRATE_STANDARD>;
 
 	pinctrl-0 = <&battery_default>;
@@ -174,11 +186,10 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		compatible = "ti,bq274xx";
 		reg = <0x55>;
 		design-voltage = <3700>;
-		design-capacity = <300>;
-		/* Above the bq25060's 25.2 mA worst-case termination threshold with a 5.9-kOhm ISET resistor. */
-		taper-current = <30>;
+		design-capacity = <200>;
+		/* Above the BQ21040's approximately 6.6-8 mA charge-complete threshold. */
+		taper-current = <9>;
 		terminate-voltage = <3000>;
-		chemistry-id = <0x0128>; /* bq27441-G1A, LiCoO2, 4.2-V maximum charge */
 	};
 };
 /*
@@ -195,9 +206,18 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&ppg_default>;
-	pinctrl-1 = <&ppg_sleep>;
+	pinctrl-0 = <&max30001_default>;
+	pinctrl-1 = <&max30001_sleep>;
 	pinctrl-names = "default", "sleep";
+
+	max30001: max30001@0 {
+		compatible = "maxim,max30001";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		intb-gpios = <&gpio0 21 GPIO_ACTIVE_LOW>;
+		intb2-gpios = <&gpio0 19 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
 };
 //External Flash, MX25 NOR
 
@@ -227,16 +247,14 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 	pinctrl-1 = <&spi_flash_sleep>;
 	pinctrl-names = "default", "sleep";
 	// You will also need to set these pins in the spi_nand.c too
-	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>,
-		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>;
 
 	mt29: mt29f8g01ad@0 {
 		compatible = "senselab,nanddisk";
 		// size parameter needs to be in bytes
-		// 4294901760 bytes is aproximately 4 GB. Updated from 2147450880 bytes (1.99 GB)
-		size = <4294901760>;
-		individual-size = <1073725440>;
-		num-flashchips = <4>;
+		size = <2147483648>;
+		individual-size = <1073741824>;
+		num-flashchips = <2>;
 		reg = <0>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];
@@ -275,8 +293,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
  */
 
 &pinctrl {
-	//spi 1, imu sensor
-	spi1_default: spi1_default {
+	icm20948_spi_default: icm20948_spi_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
@@ -284,7 +301,7 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		};
 	};
 
-	spi1_sleep: spi1_sleep {
+	icm20948_spi_sleep: icm20948_spi_sleep {
 		group1 {
 			psels = <NRF_PSEL(SPIM_SCK, 1, 5)>,
 				<NRF_PSEL(SPIM_MISO, 0, 25)>,
@@ -293,15 +310,15 @@ e this exact code) in MCUBoot as well. See sysbuild/mcuboot.overlay for more det
 		};
 	};
 
-	//spi 4, ppg sensor
-	ppg_default: ppg_default {
+	//spi 3, MAX30001 ECG AFE
+	max30001_default: max30001_default {
 		group1 {
 			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
 				<NRF_PSEL(SPIM_SCK, 1, 8)>;
 		};
 	};
 
-	ppg_sleep: ppg_sleep {
+	max30001_sleep: max30001_sleep {
 		group1 {
 			psels = <NRF_PSEL(SPIM_MOSI, 1, 6)>, <NRF_PSEL(SPIM_MISO, 0, 3)>,
 				<NRF_PSEL(SPIM_SCK, 1, 8)>;

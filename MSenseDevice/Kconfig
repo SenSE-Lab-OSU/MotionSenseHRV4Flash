@@ -110,12 +110,16 @@ config LOG_BACKEND_FS_BUFFER
       When enabled, the double buffered filesystem backend (normally for ppg and accel) will be used for logging.
 
 
-config LOG_LEVEL_IMU_COLLECTION
-	int "level at which data from imu is printed in logs"
+config LOG_LEVEL_ICM20948_ACCEL
+	int "ICM-20948 accelerometer log level"
 	default 3
 
 config LOG_LEVEL_PPG_COLLECTION
 	int "level at which data from ppg is printed in logs"
+	default 3
+
+config LOG_LEVEL_MAX30001
+	int "level at which data from MAX30001 is printed in logs"
 	default 3
 
 source "Kconfig.zephyr"

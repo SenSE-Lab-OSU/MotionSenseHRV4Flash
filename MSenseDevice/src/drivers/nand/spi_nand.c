@@ -80,7 +80,6 @@ int current_erases = 0;
 int ECC_corrections = 0;
 int ECC_err = 0;
 
-
 // die select for each flash
 int current_die[4] = {0};
 
@@ -91,7 +90,7 @@ int current_flash = 0;
 // TODO: put these in device tree
 const int die_per_flash = 2;
 
-const gpio_pin_t cs_pins[] = {18, 4, 21, 19};
+const gpio_pin_t cs_pins[] = {18, 4};
 
 static int spi_nor_write_protection_set(const struct device *dev,
 					bool write_protect);
@@ -183,7 +182,7 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 
 
 uint32_t convert_block_to_page(uint32_t page, uint32_t block){
-	return page + (block * NAND_PAGES_PER_ERASE_BLOCK);
+	return page + (block * 64);
 }
 
 // The pages representing a block are from block - 65.
@@ -201,7 +200,7 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 	int die = selected_die_num % 2;
 
 	set_flash(dev, flash);
-	int die_err = set_die(dev, die);
+	set_die(dev, die);
 
 	return page - (die_size * selected_die_num);
 }
@@ -209,17 +208,17 @@ off_t convert_page_to_address(const struct device* dev, uint32_t page) {
 // this is not the actual address for 4 flash, 
 off_t convert_block_to_singledie_address(uint32_t block){
 	//werid fix because of noticed offsets, perhaps there is another issue we are unaware of.
-	return (block * NAND_PAGES_PER_ERASE_BLOCK);
+	return (block * 64);
 }
 
 uint32_t convert_page_to_block(uint32_t page_number){
-	return (page_number / NAND_PAGES_PER_ERASE_BLOCK);
+	return (page_number / 64);
 }
 
 bool is_page_in_block(uint32_t page_number, uint32_t block_number){
 	uint32_t first_page = convert_block_to_page(0, block_number);
 	uint32_t difference = (page_number - first_page);
-	return difference >= 0 && difference < NAND_PAGES_PER_ERASE_BLOCK;
+	return difference >= 0 && difference < 64;
 }
 
 
@@ -373,7 +372,7 @@ int set_die(const struct device* dev, int die_select){
 		LOG_DBG("flash 1 die: %d. 2 die: %d. 3 die: %d, 4 die: %d", current_die[0], current_die[1], current_die[2], current_die[3]);
 	}
 	else{
-		LOG_WRN("error die setting %d", ret);
+		LOG_WRN("error die setting");
 	}
 	return ret;
 
@@ -423,14 +422,14 @@ int set_features(const struct device* dev, uint8_t register_select, uint8_t data
 		.data_length = 1
 	};
 
-	int res = spi_nand_access(dev, &write_features_request); 
+	int res = spi_nand_access(dev, &write_features_request);
 	if (res == 0){
 		uint8_t readback = get_features(dev, register_select);
 	if (readback == data){
 		return 0;
 	}
 	else{
-		return -2;
+		return NRFX_ERROR_NOT_SUPPORTED;
 	}
 	}
 	else {
@@ -526,9 +525,6 @@ uint8_t spi_rdsr(const struct device *dev)
 	if (status > 3){
 	LOG_WRN("status register: %d", status);
 	}
-	if (status == 255){
-		LOG_ERR("err bad register reading");
-	}
 	
 	return status;
 }
@@ -566,8 +562,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	int bad_blocks = 0;
 	uint8_t dest;
 	off_t error_address = 4096;
-	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) /
-				NAND_PAGES_PER_ERASE_BLOCK;
+	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 	for (int x = 0; x < total_device_size; x++){
 	page_addr = convert_block_to_singledie_address(x);
 	acquire_device(dev);
@@ -660,6 +655,10 @@ int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* b
 	int non_corrupt_sector = get_sector_offset(page_number);
 	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
 	ret = spi_nand_page_read(dev, addr, buffer);
+	if (ret != 0) {
+		LOG_ERR("NAND read mapping: logical_page=%u mapped_page=%d rc=%d",
+			page_number, non_corrupt_sector, ret);
+	}
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
 		register_bad_sector(non_corrupt_sector);
 	}
@@ -671,6 +670,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	acquire_device(dev);
 	LOG_DBG("reading bytes at address %ld", page_addr);
 	nrfx_err_t res = 0;
+	int wait_res = 0;
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -700,7 +700,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
-	int wait_res = spi_flash_wait_until_ready(dev);
+	wait_res = spi_flash_wait_until_ready(dev);
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0 || wait_res != 0) {
@@ -710,24 +710,41 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 
 out:
 	uint8_t reg_status = spi_rdsr(dev);
-	int status = reg_status;
-	LOG_DBG("finished read! with status %i", status);
-	// get the ECC status
-	uint8_t ECC_status = reg_status >> 4;
-	if (ECC_status != 0 && reg_status != 255){
-		if (ECC_status == 2){
-			ECC_err++;
-			LOG_ERR("ECC err too high, bad block");
-			status = FLASH_TOO_MANY_ECC_ERROR;
-		}
-		else {
-			// if it's just an ECC error then we should be able to correct it and move on
-			status = 0;
-			ECC_corrections++;
-			LOG_WRN("correctable err");
-			
-		}
-		LOG_WRN("ECC stat %d, tot corrections %d an err %d", ECC_status, ECC_corrections, ECC_err);
+	uint8_t ecc_status = (reg_status >> 4) & 0x07U;
+	int status = res != 0 ? (int)res : wait_res;
+
+	LOG_DBG("finished read! with status 0x%02x", reg_status);
+
+	switch (ecc_status) {
+	case 0:
+		break;
+	case 1:
+	case 3:
+	case 5:
+		/* Micron M70A reports corrected bit-flip ranges with these codes. */
+		ECC_corrections++;
+		LOG_WRN("NAND ECC corrected: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status, ECC_corrections);
+		break;
+	case 2:
+		/* This is the Micron M70A uncorrectable ECC code. */
+		ECC_err++;
+		LOG_ERR("NAND ECC uncorrectable: cs=%d die=%d die_page=%ld die_block=%ld page_in_block=%ld sr=0x%02x ecc=%u total=%d",
+			current_flash, current_die[current_flash], page_addr,
+			(long)(page_addr / 64), (long)(page_addr % 64),
+			reg_status, ecc_status, ECC_err);
+		status = FLASH_TOO_MANY_ECC_ERROR;
+		break;
+	default:
+		/* ECC codes 4, 6, and 7 are reserved by the Micron M70A. */
+		LOG_ERR("NAND unexpected status: cs=%d die=%d die_page=%ld sr=0x%02x ecc=%u oip=%u wel=%u erase_fail=%u prog_fail=%u",
+			current_flash, current_die[current_flash], page_addr,
+			reg_status, ecc_status,
+			reg_status & BIT(0), (reg_status >> 1) & BIT(0),
+			(reg_status >> 2) & BIT(0), (reg_status >> 3) & BIT(0));
+		status = -EIO;
+		break;
 	}
 
 	release_device(dev);
@@ -790,6 +807,7 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	uint8_t status = spi_rdsr(dev);
 	write_disable(dev);
 	release_device(dev);
+	
 	LOG_DBG("write completed! with status %i", status);
 	if (status != 0){
 		LOG_WRN("page write returned status %d", status);
@@ -844,14 +862,14 @@ int spi_nand_chip_erase(const struct device* device) {
 	int page_size = dev_page_size(device);
 	//Divide by page size to get the total pages, then by pages per block to get block size
 	int block_count = (size / page_size);
-	block_count /= NAND_PAGES_PER_ERASE_BLOCK;
+	block_count /= 64;
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
-	for (int current_block = 0; current_block <= block_count; current_block++){
+	for (int current_block = 0; current_block < block_count; current_block++){
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
 		if (status != 0){
-			LOG_WRN("err block erase %d: %i", current_block, status);
+			LOG_WRN("err chip erase: %i", status);
 			continue;
 		}
 	}
@@ -891,7 +909,6 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 		k_sleep(K_MSEC(500));
 	}
 	set_flash(dev, 0);
-	LOG_INF("erasing file table (nor)");
 	int ret = erase_file_table();
 	if (ret != 0){
 		LOG_ERR("failed to erase file table");
@@ -1103,18 +1120,14 @@ static const struct flash_parameters* flash_nor_get_parameters(const struct devi
 
 void print_page_hex(uint8_t* data_buf, int size, bool shorten){
 	// can easily modify this to support other types like char or int
-	if (shorten && size > 250){
-		size = 250;
+	if (shorten && size > 50){
+		size = 50;
 	}
 	printk("data: ");
 	for (int i = 0; i < size; i ++){
 		printk("%02x ", data_buf[i]);
-		if (i % 19 == 18) {
+		if (i % 10 == 9) {
 			printk("\n");
-		}
-		// just to clear the buffer
-		if (i % 300 == 299) {
-			k_sleep(K_MSEC(400));
 		}
 	}
 	printk("\n end \n");

@@ -1,6 +1,7 @@
 
 #include <zephyr/logging/log_backend.h>
 #include <zephyr/logging/log_output.h>
+#include <zephyr/logging/log_output_dict.h>
 #include <zephyr/logging/log_backend_std.h>
 #include "zephyrfilesystem.h"
 #include "BLEService.h"
@@ -30,7 +31,7 @@ static uint32_t log_format_current = 0;
 int write_log_to_file(uint8_t *data, size_t length, void *ctx)
 {
 	debug_messages++;
-	if (file_system_ready && !battery_low && !reset_lock && collecting_data) {
+	if (file_system_ready && !battery_low && !reset_lock) {
 		store_data(data, length, customlog);
 		
 	}

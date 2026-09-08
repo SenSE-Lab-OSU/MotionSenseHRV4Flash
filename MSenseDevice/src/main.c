@@ -5,23 +5,34 @@
  */
 
 #include <zephyr/kernel.h>
+#include <errno.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/sys/atomic.h>
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
+#include <helpers/nrfx_reset_reason.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/printk-hooks.h>
 #include <zephyr/usb/usb_device.h>
 #include "batterymonitordt.h"
 #include "ppgSensor.h"
-#include "imuSensor.h"
+#include "accelRecorder.h"
+#include "imuFsyncTiming.h"
+#include "icm20948_accel.h"
 #include "common.h"
 #include "BLEService.h"
+#include "ecgRecorder.h"
 #include "device_identity.h"
 #include "zephyrfilesystem.h"
+#if CONFIG_DISK_DRIVER_RAW_NAND
+#include "drivers/nand/nand_disk.h"
+#endif
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
@@ -29,25 +40,32 @@
 #include <string.h>
 
 
-
-
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS 6000
+#define BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES 4U
 
 /* The devicetree node identifier for the "led0" alias. */
 #define LED_NODE DT_ALIAS(led0)
 #define LED1_NODE DT_ALIAS(led1)
 #define PPG_POWER_NODE DT_ALIAS(led2) 
+#define BUTTON0_NODE DT_NODELABEL(button0)
+#define BUTTON0_LONG_PRESS_MS 5000
+
+enum ship_mode_state {
+  SHIP_MODE_ACTIVE,
+  SHIP_MODE_WAITING_FOR_BUTTON,
+  SHIP_MODE_STARTING,
+};
 
 // define our red and green leds
 #define LED_PIN DT_GPIO_PIN(LED_NODE, gpios)
 #define LED1_PIN DT_GPIO_PIN(LED1_NODE, gpios)
 
-#define LED_FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
+#define LED_FLAGS DT_GPIO_FLAGS(LED_NODE, gpios)
 
 
 
@@ -56,6 +74,32 @@ LOG_MODULE_REGISTER(main);
 
 const struct device* gpio0_device;
 const struct device* gpio1_device;
+
+static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(BUTTON0_NODE, gpios);
+static struct gpio_callback button0_callback;
+static bool usb_enabled;
+static bool usb_uart_log_backend_was_active;
+static bool usb_console_suppressed;
+static printk_hook_fn_t usb_console_printk_hook;
+static bool filesystem_workqueue_started;
+static bool button0_pressed;
+static int64_t button0_pressed_time_ms;
+static struct k_mutex collection_mode_lock;
+static K_SEM_DEFINE(accel_record_fault_sem, 0, 1);
+static atomic_t ship_mode = ATOMIC_INIT(SHIP_MODE_WAITING_FOR_BUTTON);
+static K_SEM_DEFINE(ship_mode_exit_sem, 0, 1);
+
+static void button0_work_handler(struct k_work *work);
+static void button0_pressed_handler(const struct device *port,
+                                    struct gpio_callback *cb,
+                                    uint32_t pins);
+void enter_ecg_collection_mode(void);
+void exit_ecg_collection_mode(void);
+static void accel_record_fault_thread(void *arg1, void *arg2, void *arg3);
+
+K_WORK_DEFINE(button0_work, button0_work_handler);
+K_THREAD_DEFINE(accel_record_fault_thread_id, 2048,
+		accel_record_fault_thread, NULL, NULL, NULL, 7, 0, 0);
 
 
 /* SPI Definitions */
@@ -76,19 +120,6 @@ SPI Mode    CPOL 	CPHA 	Clock Polarity  Clock Phase Used to
                                                 shifted out on the falling edge
 -------------------------------------------------------------------------------------
 */
-// SPI Mode-3 IMU
-struct spi_config spi_cfg_imu =
-{
-    .frequency = 4000000,
-    .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB |
-                 SPI_MODE_CPOL | SPI_MODE_CPHA,
-    .slave = 0,
-    // this should work, but for some reason it doesn't. However, this might work without
-    // the cs field anyway, apparently it is auto managed, so test first
-    //.cs = SPI_CS_CONTROL_PTR_DT(DT_NODELABEL(spi2), 0)
-    };
-
-
 // SPI Mode-3 PPG
 struct spi_config spi_cfg_ppg = {
     .frequency = 4000000,
@@ -104,11 +135,6 @@ struct spi_config spi_cfg_ppg = {
 
 // Now we define the cs pins
 
-struct spi_cs_control imu_cs = {
-    .delay = 0,
-    .gpio = {.pin = 26, .dt_flags = GPIO_ACTIVE_LOW}};
-
-
 struct spi_cs_control ppg_cs = {
     .delay = 0,
     .gpio = {
@@ -119,7 +145,7 @@ struct spi_cs_control ppg_cs = {
 
 
 
-const struct device *spi_dev_ppg, *spi_dev_imu;
+const struct device *spi_dev_ppg;
 const struct device *i2c_dev;
 
 
@@ -205,6 +231,97 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
 
 }
 
+/*
+ * The console and UART log backend are both routed through the USB CDC ACM
+ * device.  Collection mode disables that device to remove the NAND disk from
+ * the USB host, so leave neither path trying to transmit while it is down.
+ * RTT and the custom filesystem log backend are separate log backends and
+ * remain active.
+ */
+static int usb_console_discard_char(int c)
+{
+  return c;
+}
+
+static void suspend_usb_console_and_log_backend(void)
+{
+#if CONFIG_LOG_BACKEND_UART
+  const struct log_backend *backend;
+
+  backend = log_backend_get_by_name("log_backend_uart");
+  if (backend == NULL) {
+    LOG_WRN("USB UART log backend was not found");
+  } else {
+    usb_uart_log_backend_was_active = log_backend_is_active(backend);
+    if (usb_uart_log_backend_was_active) {
+      log_backend_disable(backend);
+    }
+  }
+#endif
+
+#if CONFIG_UART_CONSOLE
+  if (!usb_console_suppressed) {
+    usb_console_printk_hook = __printk_get_hook();
+    __printk_hook_install(usb_console_discard_char);
+    usb_console_suppressed = true;
+  }
+#endif
+}
+
+static void resume_usb_console_and_log_backend(void)
+{
+#if CONFIG_UART_CONSOLE
+  if (usb_console_suppressed) {
+    __printk_hook_install(usb_console_printk_hook);
+    usb_console_suppressed = false;
+  }
+#endif
+
+#if CONFIG_LOG_BACKEND_UART
+  if (usb_uart_log_backend_was_active) {
+    const struct log_backend *backend;
+
+    backend = log_backend_get_by_name("log_backend_uart");
+    if (backend == NULL) {
+      LOG_WRN("USB UART log backend was not found");
+    } else {
+      log_backend_enable(backend, backend->cb->ctx, CONFIG_LOG_MAX_LEVEL);
+    }
+    usb_uart_log_backend_was_active = false;
+  }
+#endif
+}
+
+static int set_usb_mass_storage_enabled(bool enable)
+{
+  int ret;
+
+  if (usb_enabled == enable) {
+    return 0;
+  }
+
+  if (!enable) {
+    suspend_usb_console_and_log_backend();
+  }
+
+  ret = enable ? usb_enable(usb_status_cb) : usb_disable();
+  if (ret == -EALREADY) {
+    ret = 0;
+  }
+
+  if (ret == 0) {
+    usb_enabled = enable;
+    if (enable) {
+      resume_usb_console_and_log_backend();
+    }
+  } else if (!enable) {
+    /* USB remains active after a failed disable, so restore its outputs. */
+    resume_usb_console_and_log_backend();
+  }
+
+  return ret;
+}
+
 static void write_uuid_file(void)
 {
   bt_addr_le_t address = {0};
@@ -252,11 +369,11 @@ static void bt_ready(int err)
 {
   if (err)
   {
-    printk("BLE init failed with error code %d\n", err);
+    LOG_ERR("BLE initialization callback failed: %d", err);
     return;
   }
   else
-    printk("BLE init success\n");
+    LOG_INF("BLE initialized");
 
   #if CONFIG_BT_SETTINGS
     settings_load();
@@ -296,10 +413,10 @@ static void bt_ready(int err)
   */
   err = bt_le_adv_start(&v, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err)
-    printk("Advertising failed to start (err %d)\n", err);
+    LOG_ERR("BLE advertising failed to start: %d", err);
   else
   {
-    printk("Advertising started\n");
+    LOG_INF("BLE advertising started");
   }
 
   k_sem_give(&ble_init_ok);
@@ -308,7 +425,10 @@ static void bt_ready(int err)
   #ifndef CONFIG_DEBUG
   
     if (!security_lock){
-      usb_enable(usb_status_cb);
+      err = set_usb_mass_storage_enabled(true);
+      if (err != 0) {
+        LOG_WRN("USB enable returned %d", err);
+      }
     }
     //k_sleep(K_SECONDS(10));
     #if CONFIG_DISK_DRIVER_RAW_NAND
@@ -326,18 +446,8 @@ static void ble_init(void)
   err = bt_enable(bt_ready);
   if (err)
   {
-    printk("BLE initialization failed\n");
+    LOG_ERR("Unable to start BLE initialization: %d", err);
   }
-
-  //err = bt_id_create(BT_ADDR_LE_ANY, NULL);
-  if (!err)
-    printk("Bluetooth initialized\n");
-  else
-  {
-    printk("BLE initialization did not complete in time\n");
-  }
-  if (err)
-    printk("Bluetooth init failed (err %d)\n", err);
 }
 
 // Timer handler that periodically executes commands with a period,
@@ -346,68 +456,27 @@ static void spi_init(void)
 {
   
   // device_get_binding is used for runtime aquisition of a device object. We can still use it but we have to be carefull to select the right names
-  const char *const spiName_imu = "spi@9000";
   const char *const spiName_ppg = "spi@c000";
 
-  spi_dev_imu = DEVICE_DT_GET(DT_NODELABEL(spi2)); 
   spi_dev_ppg = DEVICE_DT_GET(DT_NODELABEL(spi3));
-  // device_get_binding(spiName_imu);
   //spi_dev_ppg = device_get_binding(spiName_ppg);
-
-  if (!device_is_ready(gpio0_device))
-  {
-    printk("Could not get GPIO_0\n");
-    return;
-  }
 
   if (!device_is_ready(gpio1_device))
   {
     printk("Could not get GPIO_1\n");
     return;
   }
-  if (spi_dev_imu == NULL || !device_is_ready(spi_dev_imu))
-  {
-    printk("Could not get %s \n", spiName_imu);
-    return;
-  }
-
   if (spi_dev_ppg == NULL || !device_is_ready(spi_dev_ppg))
   {
     printk("Could not get %s \n", spiName_ppg);
     return;
   }
   
-  imu_cs.gpio.port = gpio0_device;
   ppg_cs.gpio.port = gpio1_device;
   
   
-  spi_cfg_imu.cs = imu_cs;
   spi_cfg_ppg.cs = ppg_cs; // version 2.5: .gpio.port = gpio1_device;
   
-}
-
-void spi_verify_sensor_ids()
-{
-  
-  if (device_is_ready(spi_dev_imu))
-  {
-    getIMUID();
-  }
-  else
-  {
-    LOG_WRN("IMU not ready, setup avoided");
-  }
-  
-  k_sleep(K_SECONDS(1));
-
-  if (device_is_ready(spi_dev_ppg))
-  {
-    read_ppg_chip_id();
-  }
-  else
-  {
-    LOG_WRN("ppg not ready, setup was avoided");
-  }
 }
 
 static void i2c_init(void)
@@ -433,8 +502,12 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 void battery_maintenance()
 {
+  static uint8_t maintenance_cycles;
   const struct device *const dev = DEVICE_DT_GET_ONE(ti_bq274xx);
-  dt_update_battery(dev, true);
+  bool log_summary = (maintenance_cycles % BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES) == 0U;
+
+  maintenance_cycles++;
+  dt_update_battery(dev, log_summary);
   
   //battery_lvl = bt_bas_get_battery_level();
   #ifndef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
@@ -444,23 +517,28 @@ void battery_maintenance()
       battery_low = true;
       LOG_WRN("battery low, turning off file logs and data collection.");
       LOG_INF("logs and data collection will resume once battery is sufficiently charged (>15 percent)");
-    }   
+      if (!collecting_data){
+        reset_log_file();
+      }
+    }
+    
   }
   else if (battery_level > 15){
     if (battery_low){
     LOG_INF("resuming log after battery improved");
     }
     battery_low = false;
+    
   } 
 
   if (collecting_data || host_wants_collection){
         if (battery_low && collecting_data){
             
-            start_stop_device_collection(false);
+            exit_ecg_collection_mode();
         }
         else if (!battery_low && host_wants_collection && !collecting_data){
 
-            start_stop_device_collection(true);
+            enter_ecg_collection_mode();
             
         }
   }
@@ -471,46 +549,489 @@ void battery_maintenance()
 
 
 void blink_led(gpio_pin_t pin){
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
   gpio_pin_set(gpio0_device, pin, 1);
   k_sleep(K_MSEC(200));
   gpio_pin_set(gpio0_device, pin, 0);
 }
 
+static void set_mode_leds(bool led0_on, bool led1_on)
+{
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
+  gpio_pin_set(gpio0_device, LED_PIN, led0_on ? 1 : 0);
+  gpio_pin_set(gpio0_device, LED1_PIN, led1_on ? 1 : 0);
+}
+
+static void blink_collection_mode_pattern(void)
+{
+  for (int i = 0; i < 3; i++) {
+    set_mode_leds(true, false);
+    k_sleep(K_MSEC(120));
+    set_mode_leds(false, true);
+    k_sleep(K_MSEC(120));
+  }
+  set_mode_leds(false, false);
+}
+
+static void blink_usb_mode_pattern(void)
+{
+  for (int i = 0; i < 2; i++) {
+    set_mode_leds(true, true);
+    k_sleep(K_MSEC(200));
+    set_mode_leds(false, false);
+    k_sleep(K_MSEC(200));
+  }
+}
+
+static void blink_flash_format_pattern(void)
+{
+  for (int i = 0; i < 8; i++) {
+    set_mode_leds(true, true);
+    k_sleep(K_MSEC(80));
+    set_mode_leds(false, false);
+    k_sleep(K_MSEC(80));
+  }
+
+  set_mode_leds(true, true);
+  k_sleep(K_MSEC(500));
+  set_mode_leds(false, false);
+}
+
+static void filesystem_workqueue_init(void)
+{
+  struct k_work_queue_config cfg = {
+    .name = "file_sys",
+    .no_yield = false
+  };
+
+  if (filesystem_workqueue_started) {
+    return;
+  }
+
+  k_work_queue_init(&my_work_q);
+  k_work_queue_start(&my_work_q, my_stack_area,
+                     K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, &cfg);
+
+  k_work_init(&ppg_work_item.work, work_write);
+  ppg_work_item.sensor = ppg;
+
+  k_work_init(&ecg_work_item.work, work_write);
+  ecg_work_item.sensor = ecg;
+
+  k_work_init(&log_work_item.work, work_write);
+  log_work_item.sensor = customlog;
+
+  filesystem_workqueue_started = true;
+}
+
+static uint64_t collection_session_id(void)
+{
+	uint64_t uptime_ms = (uint64_t)k_uptime_get();
+
+	return (get_current_unix_time() * 1000U) + (uptime_ms % 1000U);
+}
+
+static void accel_record_fault_handler(void *context)
+{
+	ARG_UNUSED(context);
+	k_sem_give(&accel_record_fault_sem);
+}
+
+static void accel_record_fault_thread(void *arg1, void *arg2, void *arg3)
+{
+	ARG_UNUSED(arg1);
+	ARG_UNUSED(arg2);
+	ARG_UNUSED(arg3);
+
+	for (;;) {
+		(void)k_sem_take(&accel_record_fault_sem, K_FOREVER);
+		exit_ecg_collection_mode();
+	}
+}
+
+/**
+ * @brief Switch the device from USB mass-storage mode into ECG collection
+ *        mode.
+ *
+ * Invoked by the button handler (short press while idle) and exposed to the
+ * BLE service so a connected host can start a recording remotely. It blinks
+ * the collection-mode LED pattern, removes the NAND filesystem from USB mass
+ * storage, makes it writable, and starts the ECG recorder thread via
+ * ecg_recorder_start().
+ *
+ * On success the global collecting_data / host_wants_collection flags are
+ * set so the rest of the firmware (button logic, BLE status) knows a
+ * recording is in progress. If the recorder fails to start, the filesystem
+ * is returned to read-only and the mode change is abandoned, leaving the
+ * device in its previous state.
+ */
+void enter_ecg_collection_mode(void)
+{
+  int ret = 0;
+  uint64_t session_id;
+  bool usb_was_enabled;
+  bool icm_started = false;
+  bool fsync_started = false;
+
+  k_mutex_lock(&collection_mode_lock, K_FOREVER);
+  if (collecting_data) {
+    k_mutex_unlock(&collection_mode_lock);
+    return;
+  }
+
+  LOG_INF("Entering ECG collection mode");
+  blink_collection_mode_pattern();
+
+  usb_was_enabled = usb_enabled;
+  if (usb_was_enabled) {
+    ret = set_usb_mass_storage_enabled(false);
+  }
+  if (ret != 0) {
+    LOG_ERR("USB disable returned %d", ret);
+    goto start_failed;
+  }
+
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(false);
+  #endif
+
+  session_id = collection_session_id();
+  filesystem_set_collection_id(session_id);
+
+  ret = rtc0_collection_counter_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start RTC0 collection counter: %d", ret);
+    goto start_failed;
+  }
+
+  ret = ecg_recorder_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start ECG recorder: %d", ret);
+    goto start_failed;
+  }
+
+  ret = accel_recorder_start(session_id);
+  if (ret != 0) {
+    LOG_ERR("Failed to start accelerometer recorder: %d", ret);
+    goto start_ecg_failed;
+  }
+
+  ret = icm20948_accel_set_fifo_consumer(accel_recorder_consume_fifo, NULL);
+  if (ret != 0) {
+    LOG_ERR("Failed to register ICM-20948 FIFO consumer: %d", ret);
+    goto start_accel_failed;
+  }
+
+  ret = icm20948_accel_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start ICM-20948 accelerometer: %d", ret);
+    goto start_accel_failed;
+  }
+  icm_started = true;
+
+  ret = imu_fsync_timing_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start IMU FSYNC timing: %d", ret);
+    goto start_accel_failed;
+  }
+  fsync_started = true;
+
+  ret = rtc0_collection_notification_start();
+  if (ret != 0) {
+    LOG_ERR("Failed to start RTC0 BLE timing notifications: %d", ret);
+    goto start_accel_failed;
+  }
+
+  host_wants_collection = true;
+  collecting_data = true;
+  k_mutex_unlock(&collection_mode_lock);
+  return;
+
+ start_accel_failed:
+  if (fsync_started) {
+    imu_fsync_timing_stop();
+  }
+  if (icm_started) {
+    (void)icm20948_accel_stop();
+  }
+  (void)icm20948_accel_set_fifo_consumer(NULL, NULL);
+  (void)accel_recorder_abort();
+start_ecg_failed:
+  (void)ecg_recorder_stop();
+start_failed:
+  rtc0_collection_counter_stop();
+  filesystem_clear_collection_id();
+  host_wants_collection = false;
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(true);
+  #endif
+  if (usb_was_enabled) {
+    ret = set_usb_mass_storage_enabled(true);
+    if (ret != 0) {
+      LOG_WRN("USB restore returned %d", ret);
+    }
+  }
+  k_mutex_unlock(&collection_mode_lock);
+}
+
+/**
+ * @brief Switch the device from ECG collection mode back to USB mass-storage
+ *        mode.
+ *
+ * The counterpart to enter_ecg_collection_mode(), invoked on a short button
+ * press during recording or remotely over BLE. It first disables and drains
+ * the IMU FIFO, finalizes the accelerometer file, then stops ECG recording.
+ * After both streams are queued, the shared filesystem work queue is drained,
+ * all files are closed, the NAND disk is set back to read-only, and USB
+ * mass-storage is re-enabled.
+ *
+ * If the recorder does not confirm shutdown in time, the collection flags
+ * are restored and the function bails out without touching the filesystem —
+ * the device stays in collection mode rather than risking a USB host and
+ * the recorder writing the disk at the same time.
+ */
+void exit_ecg_collection_mode(void)
+{
+  int ret;
+  uint32_t fsync_edge_count;
+
+  k_mutex_lock(&collection_mode_lock, K_FOREVER);
+  if (!collecting_data) {
+    k_mutex_unlock(&collection_mode_lock);
+    return;
+  }
+
+  LOG_INF("Entering USB mass storage mode");
+  blink_usb_mode_pattern();
+
+  host_wants_collection = false;
+  collecting_data = false;
+
+  /*
+   * A very short recording may not yet have enough transitions to estimate
+   * the IMU period. Keep the stream alive until the second hardware marker
+   * edge, then leave more than one worst-case sample period for it to enter
+   * the FIFO before the final drain.
+   */
+  while (imu_fsync_timing_edge_count_get() < 2U) {
+    fsync_edge_count = imu_fsync_timing_edge_count_get();
+    ret = imu_fsync_timing_wait_for_edge_after(fsync_edge_count,
+                                                K_MSEC(500));
+    if (ret != 0) {
+      LOG_WRN("Timed out waiting for IMU FSYNC startup edges: %d", ret);
+      break;
+    }
+  }
+  if (imu_fsync_timing_edge_count_get() >= 2U) {
+    k_sleep(K_MSEC(4));
+  }
+
+  ret = icm20948_accel_stop();
+  if (ret != 0) {
+    LOG_WRN("ICM-20948 accelerometer stop returned %d", ret);
+  }
+  imu_fsync_timing_stop();
+  ret = icm20948_accel_set_fifo_consumer(NULL, NULL);
+  if (ret != 0) {
+    LOG_WRN("ICM-20948 FIFO consumer clear returned %d", ret);
+  }
+
+  ret = accel_recorder_stop();
+  if (ret != 0) {
+    LOG_WRN("Accelerometer recorder stop returned %d", ret);
+  }
+
+  ret = ecg_recorder_stop();
+  if (ret != 0) {
+    LOG_WRN("ECG recorder stop returned %d", ret);
+    host_wants_collection = true;
+    collecting_data = true;
+    k_mutex_unlock(&collection_mode_lock);
+    return;
+  }
+
+  rtc0_collection_counter_stop();
+  flush_data_buffer(ecg);
+  if (filesystem_workqueue_started) {
+    (void)k_work_queue_drain(&my_work_q, true);
+    k_work_queue_unplug(&my_work_q);
+  }
+  close_all_files();
+  filesystem_clear_collection_id();
+
+  #if CONFIG_DISK_DRIVER_RAW_NAND
+  set_read_only(true);
+  #endif
+
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0) {
+    LOG_WRN("USB enable returned %d", ret);
+  }
+  k_mutex_unlock(&collection_mode_lock);
+}
+
+static void button0_work_handler(struct k_work *work)
+{
+  int button_state;
+  int64_t pressed_duration_ms;
+
+  ARG_UNUSED(work);
+
+  button_state = gpio_pin_get_dt(&button0);
+  if (button_state < 0) {
+    LOG_WRN("button0 read failed: %d", button_state);
+    return;
+  }
+
+  if (button_state > 0) {
+    button0_pressed = true;
+    button0_pressed_time_ms = k_uptime_get();
+    return;
+  }
+
+  if (!button0_pressed) {
+    return;
+  }
+
+  button0_pressed = false;
+  pressed_duration_ms = k_uptime_get() - button0_pressed_time_ms;
+
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    if (atomic_cas(&ship_mode, SHIP_MODE_WAITING_FOR_BUTTON,
+                   SHIP_MODE_STARTING)) {
+      LOG_INF("Exiting ship mode");
+      k_sem_give(&ship_mode_exit_sem);
+    }
+    return;
+  }
+
+  if (pressed_duration_ms >= BUTTON0_LONG_PRESS_MS) {
+    LOG_WRN("Long button press detected, erasing flash");
+    if (collecting_data) {
+      exit_ecg_collection_mode();
+      if (collecting_data) {
+        LOG_ERR("Collection did not stop; refusing to erase active storage");
+        return;
+      }
+    }
+
+    reset_lock = true;
+    (void)set_usb_mass_storage_enabled(false);
+
+    #if CONFIG_DISK_DRIVER_RAW_NAND
+    set_read_only(false);
+    #endif
+
+    shutdown_filesystem();
+    blink_flash_format_pattern();
+    reset_device(false);
+    return;
+  }
+
+  if (collecting_data) {
+    exit_ecg_collection_mode();
+  } else {
+    enter_ecg_collection_mode();
+  }
+}
+
+static void button0_pressed_handler(const struct device *port,
+                                    struct gpio_callback *cb,
+                                    uint32_t pins)
+{
+  ARG_UNUSED(port);
+  ARG_UNUSED(cb);
+  ARG_UNUSED(pins);
+
+  (void)k_work_submit(&button0_work);
+}
+
+static int button0_init(void)
+{
+  int ret;
+
+  if (!gpio_is_ready_dt(&button0)) {
+    LOG_ERR("button0 GPIO is not ready");
+    return -ENODEV;
+  }
+
+  ret = gpio_pin_configure_dt(&button0, GPIO_INPUT);
+  if (ret != 0) {
+    return ret;
+  }
+
+  gpio_init_callback(&button0_callback, button0_pressed_handler,
+                     BIT(button0.pin));
+
+  ret = gpio_add_callback(button0.port, &button0_callback);
+  if (ret != 0) {
+    return ret;
+  }
+
+  return gpio_pin_interrupt_configure_dt(&button0, GPIO_INT_EDGE_BOTH);
+}
+
 
 
 void storage_clear_led(){
+  if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
+    return;
+  }
+
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
 }
 
 int main(void)
 {
-	int identity_err;
+  int ret;
+  int identity_err;
+  uint32_t reset_reason = nrfx_reset_reason_get();
+
+  /* RESETREAS is cumulative until acknowledged. Capture this boot's reason
+   * before clearing it, so the next boot is not reported with stale flags. */
+  nrfx_reset_reason_clear(reset_reason);
 
   printk("Starting Application... \n");
-  LOG_INF("Starting Logging...\n");
+  LOG_WRN("Boot reset reason: 0x%08x", (unsigned int)reset_reason);
+  LOG_INF("Starting Logging...");
 
-	identity_err = msense_device_identity_init();
-	if (identity_err) {
-		LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
-	}
-  
-  
+  ret = button0_init();
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to initialize button0: %d", ret);
+    return ret;
+  }
+
+  identity_err = msense_device_identity_init();
+  if (identity_err) {
+    LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
+  }
   
 
   // Setup our Flash Filesystem
   setup_disk();
+  filesystem_workqueue_init();
+
   k_sleep(K_SECONDS(1));
-  //create_test_files(400);
-  #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
-  #endif
   #endif
 
   #ifdef CONFIG_MSENSE_USB_SECURITY
     security_lock = true;
   #endif
 
+  ret = set_usb_mass_storage_enabled(true);
+  if (ret != 0)
+  {
+    LOG_ERR("Failed to enable USB mass storage: %d", ret);
+  }
 
   k_sleep(K_SECONDS(2));
   
@@ -518,78 +1039,55 @@ int main(void)
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
   gpio1_device = DEVICE_DT_GET(DT_NODELABEL(gpio1));
   
-  int ret;
   // Initialize our 2 LED pins and 5V PPG Power Pin
   ret = gpio_pin_configure(gpio0_device, LED_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio0_device, LED1_PIN, GPIO_OUTPUT_INACTIVE | LED_FLAGS);
   ret = gpio_pin_configure(gpio1_device, PPG_POWER_PIN, GPIO_OUTPUT_ACTIVE | PPG_POWER_FLAGS);
-  // initialize imu ground pin
-  ret = gpio_pin_configure(gpio0_device, 27, GPIO_OUTPUT_INACTIVE);
-  if (ret < 0)
+  ret = icm20948_accel_init();
+  if (ret != 0)
   {
-    printk("Error: Can't initialize LED");
-    // return;
+    LOG_ERR("ICM-20948 accelerometer initialization failed: %d", ret);
   }
+  ret = imu_fsync_timing_init();
+  if (ret != 0)
+  {
+    LOG_ERR("IMU FSYNC timing initialization failed: %d", ret);
+  }
+  accel_recorder_set_fault_handler(accel_record_fault_handler, NULL);
   
   // Init, verify ID and config sensors
   
-  spi_init();
-  spi_verify_sensor_ids();
+  //spi_init();
+  //spi_verify_sensor_ids();
 
-  i2c_init();
+  //i2c_init();
 
-  // Shutdown our ppg and imu sensors until we need to get data from them
-  ppg_sleep();
-  motion_sleep();
+  // Shutdown our PPG sensor until we need to get data from it
+  //ppg_sleep();
 
-  /*struct k_work_queue_config cfg = {
-    .name = "my_custom_workq",
-    .no_yield = false
-  };*/
+  LOG_INF("Ship mode active; press button0 to enable BLE and status LEDs");
+  ret = k_sem_take(&ship_mode_exit_sem, K_FOREVER);
+  if (ret != 0) {
+    LOG_ERR("Failed to exit ship mode: %d", ret);
+    return ret;
+  }
 
-  // Start Threads for all our sensor tasks
-  // This is the file system workqueue (workqueues are threads that process items in a queue), it processes uploading files to the filesystem. 
-  k_work_queue_init(&my_work_q);
-  k_work_queue_start(&my_work_q, my_stack_area,
-                     K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, NULL);
-  // Handles reading from the motion sensor and ppg sensor. This is the system workqueue, which zephyr creates by default
-  // and is a different queue from the user created file system workqueue 
-  k_work_init(&my_motionSensor.work, motion_data_timeout_handler);
-  k_work_init(&my_ppgSensor.work, read_ppg_fifo_buffer);
-  // sends enmo and accelerometer
-  k_work_init(&my_motionData.work, motion_notify);
-#ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
-  // These items all handle sending data across bluetooth
-
-  k_work_init(&my_ppgDataSensor.work, ppgData_notify);
-#endif
-
-  // these are our file system workqueue objects
-  k_work_init(&ppg_work_item.work, work_write);
-  ppg_work_item.sensor = ppg;
-
-  k_work_init(&accel_work_item.work, work_write);
-  accel_work_item.sensor = accelorometer;
-  
-  k_work_init(&log_work_item.work, work_write);
-  log_work_item.sensor = customlog;
-  k_thread_name_set(&my_work_q.thread, "file_sys");
-  const char *name = k_thread_name_get(&my_work_q.thread);
-  LOG_INF("file workqueue thead: %s", name);
   if (identity_err == 0) {
     ble_init();
   } else {
     LOG_ERR("BLE advertising disabled because device identity is unavailable");
   }
-  
-  get_storage_percent_full();
-  
+  atomic_set(&ship_mode, SHIP_MODE_ACTIVE);
+
+  //get_storage_percent_full();
   
   // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
-  
+  collecting_data = false;
+  host_wants_collection = false;
+
   while (1)
   {
     
@@ -602,9 +1100,7 @@ int main(void)
 
     if (global_update % 5 == 0){
       battery_maintenance();
-      get_current_unix_time();
-      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
-      LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
+      //get_current_unix_time();
     }
 
     if (!connectedFlag){

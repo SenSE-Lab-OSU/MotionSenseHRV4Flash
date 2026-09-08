@@ -1,0 +1,7 @@
+tests:
+  app.accel_record_format:
+    tags:
+      - accel
+      - filesystem
+    platform_allow:
+      - nrf5340dk/nrf5340/cpuapp

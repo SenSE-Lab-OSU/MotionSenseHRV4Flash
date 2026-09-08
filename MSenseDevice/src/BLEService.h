@@ -6,11 +6,6 @@
 #include <zephyr/bluetooth/bluetooth.h>
 
 
-extern uint8_t gyro_first_read;
- 
-extern uint8_t ppg_read;
-
-
 extern bool connectedFlag;
 extern bool collecting_data;
 extern bool host_wants_collection;
@@ -23,52 +18,27 @@ extern bool battery_charging;
 
 #define PPG_DATA_LEN 18
 #define PPG_DATA_UNFILTER_LEN 12
-#define ACC_GYRO_DATA_LEN 20
-#define ENMO_DATA_LEN 8
 #define CONFIG_RX_DATA_LEN 6
 #define PPGQUALITY_DATA_LEN 4
-#define ACCQUALITY_DATA_LEN 4
 
 
 
 
 // BLE CONFIG COMMAND
 #define BLE_CONFIG_SENSOR_ENABLE 0x00
-#define BLE_CONFIG_GYRO_SENSITIVITY 0x01
-#define BLE_CONFIG_ACC_SENSITIVITY 0x02
 #define BLE_CONFIG_LED_INTENSITY_GREEN 0x03
 #define BLE_CONFIG_LED_INTENSITY_IR 0x04
-#define BLE_CONFIG_SAMPLING_RATE_ACC 0x05
 #define BLE_CONFIG_SAMPLING_RATE_PPG 0x06
 
 // BLE CONFIG DATA
-#define IMU_ENABLE 0x02
-#define MOTION_BLE_ENABLE 0x02
-
 #define PPG_ENABLE 0x01
 #define PPG_BLE_ENABLE 0x01
 
-#define GYRO_250_DPS 0x00
-#define GYRO_500_DPS 0x01
-#define GYRO_1000_DPS 0x02
-#define GYRO_2000_DPS 0x03
-#define ACC_2G 0x00
-#define ACC_4G 0x01
-#define ACC_8G 0x02
-#define ACC_16G 0x03
-#define MOTION_200_FS 0x00
-#define MOTION_100_FS 0x01
-#define MOTION_50_FS 0x02
-#define MOTION_25_FS 0x03
 #define PPG_200_FS 0x01
 #define PPG_100_FS 0x02
 #define PPG_50_FS 0x03
 #define PPG_25_FS 0x04
 
-// Legacy config/status encoding aliases for the fixed-cadence design.
-// The on-wire status values reuse former labels; motion integrates at 512 Hz
-// and emits 32 Hz records, and PPG is 512 sps with 2-sample averaging.
-#define MOTION_FIXED_32HZ_STATUS MOTION_25_FS
 #define PPG_FIXED_256HZ_STATUS (PPG_50_FS << 4)
 
 // Main Service UUID 
@@ -87,19 +57,11 @@ extern bool battery_charging;
 #define PPG_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x23, 0xC9, 0x39, 0xDA         
                                            
-// Acc and Gyro data characteristic UUID
-#define ACC_GRYO_TX_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x24, 0xC9, 0x39, 0xDA   
-
    
 // PPG Singal quality descriptor characteristic UUID
 #define PPG_QUALITY_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x27, 0xC9, 0x39, 0xDA   
 
-
-// Acc Singal quality descriptor characteristic UUID
-#define ACC_QUALITY_CHARACTERISTIC_UUID  0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x28, 0xC9, 0x39, 0xDA   
 
 #define WRITE_ENABLE_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x31, 0xC9, 0x39, 0xDA
@@ -128,16 +90,12 @@ extern bool battery_charging;
 #define READ_UPTIME_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x43, 0xC9, 0x39, 0xDA
 
-#define UPDATE_SERVICE_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+/* Legacy motion-update UUIDs retained for client compatibility. */
+#define TIMING_UPDATE_SERVICE_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x50, 0xC9, 0x39, 0xDA
 
-#define NOTIFY_ENMO_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
+#define TIMING_UPDATE_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
   0xE2, 0x48, 0x81, 0x1D, 0x51, 0xC9, 0x39, 0xDA
-
-#define NOTIFY_ENMOTHRESHOLD_CHARACTERISTIC_UUID 0x1F, 0x35, 0xBD, 0x4B, 0xAE, 0xD0, 0x68, 0x9C, \
-  0xE2, 0x48, 0x81, 0x1D, 0x52, 0xC9, 0x39, 0xDA
-
-
 
 /** @brief Callback type for when new data is received. */
 typedef void (*data_rx_cb_t)(uint8_t *data, uint8_t length);
@@ -150,8 +108,6 @@ struct bleDataPacket {
     uint8_t packetLength;
 }; 
 
-extern struct bleDataPacket my_motionData;  
-
 void connected(struct bt_conn *conn, uint8_t err);
 void disconnected(struct bt_conn *conn, uint8_t reason);
 
@@ -159,25 +115,47 @@ void disconnected(struct bt_conn *conn, uint8_t reason);
 
 
 
-
-void enmo_threshold_send(uint8_t* data, uint8_t len);
 int general_ble_notification(uint8_t* data, uint8_t len, int service, int characteristic);
 void status_reg_ble_notification();
 
-
-void motion_notify(struct k_work *item);
 int storage_ble_notification(uint8_t* data, uint8_t len);
 
 void ppgData_notify(struct k_work *item);
 
+/**
+ * @brief Start the collection-local RTC0 counter at 512 Hz.
+ *
+ * The counter is cleared before it starts. This API is called only by the
+ * collection-mode lifecycle while its mutex is held.
+ */
+int rtc0_collection_counter_start(void);
 
-void start_stop_device_collection(uint8_t val);
+/**
+ * @brief Stop and uninitialize the collection-local RTC0 counter.
+ */
+void rtc0_collection_counter_stop(void);
+
+/**
+ * @brief Read the active 32-bit wrap-extended RTC0 counter in 512 Hz ticks.
+ *
+ * The 24-bit hardware counter is extended in software and wraps naturally
+ * after 2^32 ticks. Callers must provide a non-NULL output pointer and must
+ * tolerate -EACCES outside collection mode.
+ */
+int rtc0_collection_counter_get(uint32_t *ticks);
+
+/**
+ * @brief Start 3-second BLE timing notifications from the RTC0 compare event.
+ *
+ * This must be called after the 512 Hz collection counter is running.
+ */
+int rtc0_collection_notification_start(void);
+
+
 void reset_device(bool reset_bad_blocks);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
-void acc_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);
 static ssize_t read_ppg_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
-static ssize_t read_acc_quality(struct bt_conn *,const struct bt_gatt_attr *, void *, uint16_t , uint16_t );
 #endif
  #endif

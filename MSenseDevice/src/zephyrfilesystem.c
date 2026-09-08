@@ -1,13 +1,15 @@
 
+#include <errno.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/fs/fs.h>
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/random/random.h>
-#include <errno.h>
-#include <stdio.h>
 #include <time.h>
+#include <stdio.h>
+#include <string.h>
 
 
 #include <stdlib.h>
@@ -60,7 +62,7 @@ struct k_work_q my_work_q;
 
 memory_container ppg_work_item;
 
-memory_container accel_work_item;
+memory_container ecg_work_item;
 
 memory_container log_work_item;
 
@@ -107,6 +109,8 @@ bool direct_write_file = true;
 
 // internally linked globals
 static struct fs_mount_t fs_mnt;
+static bool collection_id_valid;
+static uint64_t active_collection_id;
 //counter to serve as a amount for when the file fills up.
 static int data_counter;
 char file_name[50] = "";
@@ -117,12 +121,14 @@ static struct fs_file_t file;
 
 typedef struct MotionSenseFile {
 	int write_size;
+	int max_writes;
 	int current_writes;
+	uint32_t chunk_index;
 	int data_counter;
 	uint64_t start_time;
 	bool first_sample_init;
 	const char sensor_string[5];
-	char file_name[50];
+	char file_name[96];
 	const char sensor_format[90];
 	struct fs_file_t self_file;
 	bool switch_buffer;
@@ -138,18 +144,26 @@ typedef struct MotionSenseFile {
 
 MotionSenseFile ppg_file = {
 	.write_size = 8192,
+	.max_writes = 512,
 	.sensor_string = "ppg",
-	.sensor_format = "uint24_le ir1, uint24_le ir2, uint24_le g1, uint24_le g2, uint32_le global_tick_512hz"
+	.sensor_format = "4 channels of uint32 ppg (2 IR then 2 green), uint32 global_tick_512hz"
 };
 
-MotionSenseFile accel_file = {
-	.write_size = 8192,
-	.sensor_string = "ac",
-	.sensor_format = "3 int16 accel, 3 float32 quaternion, second avg float32 enmo, uint32 global_tick_512hz"
+/* store_data checks one sample ahead; this flushes 8184-byte ECG chunks. */
+MotionSenseFile ecg_file = {
+	.write_size = 8196,
+	/*
+	 * 512 8,196-byte writes would extend a 4 MiB preallocated file by
+	 * 2 KiB.  Keep the file's allocated logical size fixed instead.
+	 */
+	.max_writes = RECORDING_FILE_BYTES / 8196,
+	.sensor_string = "ecg",
+	.sensor_format = "12-byte MAX30001 ECG frames: A5 EC type flags rtc_tick_le raw24 crc8"
 };
 
 MotionSenseFile log_file = {
 	.write_size = 8192,
+	.max_writes = 512,
 	.sensor_string = "log",
 	.sensor_format = "logging"
 };
@@ -173,10 +187,62 @@ void enable_read_only(bool enable){
 const char* sensor_enum_to_string(enum sensor_type sensor) {
     switch (sensor) {
         case ppg:    return "ppg";
-        case accelorometer:  return "acc";
+        case ecg: return "ecg";
         case customlog: return "log";
         default:           return "undefined";
     }
+}
+
+void filesystem_set_collection_id(uint64_t collection_id)
+{
+	active_collection_id = collection_id;
+	collection_id_valid = true;
+	ecg_file.chunk_index = 0U;
+}
+
+void filesystem_clear_collection_id(void)
+{
+	active_collection_id = 0U;
+	collection_id_valid = false;
+}
+
+int filesystem_make_recording_path(char *path, size_t path_size,
+				   const char *stream_prefix,
+				   uint64_t collection_id)
+{
+	return filesystem_make_recording_chunk_path(path, path_size, stream_prefix,
+						    collection_id, 0U);
+}
+
+int filesystem_make_recording_chunk_path(char *path, size_t path_size,
+					 const char *stream_prefix,
+					 uint64_t collection_id,
+					 uint32_t chunk_index)
+{
+	int written;
+
+	if ((path == NULL) || (path_size == 0U) || (stream_prefix == NULL) ||
+	    !file_system_ready) {
+		return -EINVAL;
+	}
+
+	if (patient_num != 0) {
+		written = snprintf(path, path_size, "%s/%d%s%llu_%04lu.bin",
+				   fs_mnt.mnt_point, patient_num, stream_prefix,
+				   (unsigned long long)collection_id,
+				   (unsigned long)chunk_index);
+	} else {
+		written = snprintf(path, path_size, "%s/%s%llu_%04lu.bin",
+				   fs_mnt.mnt_point, stream_prefix,
+				   (unsigned long long)collection_id,
+				   (unsigned long)chunk_index);
+	}
+
+	if ((written < 0) || ((size_t)written >= path_size)) {
+		return -ENAMETOOLONG;
+	}
+
+	return 0;
 }
 
 
@@ -222,7 +288,7 @@ void create_test_file(int writes){
 	//ID = sys_rand32_get() % 90000;
 	ID = total_test_files;
 	
-	itoa(ID, IDString,  10);
+	snprintf(IDString, sizeof(IDString), "%d", ID);
 
 	strcat(destination, mp->mnt_point);
 	strcat(destination, "/");
@@ -316,8 +382,8 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
-	else if (sensor == accelorometer){
-		MSenseFile = &accel_file;
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
@@ -331,66 +397,89 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	if (MSenseFile->current_writes == 0){
 		// Create a new file, with given sensor type, patient name, and date as file name
 		fs_file_t_init(&MSenseFile->self_file);
-		
-		
-		uint64_t ID = 0;
-		// max itoa can do is 33 with binary, but theoretically it will be < 9
-		char IDString[33];
-		char patient_id[33];
-		if (use_random_files){
-			
-		
-			ID = sys_rand32_get() % 900;
-			
-		}
-		else {
 
-			uint64_t current_time = MSenseFile->start_time; 
-			
-			ID = current_time;
-			if (sensor == customlog){
-				// could also add it onto the time instead?
-				total_log_files++;
-				ID = total_log_files;
+		if ((sensor == ecg) && collection_id_valid) {
+			int path_ret = filesystem_make_recording_chunk_path(
+				MSenseFile->file_name, sizeof(MSenseFile->file_name),
+				MSenseFile->sensor_string, active_collection_id,
+				MSenseFile->chunk_index);
+
+			if (path_ret != 0) {
+				LOG_WRN("Unable to construct ECG recording path: %d", path_ret);
+				file_system_malfunction = true;
+				return;
 			}
+		} else {
+			uint64_t ID = 0;
+			// max itoa can do is 33 with binary, but theoretically it will be < 9
+			char IDString[33];
+			char patient_id[33];
+			if (use_random_files){
+				ID = sys_rand32_get() % 900;
+			}
+			else {
 
-		}
-		sprintf(IDString, "%llu", ID);
-		//itoa(ID, IDString,  10);
-		
+				uint64_t current_time = MSenseFile->start_time;
 
-		memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
-		strcat(MSenseFile->file_name, mp->mnt_point);
-		strcat(MSenseFile->file_name, "/");
-		if (patient_num != 0){
-			itoa(patient_num, patient_id, 10);
-			strcat(MSenseFile->file_name, patient_id);	
+				ID = current_time;
+				if (sensor == customlog){
+					// could also add it onto the time instead?
+					total_log_files++;
+					ID = total_log_files;
+				}
+
+			}
+			sprintf(IDString, "%llu", ID);
+
+
+			memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
+			strcat(MSenseFile->file_name, mp->mnt_point);
+			strcat(MSenseFile->file_name, "/");
+			if (patient_num != 0){
+				snprintf(patient_id, sizeof(patient_id), "%d", patient_num);
+				strcat(MSenseFile->file_name, patient_id);
+			}
+			strcat(MSenseFile->file_name, MSenseFile->sensor_string);
+			strcat(MSenseFile->file_name, IDString);
+			if (sensor != customlog){
+				strcat(MSenseFile->file_name, ".bin");
+			}
+			else {
+				strcat(MSenseFile->file_name, ".txt");
+			}
 		}
-		strcat(MSenseFile->file_name, MSenseFile->sensor_string);
-		strcat(MSenseFile->file_name, IDString);
-		if (sensor != customlog){
-			strcat(MSenseFile->file_name, ".bin");
-		}
-		else {
-			strcat(MSenseFile->file_name, ".txt");
-		}
-		
+
 		// Now that we created the file name, open it and write the data
 		LOG_INF("Creating new file for %d", sensor);
+		if ((sensor == ecg) && collection_id_valid) {
+			struct fs_dirent entry;
+			int stat_ret = fs_stat(MSenseFile->file_name, &entry);
+
+			if (stat_ret == 0) {
+				LOG_WRN("ECG recording chunk already exists");
+				file_system_malfunction = true;
+				return;
+			}
+			if (stat_ret != -ENOENT) {
+				LOG_WRN("Unable to check ECG recording chunk: %d", stat_ret);
+				file_system_malfunction = true;
+				return;
+			}
+		}
 		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
 		if (file_create != 0){
 			LOG_WRN("Unable to create file for %d", sensor);
 			file_system_malfunction = true;
-			//fs_close(&MSenseFile->self_file);
-			//return;
+			return;
 		}
 		// we write in sizes of 4096*2, so we include that in the formula
-		FRESULT res = f_expand(MSenseFile->self_file.filep, 4096*max_writes*2, 1);
+		FRESULT res = f_expand(MSenseFile->self_file.filep,
+					       RECORDING_FILE_BYTES, 1);
 		if (res != 0){
 			LOG_WRN("failed to expand file");
 			file_system_malfunction = true;
-			//fs_close(&MSenseFile->self_file);
-			//return;
+			(void)fs_close(&MSenseFile->self_file);
+			return;
 		}
 	}
 	else if (data_counter >= data_limit){
@@ -401,7 +490,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 	MSenseFile->current_writes++;
 	//fs_write(&file, data, size);
 	if (total_written == size){
-		LOG_DBG("sucessfully wrote to file for %d, bytes = %i, writes = %i ! \n", sensor, total_written, MSenseFile->current_writes);
+		LOG_INF("successfully wrote to file for %d, bytes = %i, writes = %i !", sensor, total_written, MSenseFile->current_writes);
 		file_system_malfunction = false;
 		data_counter += total_written;
 	}
@@ -411,7 +500,7 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		status_reg_ble_notification();
 	}
 
-	if (MSenseFile->current_writes >= max_writes){
+	if (MSenseFile->current_writes >= MSenseFile->max_writes){
 		// if we don't want the leftover empty sectors caused by the buffer writes being smaller than 8192 size we can
 		// uncomment these lines or use f_truncate() with dhara
 		//FIL* fp = &MSenseFile->self_file.filep;
@@ -425,6 +514,9 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 			LOG_WRN("Error on closing file");
 		}
 		MSenseFile->current_writes = 0;
+		if ((sensor == ecg) && collection_id_valid) {
+			MSenseFile->chunk_index++;
+		}
 		get_storage_percent_full();
 	}
 }
@@ -451,7 +543,6 @@ int write_to_file(const void* data, size_t size){
 
 		}
 		sprintf(IDString, "%d", ID);
-		//itoa(ID, IDString,  10);
 
 		
 
@@ -484,19 +575,19 @@ int write_to_file(const void* data, size_t size){
 }
 
 
-int64_t file_system_timer;
+
 
 void work_write(struct k_work* item){
 	
 	memory_container* container =
         CONTAINER_OF(item, memory_container, work);
-	LOG_DBG("Processing packet %i", container->packet_num);
-	start_timer(&file_system_timer);
+	LOG_INF("Processing packet %i", container->packet_num);
+	start_timer();
 	LOG_DBG("writing true for container %d", container->sensor);
 	container->in_use = true;
 	sensor_write_to_file(container->address, container->size, container->sensor);
-	int64_t time_value = stop_timer(&file_system_timer);
-	LOG_DBG("write timer: %lli", time_value);
+	int64_t time_value = stop_timer();
+	LOG_INF("write timer: %lli", time_value);
 	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
 	if (container->packet_num <= last_packet_number_processed){
 		LOG_ERR("FIFO in k_work not met.");	
@@ -515,8 +606,8 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 	if (type == ppg){
 		work_item = &ppg_work_item;
 	}
-	else if (type == accelorometer){
-		work_item = &accel_work_item;
+	else if (type == ecg){
+		work_item = &ecg_work_item;
 	}
 	else if (type == customlog){
 		work_item = &log_work_item;
@@ -544,7 +635,7 @@ void submit_write(const void* data, size_t size, enum sensor_type type){
 		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret, upload_timeout_errors);
 		
 	}
-	LOG_DBG("ret value for %i: %i", type, ret);
+	LOG_INF("ret value for %i: %i", type, ret);
 	}
 	else{
 		LOG_ERR("work item attempted schedule while still running for type: %i", type);
@@ -561,8 +652,8 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
-	else if (sensor == accelorometer){
-		MSenseFile = &accel_file;
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
@@ -580,7 +671,11 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	}
 
 	if (!MSenseFile->first_sample_init){
-		MSenseFile->start_time = get_current_unix_time();
+		if (sensor == ecg && collection_id_valid) {
+			MSenseFile->start_time = active_collection_id;
+		} else {
+			MSenseFile->start_time = get_current_unix_time();
+		}
 		MSenseFile->first_sample_init = true;
 		first_init = true;
 	}
@@ -592,11 +687,11 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		if (current_buffer->current_size + size != MSenseFile->write_size){
 			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
 		}
-		if ((MSenseFile->current_writes + 1) >= max_writes){
+		if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
 			MSenseFile->first_sample_init = false;
 		}
 		if (!panic_single_thread){
-		LOG_DBG("Submitting Write!");
+		LOG_INF("Submitting Write!");
 		submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 		}
 		else {
@@ -616,8 +711,8 @@ void flush_data_buffer(enum sensor_type sensor){
 	if (sensor == ppg){
 		MSenseFile = &ppg_file;
 	}
-	else if (sensor == accelorometer){
-		MSenseFile = &accel_file;
+	else if (sensor == ecg){
+		MSenseFile = &ecg_file;
 	}
 	else if (sensor == customlog){
 		MSenseFile = &log_file;
@@ -637,11 +732,11 @@ void flush_data_buffer(enum sensor_type sensor){
 		if (current_buffer->current_size != MSenseFile->write_size){
 				LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
 			}
-			if ((MSenseFile->current_writes + 1) >= max_writes){
+			if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
 				MSenseFile->first_sample_init = false;
 			}
 			if (!panic_single_thread){
-			LOG_DBG("Submitting Write!");
+			LOG_INF("Submitting Write!");
 			submit_write(current_buffer->data_upload_buffer, current_buffer->current_size, sensor);
 			}
 			else {
@@ -657,7 +752,7 @@ void flush_data_buffer(enum sensor_type sensor){
 
 
 int write_ble_uuid(const char *ble_address, const char *ble_name,
-		   const char *device_id_hex)
+			   const char *device_id_hex)
 {
 	struct fs_mount_t *mp = &fs_mnt;
 	struct fs_file_t name_file;
@@ -690,12 +785,13 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
 			   "%s\nName: %s\nDevice ID: %s\nVersion: %s"
 			   "\nGit Commit: %s\nGit Tree: %s"
-			   "\nppg format: %s\naccel format: %s"
+			   "\nppg format: %s\naccel format: ICM-20948 accel binary format v2"
+			   "\necg format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
 			   ble_address, ble_name, device_id_hex, CONFIG_BT_DIS_MODEL,
 			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
-			   ppg_file.sensor_format, accel_file.sensor_format);
+			   ppg_file.sensor_format, ecg_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;
 	}
@@ -729,8 +825,8 @@ int write_ble_uuid(const char *ble_address, const char *ble_name,
 int close_all_files(){
 
 	
-	reset_sensor_file(&accel_file);
 	reset_sensor_file(&ppg_file);
+	reset_sensor_file(&ecg_file);
 	reset_sensor_file(&log_file);
 	return 0;
 
@@ -823,7 +919,7 @@ void setup_disk(void)
 	/* Allow log messages to flush to avoid interleaved output */
 	k_sleep(K_MSEC(50));
 
-	LOG_INF("Mount %s: %d\n", fs_mnt.mnt_point, rc);
+	LOG_INF("Mount %s: %d", fs_mnt.mnt_point, rc);
 
 	rc = fs_statvfs(mp->mnt_point, &sbuf);
 	if (rc < 0) {
@@ -832,7 +928,7 @@ void setup_disk(void)
 	}
 
 	LOG_INF("%s: bsize = %lu ; frsize = %lu ;"
-	       " blocks = %lu ; bfree = %lu\n",
+	       " blocks = %lu ; bfree = %lu",
 	       mp->mnt_point,
 	       sbuf.f_bsize, sbuf.f_frsize,
 	       sbuf.f_blocks, sbuf.f_bfree);
@@ -927,23 +1023,7 @@ int test_desk_driver(){
 	print_page_hex(read_buf, sizeof(read_buf), true);
 	return 0;
 }
-uint8_t test_read_buf[4096];
-void print_out_page(int page_num){
-	
-	// can also just change this to disk_read()
-	const struct device* filesystem_device2 = sdmmc_disk.dev;
-	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
-	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
-	if (page_num > 1500){
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 2, 1);
-	}
-	
-	//(filesystem_device2, page_num, test_read_buf);
-	//LOG_INF("with")
-	//spi_nand_page_read(filesystem_device2, page_num, test_read_buf);
-	print_page_hex(test_read_buf, sizeof(test_read_buf), false);
-}
+
 
 
 int read_storage_percent_full(){
@@ -994,30 +1074,14 @@ DWORD get_fattime(void)
 
 int64_t start_time;
 
-void start_timer(int64_t* start_time_ref){
-	if (start_time_ref != NULL){
-		if (*start_time_ref != 0){
-			LOG_WRN("timer was executed again before it could finish!");
-		}
-		*start_time_ref = k_uptime_get();
-	}
-	else{
-		start_time = k_uptime_get();
-	}
+void start_timer(){
+	start_time = k_uptime_get();
 }
 
 
-int64_t stop_timer(int64_t* start_time_ref){
-	int64_t length;
-	if (start_time_ref != NULL){
-		length = k_uptime_get() - *start_time_ref;
-		*start_time_ref = 0;
-		LOG_DBG("Timer Value: %lli ms", length);
-	}
-	else{
-		length = k_uptime_get() - start_time;
-		start_time = 0;
-		LOG_DBG("Timer Value: %lli ms", length);
-	}
+int64_t stop_timer(){
+	int64_t length = k_uptime_get() - start_time;
+	start_time = 0;
+	LOG_INF("Timer Value: %lli ms", length);
 	return length;
 }

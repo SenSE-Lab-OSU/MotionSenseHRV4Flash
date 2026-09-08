@@ -7,7 +7,7 @@
 
 #include "device_identity.h"
 
-#define MSENSE_BLE_NAME_PREFIX "MSense4PPG-"
+#define MSENSE_BLE_NAME_PREFIX "MSense4ECG-"
 #define MSENSE_BLE_NAME_PREFIX_LEN (sizeof(MSENSE_BLE_NAME_PREFIX) - 1U)
 #define MSENSE_DEVICE_ID_SUFFIX_BITS 25U
 #define MSENSE_DEVICE_ID_SUFFIX_MASK ((1UL << MSENSE_DEVICE_ID_SUFFIX_BITS) - 1UL)
@@ -20,7 +20,7 @@ static char device_name[MSENSE_BLE_NAME_LEN + 1U];
 static bool identity_initialized;
 
 BUILD_ASSERT(MSENSE_BLE_NAME_PREFIX_LEN + 5U == MSENSE_BLE_NAME_LEN,
-             "BLE name prefix and suffix must each match their lengths");
+	     "BLE name prefix and suffix must each match their lengths");
 
 static bool device_id_is_invalid(const uint8_t *id)
 {

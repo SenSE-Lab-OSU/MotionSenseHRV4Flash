@@ -118,6 +118,7 @@ Commands are case-sensitive:
    connect ppg
    connect ecg
    connect any
+   collect on|off
    status
    start [id]
    start infinity [id]
@@ -131,6 +132,9 @@ Commands are case-sensitive:
 filters; ``connect any`` accepts any ``MSense`` name, including
 ``MSenseBlinky``. Exact peripheral addresses and multiple simultaneous peers
 are intentionally unsupported.
+
+``collect on`` and ``collect off`` write the collection-enable characteristic
+on a connected PPG or ECG peer and report the acknowledged result.
 
 ``start`` chooses a nonzero session ID, unless one is supplied. ``start
 infinity`` works for PPG and ECG. Stream IDs are monotonic for one connection, including

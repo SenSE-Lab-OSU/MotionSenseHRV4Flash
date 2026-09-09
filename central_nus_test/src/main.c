@@ -57,9 +57,9 @@
 #define MSENSE_NAME_PREFIX "MSense"
 #define MSENSE_BLINKY_NAME "MSenseBlinky"
 
-#define PPG_CONTROL_SERVICE_UUID \
+#define COLLECTION_CONTROL_SERVICE_UUID \
 	BT_UUID_128_ENCODE(0xda39c930, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
-#define PPG_COLLECTION_ENABLE_UUID \
+#define COLLECTION_ENABLE_UUID \
 	BT_UUID_128_ENCODE(0xda39c931, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
 
 #define NUS_HEADER_MESSAGE_TYPE_OFFSET 3U
@@ -231,8 +231,8 @@ struct tester_context {
 	bool start_infinity;
 	bool stop_after_start_ack;
 	bool reconnect_after_stream;
-	bool ppg_collect_write_pending;
-	uint16_t ppg_collect_handle;
+	bool collect_write_pending;
+	uint16_t collect_handle;
 	int64_t last_progress_ms;
 	uint16_t end_status;
 	bt_addr_le_t peer_address;
@@ -255,10 +255,11 @@ static struct bt_gatt_exchange_params exchange_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 static struct bt_gatt_write_params command_write_params;
 static uint8_t command_write_data[MSENSE_SENSOR_STREAM_COMMAND_BYTES];
-static struct bt_gatt_write_params ppg_collect_write_params;
-static uint8_t ppg_collect_write_data;
-static struct bt_uuid_128 ppg_control_uuid = BT_UUID_INIT_128(PPG_CONTROL_SERVICE_UUID);
-static struct bt_uuid_128 ppg_collect_uuid = BT_UUID_INIT_128(PPG_COLLECTION_ENABLE_UUID);
+static struct bt_gatt_write_params collect_write_params;
+static uint8_t collect_write_data;
+static struct bt_uuid_128 collection_control_uuid =
+	BT_UUID_INIT_128(COLLECTION_CONTROL_SERVICE_UUID);
+static struct bt_uuid_128 collection_enable_uuid = BT_UUID_INIT_128(COLLECTION_ENABLE_UUID);
 static char command_rx_buffer[COMMAND_LINE_BYTES];
 static size_t command_rx_length;
 static bool command_rx_overlong;
@@ -298,12 +299,12 @@ static struct msense_dfu_wire_parser dfu_wire_parser;
 
 static void start_scan(void);
 static void start_smp_discovery(struct bt_conn *conn);
-static void start_ppg_control_discovery(struct bt_conn *conn);
+static void start_collection_control_discovery(struct bt_conn *conn);
 static struct bt_conn *connection_ref(void);
 static void command_write_complete(struct bt_conn *conn, uint8_t err,
 				   struct bt_gatt_write_params *params);
 static int issue_nus_command(uint8_t opcode, uint32_t session_id);
-static int issue_ppg_collect_write(bool enable);
+static int issue_collect_write(bool enable);
 static void issue_deferred_stop(void);
 static void mark_protocol_failure(const char *reason);
 static void stream_progress_stop(void);
@@ -1827,68 +1828,76 @@ static void subscribe_complete(struct bt_conn *conn, uint8_t err,
 	}
 	post_event("NUS_READY mtu=%u tx=0x%04x rx=0x%04x cccd=0x%04x", mtu,
 		   nus_client.handles.tx, nus_client.handles.rx, nus_client.handles.tx_ccc);
-	if (peer_device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG) {
-		start_ppg_control_discovery(conn);
+	if (peer_device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG ||
+	    peer_device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
+		start_collection_control_discovery(conn);
 	} else {
 		start_smp_discovery(conn);
 	}
 }
 
-static void ppg_control_discovery_complete(struct bt_gatt_dm *dm, void *context)
+static void collection_control_discovery_complete(struct bt_gatt_dm *dm, void *context)
 {
 	const struct bt_gatt_dm_attr *characteristic;
 	const struct bt_gatt_dm_attr *value;
 	struct bt_conn *conn = bt_gatt_dm_conn_get(dm);
+	uint8_t device_type;
 	uint16_t handle = 0U;
 	k_spinlock_key_t key;
 
 	ARG_UNUSED(context);
-	characteristic = bt_gatt_dm_char_by_uuid(dm, &ppg_collect_uuid.uuid);
+	characteristic = bt_gatt_dm_char_by_uuid(dm, &collection_enable_uuid.uuid);
 	if (characteristic != NULL) {
-		value = bt_gatt_dm_desc_by_uuid(dm, characteristic, &ppg_collect_uuid.uuid);
+		value = bt_gatt_dm_desc_by_uuid(dm, characteristic,
+					&collection_enable_uuid.uuid);
 		if (value != NULL) {
 			handle = value->handle;
 		}
 	}
 	key = k_spin_lock(&tester.lock);
-	tester.ppg_collect_handle = handle;
+	tester.collect_handle = handle;
+	device_type = tester.peer_device_type;
 	k_spin_unlock(&tester.lock, key);
 	(void)bt_gatt_dm_data_release(dm);
 	if (handle == 0U) {
-		post_event("PPG_COLLECT_UNAVAILABLE reason=characteristic_not_found");
+		post_event("COLLECT_UNAVAILABLE type=%s reason=characteristic_not_found",
+			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG");
 	} else {
-		post_event("PPG_COLLECT_READY handle=0x%04x", handle);
+		post_event("COLLECT_READY type=%s handle=0x%04x",
+			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG",
+			   handle);
 	}
 	start_smp_discovery(conn);
 }
 
-static void ppg_control_discovery_service_not_found(struct bt_conn *conn, void *context)
+static void collection_control_discovery_service_not_found(struct bt_conn *conn,
+						    void *context)
 {
 	ARG_UNUSED(context);
-	post_event("PPG_COLLECT_UNAVAILABLE reason=service_not_found");
+	post_event("COLLECT_UNAVAILABLE reason=service_not_found");
 	start_smp_discovery(conn);
 }
 
-static void ppg_control_discovery_error(struct bt_conn *conn, int err, void *context)
+static void collection_control_discovery_error(struct bt_conn *conn, int err, void *context)
 {
 	ARG_UNUSED(context);
-	post_event("ERROR PPG collection discovery failed: %d", err);
+	post_event("ERROR collection discovery failed: %d", err);
 	start_smp_discovery(conn);
 }
 
-static const struct bt_gatt_dm_cb ppg_control_discovery_callbacks = {
-	.completed = ppg_control_discovery_complete,
-	.service_not_found = ppg_control_discovery_service_not_found,
-	.error_found = ppg_control_discovery_error,
+static const struct bt_gatt_dm_cb collection_control_discovery_callbacks = {
+	.completed = collection_control_discovery_complete,
+	.service_not_found = collection_control_discovery_service_not_found,
+	.error_found = collection_control_discovery_error,
 };
 
-static void start_ppg_control_discovery(struct bt_conn *conn)
+static void start_collection_control_discovery(struct bt_conn *conn)
 {
-	int err = bt_gatt_dm_start(conn, &ppg_control_uuid.uuid,
-				   &ppg_control_discovery_callbacks, NULL);
+	int err = bt_gatt_dm_start(conn, &collection_control_uuid.uuid,
+				   &collection_control_discovery_callbacks, NULL);
 
 	if (err != 0) {
-		post_event("ERROR PPG collection discovery could not start: %d", err);
+		post_event("ERROR collection discovery could not start: %d", err);
 		start_smp_discovery(conn);
 	}
 }
@@ -2154,8 +2163,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		tester.subscribed = false;
 		tester.write_pending = false;
 		tester.command_pending = false;
-		tester.ppg_collect_write_pending = false;
-		tester.ppg_collect_handle = 0U;
+		tester.collect_write_pending = false;
+		tester.collect_handle = 0U;
 		tester.stop_after_start_ack = false;
 		tester.att_mtu = 0U;
 		tester.smp_ready = false;
@@ -2615,24 +2624,31 @@ static void command_write_complete(struct bt_conn *conn, uint8_t err,
 	}
 }
 
-static void ppg_collect_write_complete(struct bt_conn *conn, uint8_t err,
-				       struct bt_gatt_write_params *params)
+static void collect_write_complete(struct bt_conn *conn, uint8_t err,
+				   struct bt_gatt_write_params *params)
 {
 	bool enabled = *(const uint8_t *)params->data != 0U;
-	k_spinlock_key_t key = k_spin_lock(&tester.lock);
+	uint8_t device_type;
+	k_spinlock_key_t key;
 
+	key = k_spin_lock(&tester.lock);
+	device_type = tester.peer_device_type;
 	if (tester.conn == conn) {
-		tester.ppg_collect_write_pending = false;
+		tester.collect_write_pending = false;
 	}
 	k_spin_unlock(&tester.lock, key);
 	if (err != 0U) {
-		post_event("PPG_COLLECT_RESULT enabled=%u ATT=0x%02x", enabled, err);
+		post_event("COLLECT_RESULT type=%s enabled=%u ATT=0x%02x",
+			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG",
+			   enabled, err);
 	} else {
-		post_event("PPG_COLLECT_RESULT enabled=%u status=success", enabled);
+		post_event("COLLECT_RESULT type=%s enabled=%u status=success",
+			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG",
+			   enabled);
 	}
 }
 
-static int issue_ppg_collect_write(bool enable)
+static int issue_collect_write(bool enable)
 {
 	struct bt_conn *connection = connection_ref();
 	uint16_t handle;
@@ -2643,29 +2659,31 @@ static int issue_ppg_collect_write(bool enable)
 		return -ENOTCONN;
 	}
 	key = k_spin_lock(&tester.lock);
-	handle = tester.ppg_collect_handle;
+	handle = tester.collect_handle;
 	if (tester.conn != connection ||
-	    tester.peer_device_type != MSENSE_SENSOR_STREAM_DEVICE_PPG || handle == 0U ||
-	    tester.ppg_collect_write_pending || tester.write_pending || tester.command_pending) {
+	    (tester.peer_device_type != MSENSE_SENSOR_STREAM_DEVICE_PPG &&
+	     tester.peer_device_type != MSENSE_SENSOR_STREAM_DEVICE_ECG) ||
+	    handle == 0U || tester.collect_write_pending || tester.write_pending ||
+	    tester.command_pending) {
 		k_spin_unlock(&tester.lock, key);
 		bt_conn_unref(connection);
 		return -EBUSY;
 	}
-	tester.ppg_collect_write_pending = true;
+	tester.collect_write_pending = true;
 	k_spin_unlock(&tester.lock, key);
 
-	ppg_collect_write_data = enable ? 1U : 0U;
-	memset(&ppg_collect_write_params, 0, sizeof(ppg_collect_write_params));
-	ppg_collect_write_params.func = ppg_collect_write_complete;
-	ppg_collect_write_params.handle = handle;
-	ppg_collect_write_params.offset = 0U;
-	ppg_collect_write_params.data = &ppg_collect_write_data;
-	ppg_collect_write_params.length = sizeof(ppg_collect_write_data);
-	err = bt_gatt_write(connection, &ppg_collect_write_params);
+	collect_write_data = enable ? 1U : 0U;
+	memset(&collect_write_params, 0, sizeof(collect_write_params));
+	collect_write_params.func = collect_write_complete;
+	collect_write_params.handle = handle;
+	collect_write_params.offset = 0U;
+	collect_write_params.data = &collect_write_data;
+	collect_write_params.length = sizeof(collect_write_data);
+	err = bt_gatt_write(connection, &collect_write_params);
 	bt_conn_unref(connection);
 	if (err != 0) {
 		key = k_spin_lock(&tester.lock);
-		tester.ppg_collect_write_pending = false;
+		tester.collect_write_pending = false;
 		k_spin_unlock(&tester.lock, key);
 	}
 	return err;
@@ -3026,8 +3044,9 @@ static void handle_command(struct command_line *line)
 		state = tester.state;
 		device_type = tester.peer_device_type;
 		k_spin_unlock(&tester.lock, key);
-		if (device_type != MSENSE_SENSOR_STREAM_DEVICE_PPG) {
-			command_printf("ERR collect requires a PPG peer");
+		if (device_type != MSENSE_SENSOR_STREAM_DEVICE_PPG &&
+		    device_type != MSENSE_SENSOR_STREAM_DEVICE_ECG) {
+			command_printf("ERR collect requires a PPG or ECG peer");
 			return;
 		}
 		if ((enable && state != TESTER_READY && state != TESTER_COMPLETE) ||
@@ -3037,11 +3056,14 @@ static void handle_command(struct command_line *line)
 				       tester_state_name(state));
 			return;
 		}
-		err = issue_ppg_collect_write(enable);
+		err = issue_collect_write(enable);
 		if (err != 0) {
 			command_printf("ERR collect %s write %d", argument, err);
 		} else {
-			command_printf("PPG_COLLECT_SENT enabled=%u", enable);
+			command_printf("COLLECT_SENT type=%s enabled=%u",
+				       device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" :
+									       "PPG",
+				       enable);
 		}
 		return;
 	}

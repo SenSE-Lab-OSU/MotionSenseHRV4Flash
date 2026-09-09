@@ -131,7 +131,7 @@ Send one case-sensitive ASCII command terminated by CR, LF, or CRLF:
 | `connect ppg` | Scan and connect to the first `MSense4PPG-...` peer. |
 | `connect ecg` | Scan and connect to the first `MSense4ECG-...` peer. |
 | `connect any` | Scan and connect to any `MSense` name, including `MSenseBlinky`. |
-| `collect on` / `collect off` | For a connected PPG peer, write its normal collection-enable characteristic with response. Use `on` before streaming and `off` only when intentionally ending PPG acquisition. |
+| `collect on` / `collect off` | For a connected PPG or ECG peer, write its normal collection-enable characteristic with response. Use `on` before streaming and `off` only when intentionally ending acquisition. |
 | `status` | Print stream state, NUS/SMP readiness, MTU, relay state, live throughput, link information, and machine-parseable `peer_name`, `peer_addr`, and `peer_addr_type`. |
 | `start [infinity] [id]` | Request a PPG or ECG v0 stream. Both support `infinity`; `id` is an optional nonzero decimal or `0x` uint32. |
 | `stop [id]` | Stop a v0 stream at its submitted record boundary (PPG 16 bytes, ECG 4096); without `id`, uses the active session. It is valid once the START write has completed. |
@@ -148,6 +148,7 @@ Important NUS/control events are:
 | `NUS_SKIPPED reason=smp_only` | Exact `MSenseBlinky` bypassed NUS discovery. |
 | `SMP_READY` / `SMP_UNAVAILABLE` | SMP discovery result (after NUS except for `MSenseBlinky`). |
 | `PEER_READY nus=<0|1> smp=<0|1> peer_name=<name> peer_addr=<address> peer_addr_type=<type>` | Final discovery availability and machine-parseable advertised identity for the peer. |
+| `COLLECT_READY`, `COLLECT_SENT`, `COLLECT_RESULT` | Collection-control discovery and acknowledged write state for PPG or ECG. |
 | `START_SENT`, `START_ACK`, `START_RESULT` | Stream request state. |
 | `STOP_SENT`, `STOP_RESULT` | Shared v0 stop state. |
 | `PPG_PREFIX` | Complete framed 16-byte PPG records; the unchanged record format has no CRC. |

@@ -775,6 +775,19 @@ int multi_nand_page_write(const struct device* dev, uint32_t page_number, const 
 	return ret;
 }
 
+// erase counterpart to multi_nand_page_read/write: takes a physical page number
+// spanning all 4 flashes, selects the right flash/die and erases the block that page
+// belongs to. An erase failure (E_Fail) marks the block bad, like the write path.
+int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
+	off_t addr = convert_page_to_address(dev, page_number);
+	int ret = spi_nand_block_erase(dev, addr);
+	if (ret != 0){
+		LOG_WRN("erase fail stat %d at sect %d", ret, page_number);
+		register_bad_sector(page_number);
+	}
+	return ret;
+}
+
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	current_reads++;
 	acquire_device(dev);

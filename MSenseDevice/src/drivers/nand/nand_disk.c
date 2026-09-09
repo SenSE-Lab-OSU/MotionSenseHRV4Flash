@@ -105,37 +105,7 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 	return 0;
 }
 
-/* handle a duplicate write by rewritting the entire block. Configurable because it will use up a lot of erase write cycles. */
-#ifdef CONFIG_RAW_NAND_ALLOW_PAGE_REWRITE
-int duplicate_writes = 0;
-int duplicate_write_max = 50;
-char sector_buffer[NAND_PAGES_PER_ERASE_BLOCK][4096];
-int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
-	if (duplicate_writes < duplicate_write_max){
-	// Get the addresses for the starting page of the block and the page relative to the block number
-	int current_page_in_block = sector_num % NAND_PAGES_PER_ERASE_BLOCK;
-	int block_num = sector_num / NAND_PAGES_PER_ERASE_BLOCK;
-	int starting_page_number = sector_num - current_page_in_block;
-	// read in the block the page is located in to the buffer
-	disk_access_read(disk, sector_buffer, starting_page_number,
-			 NAND_PAGES_PER_ERASE_BLOCK);
-	spi_nand_block_erase(disk->dev, sector_num);
 
-	// modify the desired buffer with the updated page contents
-	memcpy(sector_buffer[current_page_in_block], buffer, 4096);
-
-	// fill the block back up with the buffer
-	for (int x = starting_page_number;
-	     x < starting_page_number + NAND_PAGES_PER_ERASE_BLOCK; x++){
-		spi_nand_page_write(disk->dev, x, sector_buffer[x], 4096);
-	}
-	duplicate_writes++;
-	}
-	return 0;
-}
-
-
-#endif
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;

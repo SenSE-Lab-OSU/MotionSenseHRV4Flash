@@ -154,7 +154,7 @@ compatible = "nordic,nrf-spim";
 	compatible = "nordic,nrf-twim";
 	status = "okay";
 
-	clock-frequency = <I2C_BITRATE_FAST>;
+	clock-frequency = <I2C_BITRATE_STANDARD>;
 
 	pinctrl-0 = <&battery_default>;
 	pinctrl-1 = <&battery_sleep>;
@@ -164,7 +164,7 @@ compatible = "nordic,nrf-spim";
         reg = <0x55>;
         design-voltage = <3700>;
         design-capacity = <300>;
-        taper-current = <2>;
+        taper-current = <30>;
         terminate-voltage = <3000>;
 	};
 };

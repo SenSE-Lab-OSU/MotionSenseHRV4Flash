@@ -5,9 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 
 #define RECORDING_FILE_BYTES (4U * 1024U * 1024U)
+#define FILESYSTEM_SCRATCH_BYTES 4096U
 
 extern bool reset_lock;
 
@@ -52,6 +54,15 @@ int submit_write(const void* data, size_t size, enum sensor_type type);
 int store_data(const void* data, size_t size, enum sensor_type sensor);
 
 int flush_data_buffer(enum sensor_type sensor);
+int filesystem_logger_start(void);
+int filesystem_logger_stop(void);
+/* Call these only from my_work_q; all filesystem access is serialized there. */
+int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
+				uint32_t file_bytes, const void *header,
+				size_t header_bytes, bool leave_open);
+int filesystem_open_preallocated_file(struct fs_file_t *file, const char *path,
+				      uint32_t offset);
+uint8_t *filesystem_scratch_buffer(void);
 
 void filesystem_set_collection_id(uint64_t collection_id);
 void filesystem_clear_collection_id(void);

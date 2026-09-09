@@ -20,10 +20,12 @@ def main():
     here = Path(__file__).resolve().parent
     source = (here.parents[1] / 'src/ecgRecorder.c').read_text()
     functions = []
-    for name in ('ecg_record_rotate_chunk', 'ecg_record_take_filling_block',
+    for name in ('ecg_record_block_work_handler',
+                 'ecg_record_take_filling_block',
                  'ecg_record_queue_finalized_block', 'ecg_record_finish_file',
                  'ecg_record_process_samples'):
-        match = re.search(r'static int ' + name + r'\([^;]*?\)\s*\{', source)
+        match = re.search(r'static (?:int|void) ' + name +
+                          r'\([^;]*?\)\s*\{', source)
         if match is None:
             raise RuntimeError(f'production function not found: {name}')
         end = match.end()

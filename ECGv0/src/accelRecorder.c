@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <ff.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -20,11 +19,12 @@ LOG_MODULE_REGISTER(accel_recorder, CONFIG_LOG_LEVEL_ICM20948_ACCEL);
 
 #define ACCEL_RECORD_BUFFER_COUNT 4U
 #define ACCEL_RECORD_SYNC_INTERVAL_BLOCKS 8U
-#define ACCEL_RECORD_CONTROL_TIMEOUT_MS 10000U
 #define ACCEL_RECORD_PATH_MAX 96U
 
 BUILD_ASSERT(ACCEL_RECORD_FORMAT_FILE_BYTES == RECORDING_FILE_BYTES,
 	     "Accelerometer and ECG chunk sizes must match");
+BUILD_ASSERT(ACCEL_RECORD_FORMAT_BLOCK_BYTES <= FILESYSTEM_SCRATCH_BYTES,
+	     "Filesystem scratch page must hold accelerometer metadata");
 
 enum accel_record_block_state {
 	ACCEL_RECORD_BLOCK_FREE,
@@ -57,13 +57,16 @@ struct accel_record_block {
 static struct accel_record_block accel_record_blocks[ACCEL_RECORD_BUFFER_COUNT] __aligned(4);
 static struct fs_file_t accel_record_file;
 static struct k_work accel_record_control_work;
+static struct k_work accel_record_prepare_work;
 static struct k_sem accel_record_control_done;
 static struct k_spinlock accel_record_state_lock;
 static atomic_t accel_record_active;
 static atomic_t accel_record_failed;
 static atomic_t accel_record_rotating;
+static atomic_t accel_record_rotation_completion_pending;
 static bool accel_record_initialized;
 static bool accel_record_file_open;
+static bool accel_record_next_prepared;
 static bool accel_record_chunk_full;
 static uint32_t accel_record_session_full_block_count;
 static uint32_t accel_record_chunk_full_block_count;
@@ -71,12 +74,13 @@ static uint32_t accel_record_chunk_data_bytes;
 static uint32_t accel_record_chunk_index;
 static uint64_t accel_record_session_id;
 static uint64_t accel_record_next_sample_sequence;
+static uint32_t accel_record_dropped_samples;
 static uint32_t accel_record_pending_order;
 static struct accel_record_block *accel_record_filling_block;
-static struct accel_record_block *accel_record_metadata_block;
 static enum accel_record_control_operation accel_record_control_operation;
 static int accel_record_control_result;
 static char accel_record_path[ACCEL_RECORD_PATH_MAX];
+static char accel_record_next_path[ACCEL_RECORD_PATH_MAX];
 static accel_recorder_fault_handler_t accel_record_fault_handler;
 static void *accel_record_fault_context;
 static struct accel_timing_estimator accel_record_timing_estimator;
@@ -227,12 +231,12 @@ static int accel_record_queue_current_chunk_block(struct accel_record_block *blo
 	return 0;
 }
 
-static int accel_record_write_trailer(struct accel_record_block *metadata_block)
+static int accel_record_write_trailer(uint8_t *metadata)
 {
 	ssize_t written;
 	int ret;
 
-	accel_record_format_build_trailer(metadata_block->data,
+	accel_record_format_build_trailer(metadata,
 					  accel_record_chunk_data_bytes);
 	ret = fs_seek(&accel_record_file, ACCEL_RECORD_FORMAT_TRAILER_OFFSET,
 		      FS_SEEK_SET);
@@ -240,7 +244,7 @@ static int accel_record_write_trailer(struct accel_record_block *metadata_block)
 		return ret;
 	}
 
-	written = fs_write(&accel_record_file, metadata_block->data,
+	written = fs_write(&accel_record_file, metadata,
 			   ACCEL_RECORD_FORMAT_TRAILER_BYTES);
 	if (written != (ssize_t)ACCEL_RECORD_FORMAT_TRAILER_BYTES) {
 		return (written < 0) ? (int)written : -EIO;
@@ -249,8 +253,7 @@ static int accel_record_write_trailer(struct accel_record_block *metadata_block)
 	return fs_sync(&accel_record_file);
 }
 
-static int accel_record_close_current_chunk(
-	struct accel_record_block *metadata_block)
+static int accel_record_close_current_chunk(void)
 {
 	int ret = 0;
 	int close_ret;
@@ -259,7 +262,7 @@ static int accel_record_close_current_chunk(
 		return 0;
 	}
 
-	ret = accel_record_write_trailer(metadata_block);
+	ret = accel_record_write_trailer(filesystem_scratch_buffer());
 	close_ret = fs_close(&accel_record_file);
 	accel_record_file_open = false;
 	if ((ret == 0) && (close_ret != 0)) {
@@ -269,11 +272,9 @@ static int accel_record_close_current_chunk(
 	return ret;
 }
 
-static int accel_record_open_current_chunk(
-	struct accel_record_block *metadata_block)
+static int accel_record_open_current_chunk(void)
 {
-	FRESULT fatfs_ret;
-	ssize_t written;
+	uint8_t *metadata = filesystem_scratch_buffer();
 	int ret;
 
 	ret = filesystem_make_recording_chunk_path(
@@ -283,55 +284,82 @@ static int accel_record_open_current_chunk(
 		return ret;
 	}
 
-	/* A duplicate name must not overwrite an earlier collection chunk. */
-	{
-		struct fs_dirent entry;
-
-		ret = fs_stat(accel_record_path, &entry);
-		if (ret == 0) {
-			return -EEXIST;
-		}
-		if (ret != -ENOENT) {
-			return ret;
-		}
-	}
-
-	fs_file_t_init(&accel_record_file);
-	ret = fs_open(&accel_record_file, accel_record_path,
-		      FS_O_CREATE | FS_O_WRITE);
+	accel_record_format_build_header(metadata);
+	ret = filesystem_preallocate_file(
+		&accel_record_file, accel_record_path,
+		ACCEL_RECORD_FORMAT_FILE_BYTES, metadata,
+		ACCEL_RECORD_FORMAT_BLOCK_BYTES, true);
 	if (ret != 0) {
 		return ret;
 	}
 	accel_record_file_open = true;
-
-	fatfs_ret = f_expand((FIL *)accel_record_file.filep,
-			     ACCEL_RECORD_FORMAT_FILE_BYTES, 1);
-	if (fatfs_ret != FR_OK) {
-		ret = -EIO;
-		goto fail;
-	}
-
-	accel_record_format_build_header(metadata_block->data);
-	written = fs_write(&accel_record_file, metadata_block->data,
-			   ACCEL_RECORD_FORMAT_BLOCK_BYTES);
-	if (written != (ssize_t)ACCEL_RECORD_FORMAT_BLOCK_BYTES) {
-		ret = (written < 0) ? (int)written : -EIO;
-		goto fail;
-	}
-
-	ret = fs_sync(&accel_record_file);
-	if (ret != 0) {
-		goto fail;
-	}
-
 	LOG_INF("Accelerometer recording to %s", accel_record_path);
 	return 0;
+}
 
-fail:
-	(void)fs_close(&accel_record_file);
-	accel_record_file_open = false;
-	(void)fs_unlink(accel_record_path);
+static int accel_record_prepare_next_chunk(void)
+{
+	struct fs_file_t file;
+	uint8_t *metadata = filesystem_scratch_buffer();
+	uint32_t next_index = accel_record_chunk_index + 1U;
+	int ret;
+
+	ret = filesystem_make_recording_chunk_path(
+		accel_record_next_path, sizeof(accel_record_next_path), "ac",
+		accel_record_session_id, next_index);
+	if (ret != 0) {
+		return ret;
+	}
+	accel_record_format_build_header(metadata);
+	ret = filesystem_preallocate_file(
+		&file, accel_record_next_path, ACCEL_RECORD_FORMAT_FILE_BYTES,
+		metadata, ACCEL_RECORD_FORMAT_BLOCK_BYTES, false);
+	if (ret == 0) {
+		accel_record_next_prepared = true;
+	}
 	return ret;
+}
+
+static int accel_record_activate_next_chunk(void)
+{
+	int ret;
+
+	if (!accel_record_next_prepared) {
+		return -ENOSPC;
+	}
+	ret = accel_record_close_current_chunk();
+	if (ret != 0) {
+		return ret;
+	}
+	accel_record_chunk_index++;
+	accel_record_chunk_full_block_count = 0U;
+	accel_record_chunk_data_bytes = 0U;
+	accel_record_chunk_full = false;
+	ret = filesystem_open_preallocated_file(
+		&accel_record_file, accel_record_next_path,
+		ACCEL_RECORD_FORMAT_BLOCK_BYTES);
+	if (ret != 0) {
+		return ret;
+	}
+	accel_record_file_open = true;
+	strcpy(accel_record_path, accel_record_next_path);
+	accel_record_next_prepared = false;
+	return 0;
+}
+
+static void accel_record_prepare_work_handler(struct k_work *work)
+{
+	int ret;
+
+	ARG_UNUSED(work);
+	if (!accel_record_file_open || accel_record_next_prepared ||
+	    atomic_get(&accel_record_failed) != 0) {
+		return;
+	}
+	ret = accel_record_prepare_next_chunk();
+	if (ret != 0) {
+		accel_record_report_fault(ret);
+	}
 }
 
 static void accel_record_block_work_handler(struct k_work *work)
@@ -391,68 +419,58 @@ static int accel_record_dispatch_pending_blocks(void)
 
 static void accel_record_control_work_handler(struct k_work *work)
 {
-	struct accel_record_block *metadata_block = NULL;
+	enum accel_record_control_operation operation =
+		accel_record_control_operation;
 	int ret = 0;
 
 	ARG_UNUSED(work);
 
-	switch (accel_record_control_operation) {
+	switch (operation) {
 	case ACCEL_RECORD_CONTROL_OPEN:
-		metadata_block = accel_record_take_free_block();
-		if (metadata_block == NULL) {
-			ret = -ENOMEM;
-			break;
+		ret = accel_record_open_current_chunk();
+		if (ret == 0) {
+			ret = accel_record_prepare_next_chunk();
 		}
-		ret = accel_record_open_current_chunk(metadata_block);
-		accel_record_release_block(metadata_block);
+		if (ret != 0 && accel_record_file_open) {
+			(void)fs_close(&accel_record_file);
+			accel_record_file_open = false;
+			(void)fs_unlink(accel_record_path);
+		}
 		break;
 
 	case ACCEL_RECORD_CONTROL_ROTATE:
-		metadata_block = accel_record_metadata_block;
-		if (metadata_block == NULL) {
-			ret = -ENOMEM;
-			break;
-		}
+		ret = accel_record_activate_next_chunk();
+		{
+			k_spinlock_key_t key =
+				k_spin_lock(&accel_record_state_lock);
 
-		ret = accel_record_close_current_chunk(metadata_block);
-		if (ret == 0) {
-			accel_record_chunk_index++;
-			accel_record_chunk_full_block_count = 0U;
-			accel_record_chunk_data_bytes = 0U;
-			accel_record_chunk_full = false;
-			ret = accel_record_open_current_chunk(metadata_block);
-		}
-		if (ret == 0) {
-			k_spinlock_key_t key = k_spin_lock(&accel_record_state_lock);
-
-			ret = accel_record_dispatch_pending_blocks();
 			if (ret == 0) {
-				atomic_clear(&accel_record_rotating);
+				ret = accel_record_dispatch_pending_blocks();
 			}
+			atomic_clear(&accel_record_rotating);
 			k_spin_unlock(&accel_record_state_lock, key);
 		}
 
-		accel_record_metadata_block = NULL;
-		accel_record_release_block(metadata_block);
+		if (ret == 0) {
+			ret = k_work_submit_to_queue(&my_work_q,
+						  &accel_record_prepare_work);
+			if (ret >= 0) {
+				ret = 0;
+			}
+		}
 		break;
 
 	case ACCEL_RECORD_CONTROL_CLOSE:
-		metadata_block = accel_record_take_free_block();
-		if (metadata_block == NULL) {
-			ret = -ENOMEM;
-			break;
-		}
-		ret = accel_record_close_current_chunk(metadata_block);
-		accel_record_release_block(metadata_block);
+		ret = accel_record_close_current_chunk();
 		break;
 
 	case ACCEL_RECORD_CONTROL_ABORT:
 		if (accel_record_file_open) {
 			ret = fs_close(&accel_record_file);
 			accel_record_file_open = false;
-		}
-		if (fs_unlink(accel_record_path) != 0 && ret == 0) {
-			ret = -EIO;
+			if (fs_unlink(accel_record_path) != 0 && ret == 0) {
+				ret = -EIO;
+			}
 		}
 		break;
 
@@ -460,6 +478,16 @@ static void accel_record_control_work_handler(struct k_work *work)
 	default:
 		ret = -EINVAL;
 		break;
+	}
+	if ((operation == ACCEL_RECORD_CONTROL_CLOSE ||
+	     operation == ACCEL_RECORD_CONTROL_ABORT) &&
+	    accel_record_next_prepared) {
+		int unlink_ret = fs_unlink(accel_record_next_path);
+
+		if (unlink_ret != 0 && ret == 0) {
+			ret = unlink_ret;
+		}
+		accel_record_next_prepared = false;
 	}
 
 	if (ret != 0) {
@@ -482,6 +510,7 @@ static void accel_record_initialize(void)
 			   ACCEL_RECORD_BLOCK_FREE);
 	}
 	k_work_init(&accel_record_control_work, accel_record_control_work_handler);
+	k_work_init(&accel_record_prepare_work, accel_record_prepare_work_handler);
 	k_sem_init(&accel_record_control_done, 0, 1);
 	accel_record_initialized = true;
 }
@@ -494,12 +523,11 @@ static int accel_record_submit_control(
 	k_sem_reset(&accel_record_control_done);
 	accel_record_control_operation = operation;
 	ret = k_work_submit_to_queue(&my_work_q, &accel_record_control_work);
-	if (ret != 1) {
+	if (ret <= 0) {
 		return (ret < 0) ? ret : -EALREADY;
 	}
 
-	ret = k_sem_take(&accel_record_control_done,
-			 K_MSEC(ACCEL_RECORD_CONTROL_TIMEOUT_MS));
+	ret = k_sem_take(&accel_record_control_done, K_FOREVER);
 	if (ret != 0) {
 		accel_record_report_fault(ret);
 		return ret;
@@ -512,19 +540,14 @@ static int accel_record_start_rotation(void)
 {
 	int ret;
 
-	accel_record_metadata_block = accel_record_take_free_block();
-	if (accel_record_metadata_block == NULL) {
-		return -ENOMEM;
-	}
-
 	atomic_set(&accel_record_rotating, 1);
+	atomic_set(&accel_record_rotation_completion_pending, 1);
 	k_sem_reset(&accel_record_control_done);
 	accel_record_control_operation = ACCEL_RECORD_CONTROL_ROTATE;
 	ret = k_work_submit_to_queue(&my_work_q, &accel_record_control_work);
-	if (ret != 1) {
+	if (ret <= 0) {
 		atomic_clear(&accel_record_rotating);
-		accel_record_release_block(accel_record_metadata_block);
-		accel_record_metadata_block = NULL;
+		atomic_clear(&accel_record_rotation_completion_pending);
 		return (ret < 0) ? ret : -EALREADY;
 	}
 
@@ -535,18 +558,28 @@ static int accel_record_wait_for_rotation(void)
 {
 	int ret;
 
-	if (atomic_get(&accel_record_rotating) == 0) {
+	if (atomic_get(&accel_record_rotation_completion_pending) == 0) {
 		return 0;
 	}
 
-	ret = k_sem_take(&accel_record_control_done,
-			 K_MSEC(ACCEL_RECORD_CONTROL_TIMEOUT_MS));
+	ret = k_sem_take(&accel_record_control_done, K_FOREVER);
 	if (ret != 0) {
 		accel_record_report_fault(ret);
 		return ret;
 	}
 
+	atomic_clear(&accel_record_rotation_completion_pending);
 	return accel_record_control_result;
+}
+
+static void accel_record_release_pending_blocks(void)
+{
+	for (size_t i = 0U; i < ARRAY_SIZE(accel_record_blocks); i++) {
+		if (atomic_get(&accel_record_blocks[i].state) ==
+		    ACCEL_RECORD_BLOCK_PENDING) {
+			accel_record_release_block(&accel_record_blocks[i]);
+		}
+	}
 }
 
 void accel_recorder_set_fault_handler(accel_recorder_fault_handler_t handler,
@@ -564,22 +597,26 @@ int accel_recorder_start(uint64_t session_id)
 	if (!file_system_ready) {
 		return -ENODEV;
 	}
-	if (atomic_get(&accel_record_active) != 0 || accel_record_file_open) {
+	if (atomic_get(&accel_record_active) != 0 ||
+	    atomic_get(&accel_record_rotating) != 0 || accel_record_file_open ||
+	    accel_record_next_prepared) {
 		return -EALREADY;
 	}
 
 	atomic_clear(&accel_record_failed);
 	atomic_clear(&accel_record_rotating);
+	atomic_clear(&accel_record_rotation_completion_pending);
 	accel_record_session_id = session_id;
 	accel_record_chunk_index = 0U;
 	accel_record_session_full_block_count = 0U;
 	accel_record_chunk_full_block_count = 0U;
 	accel_record_chunk_data_bytes = 0U;
 	accel_record_chunk_full = false;
+	accel_record_next_prepared = false;
 	accel_record_pending_order = 0U;
 	accel_record_next_sample_sequence = 0U;
+	accel_record_dropped_samples = 0U;
 	accel_record_filling_block = NULL;
-	accel_record_metadata_block = NULL;
 	accel_timing_estimator_reset(&accel_record_timing_estimator);
 	accel_record_marker_valid = false;
 	accel_record_previous_marker = 0U;
@@ -643,7 +680,18 @@ int accel_recorder_consume_fifo(const uint8_t *fifo_data, size_t fifo_bytes,
 		uint8_t marker = fifo_data[offset + 1U] & 1U;
 		int ret;
 
+		ret = accel_record_consume_fsync_marker(
+			marker, accel_record_next_sample_sequence);
+		if (ret != 0) {
+			accel_record_report_fault(ret);
+			return ret;
+		}
 		ret = accel_record_take_next_filling_block();
+		if (ret == -ENOMEM) {
+			accel_record_next_sample_sequence++;
+			accel_record_dropped_samples++;
+			continue;
+		}
 		if (ret != 0) {
 			accel_record_report_fault(ret);
 			return ret;
@@ -652,13 +700,6 @@ int accel_recorder_consume_fifo(const uint8_t *fifo_data, size_t fifo_bytes,
 
 		if (block->sample_count == 0U) {
 			block->first_sample_sequence = accel_record_next_sample_sequence;
-		}
-
-		ret = accel_record_consume_fsync_marker(
-			marker, accel_record_next_sample_sequence);
-		if (ret != 0) {
-			accel_record_report_fault(ret);
-			return ret;
 		}
 
 		accel_record_format_store_fifo_sample(block->data,
@@ -717,10 +758,20 @@ int accel_recorder_stop(void)
 	atomic_clear(&accel_record_active);
 	ret = accel_record_wait_for_rotation();
 	if (ret != 0) {
+		block = accel_record_filling_block;
+		accel_record_filling_block = NULL;
+		accel_record_release_block(block);
+		accel_record_release_pending_blocks();
+		if (accel_record_file_open || accel_record_next_prepared) {
+			(void)accel_record_submit_control(ACCEL_RECORD_CONTROL_ABORT);
+		}
 		return ret;
 	}
-	if (!accel_record_file_open) {
+	if (!accel_record_file_open && !accel_record_next_prepared) {
 		return 0;
+	}
+	if (!accel_record_file_open) {
+		return accel_record_submit_control(ACCEL_RECORD_CONTROL_CLOSE);
 	}
 
 	block = accel_record_filling_block;
@@ -745,6 +796,10 @@ int accel_recorder_stop(void)
 	ret = accel_record_submit_control(ACCEL_RECORD_CONTROL_CLOSE);
 	if (ret == 0) {
 		LOG_INF("Accelerometer recording stopped");
+		if (accel_record_dropped_samples != 0U) {
+			LOG_WRN("Accelerometer recording dropped %u samples from RAM pressure",
+				(unsigned int)accel_record_dropped_samples);
+		}
 	}
 
 	return ret;
@@ -753,6 +808,7 @@ int accel_recorder_stop(void)
 int accel_recorder_abort(void)
 {
 	struct accel_record_block *block;
+	int cleanup_ret;
 	int ret;
 
 	if (!accel_record_initialized) {
@@ -761,15 +817,14 @@ int accel_recorder_abort(void)
 
 	atomic_clear(&accel_record_active);
 	ret = accel_record_wait_for_rotation();
-	if (ret != 0) {
-		return ret;
-	}
-	if (!accel_record_file_open) {
+	if (!accel_record_file_open && !accel_record_next_prepared) {
 		return 0;
 	}
 
 	block = accel_record_filling_block;
 	accel_record_filling_block = NULL;
 	accel_record_release_block(block);
-	return accel_record_submit_control(ACCEL_RECORD_CONTROL_ABORT);
+	accel_record_release_pending_blocks();
+	cleanup_ret = accel_record_submit_control(ACCEL_RECORD_CONTROL_ABORT);
+	return ret != 0 ? ret : cleanup_ret;
 }

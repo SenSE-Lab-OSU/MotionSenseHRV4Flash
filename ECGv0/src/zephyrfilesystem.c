@@ -113,12 +113,30 @@ static bool filesystem_mounted;
 static int close_all_files(void);
 static bool collection_id_valid;
 static uint64_t active_collection_id;
+static uint8_t filesystem_scratch[FILESYSTEM_SCRATCH_BYTES] __aligned(4);
 //counter to serve as a amount for when the file fills up.
 static int data_counter;
 char file_name[50] = "";
 static bool first_write = false;
 static struct fs_file_t file;
 static int64_t file_system_timer;
+static struct k_work logger_control_work;
+static struct k_work logger_prepare_work;
+static struct k_sem logger_control_done;
+static bool logger_control_initialized;
+static bool logger_started;
+static bool logger_next_prepared;
+static bool logger_prepare_requested;
+static int logger_control_result;
+static char logger_next_path[96];
+static uint32_t logger_dropped_buffers;
+
+enum logger_control_operation {
+	LOGGER_CONTROL_START,
+	LOGGER_CONTROL_STOP,
+};
+
+static enum logger_control_operation logger_control_operation;
 
 static void filesystem_latch_fault(void)
 {
@@ -498,6 +516,238 @@ static int sensor_write_failure(enum sensor_type sensor, const char *operation,
 	return ret;
 }
 
+uint8_t *filesystem_scratch_buffer(void)
+{
+	/* Filesystem work is serialized on my_work_q, so metadata may share a page. */
+	return filesystem_scratch;
+}
+
+int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
+				uint32_t file_bytes, const void *header,
+				size_t header_bytes, bool leave_open)
+{
+	struct fs_dirent entry;
+	FRESULT expand_ret;
+	ssize_t written;
+	int ret;
+
+	if (file == NULL || path == NULL || (header == NULL && header_bytes != 0U)) {
+		return -EINVAL;
+	}
+	ret = fs_stat(path, &entry);
+	if (ret == 0) {
+		return -EEXIST;
+	}
+	if (ret != -ENOENT) {
+		return ret;
+	}
+	fs_file_t_init(file);
+	ret = fs_open(file, path, FS_O_CREATE | FS_O_WRITE);
+	if (ret != 0) {
+		return ret;
+	}
+	expand_ret = f_expand((FIL *)file->filep, file_bytes, 1);
+	if (expand_ret != FR_OK) {
+		ret = -EIO;
+		goto fail;
+	}
+	if (header_bytes != 0U) {
+		written = fs_write(file, header, header_bytes);
+		if (written != (ssize_t)header_bytes) {
+			ret = written < 0 ? (int)written : -EIO;
+			goto fail;
+		}
+	}
+	ret = fs_sync(file);
+	if (ret == 0 && !leave_open) {
+		ret = fs_close(file);
+	}
+	if (ret == 0) {
+		return 0;
+	}
+
+fail:
+	(void)fs_close(file);
+	(void)fs_unlink(path);
+	return ret;
+}
+
+int filesystem_open_preallocated_file(struct fs_file_t *file, const char *path,
+				      uint32_t offset)
+{
+	int ret;
+
+	fs_file_t_init(file);
+	ret = fs_open(file, path, FS_O_WRITE);
+	if (ret == 0) {
+		ret = fs_seek(file, (off_t)offset, FS_SEEK_SET);
+	}
+	if (ret != 0) {
+		(void)fs_close(file);
+	}
+	return ret;
+}
+
+static int logger_make_path(char *path, size_t path_size, uint32_t index)
+{
+	int written;
+
+	if (patient_num != 0) {
+		written = snprintf(path, path_size, "%s/%dlog%lu.txt",
+				   fs_mnt.mnt_point, patient_num,
+				   (unsigned long)index);
+	} else {
+		written = snprintf(path, path_size, "%s/log%lu.txt",
+				   fs_mnt.mnt_point, (unsigned long)index);
+	}
+	return (written < 0 || (size_t)written >= path_size) ? -ENAMETOOLONG : 0;
+}
+
+static int logger_expand_file(struct fs_file_t *file, const char *path,
+			      bool leave_open)
+{
+	return filesystem_preallocate_file(file, path, RECORDING_FILE_BYTES,
+					   NULL, 0U, leave_open);
+}
+
+static int logger_prepare_next_file(void)
+{
+	struct fs_file_t file;
+	uint32_t index = (uint32_t)total_log_files + 1U;
+	int ret;
+
+	ret = logger_make_path(logger_next_path, sizeof(logger_next_path), index);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = logger_expand_file(&file, logger_next_path, false);
+	if (ret == 0) {
+		total_log_files++;
+		logger_next_prepared = true;
+	}
+	return ret;
+}
+
+static int logger_start_worker(void)
+{
+	uint32_t index = (uint32_t)total_log_files + 1U;
+	int ret;
+
+	ret = reset_sensor_file(&log_file);
+	if (ret != 0) {
+		return ret;
+	}
+	logger_dropped_buffers = 0U;
+	ret = logger_make_path(log_file.file_name, sizeof(log_file.file_name), index);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = logger_expand_file(&log_file.self_file, log_file.file_name, true);
+	if (ret != 0) {
+		return ret;
+	}
+	total_log_files++;
+	ret = logger_prepare_next_file();
+	if (ret != 0) {
+		(void)fs_close(&log_file.self_file);
+		(void)fs_unlink(log_file.file_name);
+		return ret;
+	}
+	logger_started = true;
+	return 0;
+}
+
+static int logger_activate_next_file(void)
+{
+	int ret;
+
+	if (!logger_next_prepared) {
+		return -ENOSPC;
+	}
+	ret = filesystem_open_preallocated_file(&log_file.self_file,
+						logger_next_path, 0U);
+	if (ret != 0) {
+		return ret;
+	}
+	strcpy(log_file.file_name, logger_next_path);
+	log_file.current_writes = 0;
+	logger_next_prepared = false;
+	logger_prepare_requested = true;
+	return 0;
+}
+
+static void logger_prepare_work_handler(struct k_work *work)
+{
+	int ret;
+
+	ARG_UNUSED(work);
+	if (!logger_started || logger_next_prepared) {
+		return;
+	}
+	ret = logger_prepare_next_file();
+	if (ret != 0) {
+		filesystem_latch_fault();
+	}
+}
+
+static void logger_control_work_handler(struct k_work *work)
+{
+	enum logger_control_operation operation = logger_control_operation;
+	int ret = 0;
+
+	ARG_UNUSED(work);
+	if (operation == LOGGER_CONTROL_START) {
+		ret = logger_start_worker();
+	} else if (logger_started) {
+		ret = sync_and_close_file(&log_file.self_file);
+		logger_started = false;
+		if (logger_next_prepared) {
+			int unlink_ret = fs_unlink(logger_next_path);
+
+			if (ret == 0) {
+				ret = unlink_ret;
+			}
+			logger_next_prepared = false;
+		}
+		if (logger_dropped_buffers != 0U) {
+			LOG_WRN("Logger dropped %u buffers while storage was busy",
+				(unsigned int)logger_dropped_buffers);
+		}
+	}
+	logger_control_result = ret;
+	k_sem_give(&logger_control_done);
+}
+
+static int logger_submit_control(enum logger_control_operation operation)
+{
+	int ret;
+
+	if (!logger_control_initialized) {
+		k_work_init(&logger_control_work, logger_control_work_handler);
+		k_work_init(&logger_prepare_work, logger_prepare_work_handler);
+		k_sem_init(&logger_control_done, 0, 1);
+		logger_control_initialized = true;
+	}
+	k_sem_reset(&logger_control_done);
+	logger_control_operation = operation;
+	ret = k_work_submit_to_queue(&my_work_q, &logger_control_work);
+	if (ret <= 0) {
+		return ret < 0 ? ret : -EALREADY;
+	}
+	ret = k_sem_take(&logger_control_done, K_FOREVER);
+	return ret == 0 ? logger_control_result : ret;
+}
+
+int filesystem_logger_start(void)
+{
+	return logger_submit_control(LOGGER_CONTROL_START);
+}
+
+int filesystem_logger_stop(void)
+{
+	return logger_started ? logger_submit_control(LOGGER_CONTROL_STOP) : 0;
+}
+
 static int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
@@ -528,7 +778,7 @@ static int sensor_write_to_file(const void* data, size_t size, enum sensor_type 
 	}
 
 
-	if (MSenseFile->current_writes == 0){
+	if (MSenseFile->current_writes == 0 && MSenseFile->self_file.filep == NULL){
 		// Create a new file, with given sensor type, patient name, and date as file name
 		fs_file_t_init(&MSenseFile->self_file);
 
@@ -656,6 +906,14 @@ static int sensor_write_to_file(const void* data, size_t size, enum sensor_type 
 		MSenseFile->current_writes = 0;
 		if ((sensor == ecg) && collection_id_valid) {
 			MSenseFile->chunk_index++;
+		} else if (sensor == customlog) {
+			int activate_ret = logger_activate_next_file();
+
+			if (activate_ret != 0) {
+				return sensor_write_failure(sensor,
+							    "Log rollover activate",
+							    activate_ret);
+			}
 		}
 		storage_ret = get_storage_percent_full();
 		if (storage_ret < 0) {
@@ -766,6 +1024,12 @@ void work_write(struct k_work* item){
 			write_ret);
 		filesystem_latch_fault();
 	}
+	if (logger_prepare_requested) {
+		logger_prepare_requested = false;
+		if (k_work_submit_to_queue(&my_work_q, &logger_prepare_work) < 0) {
+			filesystem_latch_fault();
+		}
+	}
 
 }
 
@@ -842,9 +1106,14 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 		current_buffer = &MSenseFile->buffer1;
 	}
 	if (current_buffer->current_size >= MSenseFile->write_size) {
+		if (sensor == customlog) {
+			logger_dropped_buffers++;
+			current_buffer->current_size = 0U;
+		} else {
 		LOG_ERR("Completed buffer for %d is still awaiting ownership", sensor);
 		filesystem_latch_fault();
 		return -EBUSY;
+		}
 	}
 	if (size > sizeof(current_buffer->data_upload_buffer) -
 		    current_buffer->current_size) {
@@ -877,6 +1146,11 @@ int store_data(const void* data, size_t size, enum sensor_type sensor){
 		ret = submit_write(current_buffer->data_upload_buffer,
 					   current_buffer->current_size, sensor);
 		if (ret != 0) {
+			if (sensor == customlog) {
+				logger_dropped_buffers++;
+				current_buffer->current_size = 0U;
+				return 0;
+			}
 			LOG_ERR("Unable to submit completed buffer for %d: %d", sensor, ret);
 			filesystem_latch_fault();
 			return ret;
@@ -929,6 +1203,11 @@ int flush_data_buffer(enum sensor_type sensor){
 			int ret = submit_write(current_buffer->data_upload_buffer,
 					       current_buffer->current_size, sensor);
 			if (ret != 0) {
+				if (sensor == customlog) {
+					logger_dropped_buffers++;
+					current_buffer->current_size = 0U;
+					return 0;
+				}
 				LOG_ERR("Unable to submit final buffer for %d: %d", sensor, ret);
 				return ret;
 			}

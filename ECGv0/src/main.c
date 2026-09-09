@@ -825,16 +825,11 @@ static int finalize_ecg_filesystem_for_host(void)
 		return -ENODEV;
 	}
 
-	ret = filesystem_drain_pending_work();
-	if (ret != 0) {
-		return ret;
-	}
-
-	ret = flush_data_buffer(ecg);
-	if (ret != 0) {
-		return ret;
-	}
 	ret = flush_data_buffer(customlog);
+	if (ret != 0) {
+		return ret;
+	}
+	ret = filesystem_logger_stop();
 	if (ret != 0) {
 		return ret;
 	}
@@ -1218,6 +1213,16 @@ int enter_ecg_collection_mode(void)
 		goto start_failed;
 	}
 	k_work_queue_unplug(&my_work_q);
+	ret = filesystem_logger_start();
+	if (ret != 0) {
+		goto start_failed;
+	}
+	ret = accel_recorder_start(session_id);
+	if (ret != 0) {
+		LOG_ERR("Failed to prepare accelerometer recording: %d", ret);
+		goto start_failed;
+	}
+	accel_started = true;
 
 	msense_sensor_stream_recording_started();
 	stream_started = true;
@@ -1231,13 +1236,6 @@ int enter_ecg_collection_mode(void)
 	ecg_started = true;
 
 	msense_fatal_stage_set(MSENSE_FATAL_STAGE_ACCEL_START);
-	ret = accel_recorder_start(session_id);
-	if (ret != 0) {
-		LOG_ERR("Failed to start accelerometer recorder: %d", ret);
-		goto start_failed;
-	}
-	accel_started = true;
-
 	ret = icm20948_accel_set_fifo_consumer(accel_recorder_consume_fifo, NULL);
 	if (ret != 0) {
 		LOG_ERR("Failed to register ICM-20948 FIFO consumer: %d", ret);

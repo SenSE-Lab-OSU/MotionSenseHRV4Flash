@@ -4,15 +4,14 @@
 
 This document specifies the fixed-size ICM-20948 accelerometer files recorded
 during an ECG collection session. The stream records raw X/Y/Z accelerometer
-counts only. Version 3 replaces X bit 0 with a sampled FSYNC marker, so a
+counts only. In version 3, X bit 0 contains a sampled FSYNC marker, so a
 consumer must clear that bit before interpreting X as an acceleration count.
 It never contains ECG, gyro, magnetometer, temperature, derived motion
 metrics, PPG, ENMO, or BLE payloads.
 
-Version 3 replaces the earlier fixed-layout v2 timing semantics. Every v3 file is a
-4 MiB chunk and has a terminal record that identifies the valid encoded region
-inside the preallocated file. This preserves a short final data block without
-truncating the host-visible file.
+Every v3 file is a 4 MiB chunk and has a terminal record that identifies the
+valid encoded region inside the preallocated file. This preserves a short final
+data block without truncating the host-visible file.
 
 ## Recording configuration
 
@@ -28,8 +27,9 @@ truncating the host-visible file.
 | Sample period | 2 / 1,125 seconds |
 
 No calibration or coordinate transform is applied. Convert Y and Z with
-`raw_count / 16384.0`. Convert X with `(raw_x_bits & 0xfffe) / 16384.0`.
-The marker replacement contributes at most one raw count, about 61 micro-g.
+`raw_count / 16384.0`. For X, clear bit 0 and then interpret the result as a
+signed 16-bit value: `signed16(raw_x_bits & 0xfffe) / 16384.0`. The marker
+replacement contributes at most one raw count, about 61 micro-g.
 
 ## Session filenames and chunking
 
@@ -54,8 +54,8 @@ rates. No existing chunk is overwritten: an already-present filename is a
 collection error.
 
 Every file is preallocated to exactly 4,194,304 bytes (4 MiB), remains that
-size after stop, and is never truncated. A full accelerometer chunk is closed
-and a new chunk is opened before accepting further samples.
+size after stop, and is never truncated. The next accelerometer chunk is
+preallocated before the current chunk fills and activated during rotation.
 
 ECG chunks use the same fixed size and naming convention. Its current
 8,196-byte writer batch rotates after 511 batches (leaving unused
@@ -131,8 +131,11 @@ x int16 LE with bit 0 equal to sampled FSYNC, y int16 LE, z int16 LE
 ```
 
 The sequence value continues across chunks in one session. It begins at zero
-for the first sample in chunk `0000`; a full block advances it by 680. This
-provides continuity checking across both blocks and files.
+for the first sample in chunk `0000`; consecutive full blocks normally differ
+by 680. If the four-buffer pool is temporarily exhausted, the firmware drops
+samples but still advances the sequence, so a larger difference records the
+number of missing samples. This provides continuity and loss checking across
+both blocks and files.
 
 `reserved_timer_output` is a 32-bit wrap-extended RTC0 counter value stored in
 a 32-bit little-endian field. RTC0 runs from the 32.768 kHz LFCLK with
@@ -185,17 +188,13 @@ introduced. The trailer CRC covers all 4,096 terminal bytes with bytes
    `valid_data_length` if it exceeds the data-region capacity.
 3. Parse exactly that many bytes beginning at `0x1000`: consecutive full
    blocks followed, optionally, by one short final block. Validate each
-   magic, sequence, RTC0 high byte, and CRC.
+   magic, sequence, and CRC. Treat a sequence jump as a count of samples
+   dropped before that block; all four bytes of the RTC0 anchor are meaningful.
 4. Ignore every byte between the valid data region and the terminal record.
    Those bytes are preallocated capacity, not samples.
 5. If the terminal record is absent or invalid, treat the chunk as
    interrupted. Recover only consecutive valid full blocks from the start of
    the data region and discard an incomplete short tail.
-
-Version 1 files use `ACF1` and physical EOF to find a short final block.
-Version 2 files use `ACF2`, sample format 1, and a delayed FIFO-ingestion
-timestamp at offset 4. They remain separate decoder paths; v3 decoders must
-not apply FSYNC semantics to them.
 
 ## Writer requirements
 
@@ -204,15 +203,17 @@ not apply FSYNC semantics to them.
 - Before header write, call FatFs `f_expand(..., 4 MiB, 1)` on the new empty
   file. Allocation failure is a collection fault.
 - Write and synchronize the header before enabling the IMU.
-- At 1,022 full data blocks, finish the terminal record, synchronize and
-  close the current chunk, then open/preallocate/header-sync the next indexed
-  chunk. The bounded four-buffer pool absorbs FIFO data while this serialized
-  rotation runs; exhausting it is a collection fault.
+- Preallocate and header-sync the next indexed chunk before it is needed. At
+  1,022 full data blocks, finish the terminal record, synchronize and close the
+  current chunk, activate the prepared chunk, and begin preparing its successor.
+- If the bounded four-buffer pool is exhausted, drop incoming samples, advance
+  the sample sequence for each drop, and continue recording. Sequence gaps make
+  these losses visible to a decoder.
 - On normal stop, drain the IMU FIFO, write the optional short block, write
   and synchronize the terminal record, then close the file. Do not truncate.
 - Synchronize every eight full blocks, at every chunk close, and at collection
   stop.
-- Any malformed FIFO batch, unavailable block, allocation failure, write,
+- Any malformed FIFO batch, allocation failure, write,
   sync, trailer, close, or rotation failure stops the whole collection rather
   than silently continuing ECG-only.
 

@@ -166,8 +166,6 @@ static int initialize_sensor_stream(void)
 
 	return msense_sensor_stream_init(&config);
 }
-static bool uuid_ble_address_update_needed;
-static bool uuid_ble_address_msc_deferred;
 
 #define AD_FIELD_OVERHEAD 2U
 #define AD_FLAGS_ENCODED_LEN (AD_FIELD_OVERHEAD + 1U)
@@ -321,62 +319,6 @@ disable_usb:
 	return ret;
 }
 
-static int complete_pending_uuid_ble_address(void)
-{
-	bt_addr_le_t identity_address;
-	char ble_address[BT_ADDR_LE_STR_LEN];
-	size_t address_count = 1U;
-	int teardown_ret;
-	int ret;
-
-	bt_id_get(&identity_address, &address_count);
-	if (address_count != 1U || identity_address.type != BT_ADDR_LE_RANDOM ||
-	    !BT_ADDR_IS_STATIC(&identity_address.a)) {
-		return -ENODEV;
-	}
-
-	ret = bt_addr_le_to_str(&identity_address, ble_address, sizeof(ble_address));
-	if (ret < 0 || (size_t)ret >= sizeof(ble_address)) {
-		return -ENOSPC;
-	}
-	if (filesystem_is_mounted()) {
-		return -EBUSY;
-	}
-
-#if CONFIG_DISK_DRIVER_RAW_NAND
-	set_read_only(false);
-#endif
-	ret = setup_disk();
-	if (ret == 0) {
-		ret = write_device_info_ble_address(ble_address);
-	}
-	if (filesystem_is_mounted()) {
-		teardown_ret = filesystem_gate_and_drain();
-		if (teardown_ret == 0) {
-			teardown_ret = shutdown_filesystem();
-		}
-		if (ret == 0 && teardown_ret != 0) {
-			ret = teardown_ret;
-		}
-	}
-#if CONFIG_DISK_DRIVER_RAW_NAND
-	set_read_only(true);
-#endif
-	if (ret != 0 || filesystem_is_mounted()) {
-		return ret != 0 ? ret : -EBUSY;
-	}
-
-	if (uuid_ble_address_msc_deferred) {
-		ret = enable_usb_msc_host_media();
-		if (ret != 0) {
-			return ret;
-		}
-		uuid_ble_address_msc_deferred = false;
-	}
-
-	return 0;
-}
-
 static void le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
   struct bt_conn_info info;
@@ -413,17 +355,6 @@ static void bt_ready(int err)
   #if CONFIG_BT_SETTINGS
     settings_load();
   #endif
-
-  if (uuid_ble_address_update_needed) {
-    err = complete_pending_uuid_ble_address();
-    if (err) {
-      LOG_ERR("Unable to update uuid.txt with BLE address: %d", err);
-      ppg_collection_latch_storage_fault();
-      return;
-    }
-    uuid_ble_address_update_needed = false;
-  }
-
 
   // Configure connection callbacks
   bt_conn_cb_register(&conn_callbacks);
@@ -620,7 +551,6 @@ int main(void)
 	int teardown_ret;
 	int uuid_ret = 0;
 	bool boot_storage_ready = false;
-	bool uuid_address_present = false;
 	uint32_t reset_reason = nrfx_reset_reason_get();
 
 	/* RESETREAS is cumulative until acknowledged. Capture this boot's reason
@@ -735,12 +665,9 @@ int main(void)
   if (identity_err == 0) {
     uuid_ret = write_device_info_file(msense_device_identity_name(&device_identity),
                                       msense_device_identity_hex(&device_identity),
-                                      msense_device_identity_model(&device_identity),
-                                      &uuid_address_present);
+                                      msense_device_identity_model(&device_identity));
     if (uuid_ret != 0) {
       LOG_ERR("Unable to write boot uuid.txt: %d", uuid_ret);
-    } else {
-      uuid_ble_address_update_needed = !uuid_address_present;
     }
   }
 
@@ -765,17 +692,12 @@ int main(void)
   } else {
     #ifndef CONFIG_DEBUG
     if (!security_lock){
-      if (uuid_ble_address_update_needed) {
-        uuid_ble_address_msc_deferred = true;
-        boot_storage_ready = true;
+      ret = enable_usb_msc_host_media();
+      if (ret != 0) {
+        LOG_ERR("Unable to publish USB MSC medium: %d", ret);
+        ppg_collection_latch_storage_fault();
       } else {
-        ret = enable_usb_msc_host_media();
-        if (ret != 0) {
-          LOG_ERR("Unable to publish USB MSC medium: %d", ret);
-          ppg_collection_latch_storage_fault();
-        } else {
-          boot_storage_ready = true;
-        }
+        boot_storage_ready = true;
       }
     } else {
       boot_storage_ready = true;

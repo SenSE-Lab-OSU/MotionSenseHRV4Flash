@@ -833,19 +833,16 @@ int flush_data_buffer(enum sensor_type sensor){
 
 
 int write_device_info_file(const char *device_name, const char *device_id_hex,
-			   const char *dis_model, bool *ble_address_present)
+			   const char *dis_model)
 {
 	struct fs_mount_t *mp = &fs_mnt;
 	char uuid_name[32];
 	char uuid_contents[UUID_CONTENTS_MAX_SIZE];
-	int rc;
 	int written;
 
-	if (device_name == NULL || device_id_hex == NULL || dis_model == NULL ||
-	    ble_address_present == NULL) {
+	if (device_name == NULL || device_id_hex == NULL || dis_model == NULL) {
 		return -EINVAL;
 	}
-	*ble_address_present = false;
 	if (!file_system_ready || !filesystem_mounted) {
 		return -EACCES;
 	}
@@ -853,16 +850,6 @@ int write_device_info_file(const char *device_name, const char *device_id_hex,
 	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
 	if (written < 0 || written >= sizeof(uuid_name)) {
 		return -ENAMETOOLONG;
-	}
-
-	rc = msense_uuid_file_ble_address_present(uuid_name,
-						   ble_address_present);
-	if (rc == 0) {
-		return 0;
-	}
-	if (rc != -ENOENT) {
-		LOG_WRN("Unable to check uuid.txt: %d", rc);
-		return rc;
 	}
 
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
@@ -878,25 +865,7 @@ int write_device_info_file(const char *device_name, const char *device_id_hex,
 		return -ENOSPC;
 	}
 
-	return msense_uuid_file_create(uuid_name, uuid_contents, (size_t)written);
-}
-
-int write_device_info_ble_address(const char *ble_address)
-{
-	struct fs_mount_t *mp = &fs_mnt;
-	char uuid_name[32];
-	int written;
-
-	if (!file_system_ready || !filesystem_mounted) {
-		return -EACCES;
-	}
-
-	written = snprintf(uuid_name, sizeof(uuid_name), "%s/uuid.txt", mp->mnt_point);
-	if (written < 0 || written >= sizeof(uuid_name)) {
-		return -ENAMETOOLONG;
-	}
-
-	return msense_uuid_file_prepend_ble_address(uuid_name, ble_address);
+	return msense_uuid_file_ensure(uuid_name, uuid_contents, (size_t)written);
 }
 
 static int close_all_files(void)

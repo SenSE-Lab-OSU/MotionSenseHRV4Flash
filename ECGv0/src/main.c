@@ -689,6 +689,12 @@ static void accel_record_fault_handler(void *context)
 	request_ecg_storage_fault();
 }
 
+static void accel_fifo_fault_handler(void *context)
+{
+	ARG_UNUSED(context);
+	request_ecg_collection_mode(false);
+}
+
 void request_ecg_storage_fault(void)
 {
 	/* Safe from producer and log callbacks: only latch, gate, and wake. */
@@ -1693,6 +1699,14 @@ int main(void)
   if (ret != 0)
   {
     LOG_ERR("ICM-20948 accelerometer initialization failed: %d", ret);
+  }
+  else
+  {
+    ret = icm20948_accel_set_fifo_fault_handler(accel_fifo_fault_handler, NULL);
+    if (ret != 0)
+    {
+      LOG_ERR("ICM-20948 FIFO fault handler setup failed: %d", ret);
+    }
   }
   ret = imu_fsync_timing_init();
   if (ret != 0)

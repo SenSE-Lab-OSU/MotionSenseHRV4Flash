@@ -77,6 +77,7 @@ target_sources(app PRIVATE
 	src/ecgRecorder.c
 	src/filesystemlogging_policy.c
 	src/icm20948_accel.c
+	src/icm20948_fifo_count.c
 	src/imuFsyncTiming.c
 	src/main.c
 	src/zephyrfilesystem.c

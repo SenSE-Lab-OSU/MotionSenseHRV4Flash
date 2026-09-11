@@ -1,4 +1,5 @@
 #include "icm20948_accel.h"
+#include "icm20948_fifo_count.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -58,12 +59,12 @@ LOG_MODULE_REGISTER(icm20948_accel, CONFIG_LOG_LEVEL_ICM20948_ACCEL);
 
 #define ICM20948_ACCEL_DIVIDER 1U
 #define ICM20948_ACCEL_LOG_INTERVAL_SAMPLES 563U
-#define ICM20948_FIFO_SAMPLE_BYTES 6U
+#define ICM20948_FIFO_SAMPLE_BYTES ICM20948_FIFO_COUNT_SAMPLE_BYTES
 #define ICM20948_FIFO_DRAIN_CHUNK_SAMPLES 128U
 #define ICM20948_FIFO_DRAIN_CHUNK_BYTES \
 	(ICM20948_FIFO_DRAIN_CHUNK_SAMPLES * ICM20948_FIFO_SAMPLE_BYTES)
 #define ICM20948_FIFO_READ_BUFFER_BYTES (ICM20948_FIFO_DRAIN_CHUNK_BYTES + 1U)
-#define ICM20948_FIFO_CAPACITY_BYTES 4096U
+#define ICM20948_FIFO_CAPACITY_BYTES ICM20948_FIFO_COUNT_CAPACITY_BYTES
 #define ICM20948_FIFO_BATCH_DELAY_MS 200U
 #define ICM20948_ACCEL_THREAD_STACK_SIZE 1536
 #define ICM20948_ACCEL_THREAD_PRIORITY 4
@@ -89,11 +90,17 @@ static atomic_t icm20948_initialized;
 static atomic_t icm20948_streaming;
 static atomic_t icm20948_stream_generation;
 static atomic_t icm20948_consumer_failed;
+static atomic_t icm20948_fifo_faulted;
+static atomic_t icm20948_fifo_fault_stop_pending;
 static bool icm20948_sample_valid;
 static uint32_t icm20948_sample_errors;
 static uint32_t icm20948_fifo_overflows;
 static icm20948_accel_fifo_consumer_t icm20948_fifo_consumer;
 static void *icm20948_fifo_consumer_context;
+static icm20948_accel_fifo_fault_handler_t icm20948_fifo_fault_handler;
+static void *icm20948_fifo_fault_context;
+
+struct icm20948_accel_fifo_diagnostics icm20948_accel_fifo_diagnostics;
 
 K_SEM_DEFINE(icm20948_data_ready_sem, 0, 1);
 
@@ -377,8 +384,48 @@ static int icm20948_read_fifo_count(uint16_t *fifo_bytes)
 	return ret;
 }
 
+static int icm20948_fifo_count_read_callback(void *context, uint16_t *count_bytes)
+{
+	ARG_UNUSED(context);
+	return icm20948_read_fifo_count(count_bytes);
+}
+
+static void icm20948_fifo_count_wait_callback(void *context, uint32_t wait_us)
+{
+	ARG_UNUSED(context);
+	if (wait_us != 0U) {
+		k_busy_wait(wait_us);
+	}
+}
+
+static void icm20948_latch_fifo_fault(
+	enum icm20948_accel_fifo_fault_reason reason, int error,
+	const struct icm20948_fifo_count_observation *observation)
+{
+	if (atomic_get(&icm20948_fifo_faulted) != 0) {
+		return;
+	}
+
+	icm20948_accel_fifo_diagnostics.first_fault_write_complete = 0U;
+	icm20948_accel_fifo_diagnostics.first_fault_reason = (uint8_t)reason;
+	icm20948_accel_fifo_diagnostics.first_fault_error = error;
+	if (observation != NULL) {
+		icm20948_accel_fifo_diagnostics.first_count_bytes =
+			observation->initial_count_bytes;
+		icm20948_accel_fifo_diagnostics.last_count_bytes =
+			observation->last_count_bytes;
+		icm20948_accel_fifo_diagnostics.count_read_count =
+			observation->read_count;
+	}
+	compiler_barrier();
+	icm20948_accel_fifo_diagnostics.first_fault_write_complete = 1U;
+	atomic_set(&icm20948_fifo_faulted, 1);
+	atomic_set(&icm20948_fifo_fault_stop_pending, 1);
+}
+
 static int icm20948_drain_fifo(void)
 {
+	struct icm20948_fifo_count_observation observation;
 	uint8_t overflow_status;
 	uint16_t fifo_bytes;
 	int ret;
@@ -386,34 +433,41 @@ static int icm20948_drain_fifo(void)
 	if (atomic_get(&icm20948_consumer_failed) != 0) {
 		return -EIO;
 	}
+	if (atomic_get(&icm20948_fifo_faulted) != 0) {
+		return -ECANCELED;
+	}
 
 	ret = icm20948_read_reg(ICM20948_REG_INT_STATUS_2, &overflow_status);
 	if (ret != 0) {
+		icm20948_latch_fifo_fault(ICM20948_ACCEL_FIFO_FAULT_TRANSPORT,
+					 ret, NULL);
 		return ret;
 	}
 
 	if (overflow_status != 0U) {
 		icm20948_fifo_overflows++;
-		LOG_WRN("ICM-20948 FIFO overflow %u; resetting FIFO",
-			icm20948_fifo_overflows);
-		ret = icm20948_reset_fifo();
-		return (ret == 0) ? -EOVERFLOW : ret;
+		icm20948_latch_fifo_fault(ICM20948_ACCEL_FIFO_FAULT_OVERFLOW,
+					 -EOVERFLOW, NULL);
+		return -EOVERFLOW;
 	}
 
-	ret = icm20948_read_fifo_count(&fifo_bytes);
+	ret = icm20948_fifo_count_read_stable(icm20948_fifo_count_read_callback,
+					      icm20948_fifo_count_wait_callback,
+					      NULL, &fifo_bytes, &observation);
 	if (ret != 0) {
+		icm20948_latch_fifo_fault(
+			(observation.read_error != 0) ?
+				ICM20948_ACCEL_FIFO_FAULT_TRANSPORT :
+				ICM20948_ACCEL_FIFO_FAULT_COUNT,
+			ret, &observation);
 		return ret;
+	}
+	if (observation.read_count > 1U) {
+		icm20948_accel_fifo_diagnostics.recovery_count++;
 	}
 
 	if (fifo_bytes == 0U) {
 		return 0;
-	}
-
-	if ((fifo_bytes > ICM20948_FIFO_CAPACITY_BYTES) ||
-	    ((fifo_bytes % ICM20948_FIFO_SAMPLE_BYTES) != 0U)) {
-		LOG_WRN("Invalid ICM-20948 FIFO count: %u", fifo_bytes);
-		ret = icm20948_reset_fifo();
-		return (ret == 0) ? -EIO : ret;
 	}
 
 	while (fifo_bytes != 0U) {
@@ -423,6 +477,8 @@ static int icm20948_drain_fifo(void)
 		ret = icm20948_read_regs(ICM20948_REG_FIFO_R_W, icm20948_fifo_data,
 					 bytes_to_read);
 		if (ret != 0) {
+			icm20948_latch_fifo_fault(ICM20948_ACCEL_FIFO_FAULT_TRANSPORT,
+						 ret, &observation);
 			return ret;
 		}
 
@@ -494,16 +550,29 @@ static void icm20948_sample_thread(void *arg1, void *arg2, void *arg3)
 		if ((atomic_get(&icm20948_streaming) != 0) &&
 		    (atomic_get(&icm20948_stream_generation) == stream_generation)) {
 			ret = icm20948_drain_fifo();
-			if ((ret != 0) && (ret != -EOVERFLOW)) {
+			if ((ret != 0) && (ret != -EOVERFLOW) &&
+			    (atomic_get(&icm20948_fifo_faulted) == 0)) {
 				icm20948_log_read_error(ret);
 			}
 
 			ret = icm20948_read_reg(ICM20948_REG_INT_STATUS_1, &status);
 			if (ret != 0) {
-				icm20948_log_read_error(ret);
+				icm20948_latch_fifo_fault(
+					ICM20948_ACCEL_FIFO_FAULT_TRANSPORT,
+					ret, NULL);
 			}
 		}
 		k_mutex_unlock(&icm20948_io_lock);
+		if (atomic_cas(&icm20948_fifo_fault_stop_pending, 1, 0)) {
+			LOG_ERR("ICM-20948 FIFO fault: reason=%u error=%d count=%u->%u",
+				(unsigned int)icm20948_accel_fifo_diagnostics.first_fault_reason,
+				icm20948_accel_fifo_diagnostics.first_fault_error,
+				(unsigned int)icm20948_accel_fifo_diagnostics.first_count_bytes,
+				(unsigned int)icm20948_accel_fifo_diagnostics.last_count_bytes);
+			if (icm20948_fifo_fault_handler != NULL) {
+				icm20948_fifo_fault_handler(icm20948_fifo_fault_context);
+			}
+		}
 	}
 }
 
@@ -565,6 +634,20 @@ int icm20948_accel_set_fifo_consumer(icm20948_accel_fifo_consumer_t consumer,
 	return 0;
 }
 
+int icm20948_accel_set_fifo_fault_handler(
+	icm20948_accel_fifo_fault_handler_t handler, void *context)
+{
+	k_mutex_lock(&icm20948_io_lock, K_FOREVER);
+	if (atomic_get(&icm20948_streaming) != 0) {
+		k_mutex_unlock(&icm20948_io_lock);
+		return -EBUSY;
+	}
+	icm20948_fifo_fault_handler = handler;
+	icm20948_fifo_fault_context = context;
+	k_mutex_unlock(&icm20948_io_lock);
+	return 0;
+}
+
 int icm20948_accel_start(void)
 {
 	int ret;
@@ -582,7 +665,6 @@ int icm20948_accel_start(void)
 		k_mutex_unlock(&icm20948_io_lock);
 		return 0;
 	}
-
 	ret = gpio_pin_interrupt_configure_dt(&icm20948_int, GPIO_INT_DISABLE);
 	if (ret == 0) {
 		k_sem_reset(&icm20948_data_ready_sem);
@@ -601,6 +683,12 @@ int icm20948_accel_start(void)
 	if (ret == 0) {
 		ret = icm20948_write_reg(ICM20948_REG_INT_ENABLE_1,
 					 ICM20948_INT_ENABLE_1_RAW_DATA_RDY);
+	}
+	if (ret == 0) {
+		memset(&icm20948_accel_fifo_diagnostics, 0,
+		       sizeof(icm20948_accel_fifo_diagnostics));
+		atomic_clear(&icm20948_fifo_faulted);
+		atomic_clear(&icm20948_fifo_fault_stop_pending);
 	}
 	if (ret != 0) {
 		atomic_clear(&icm20948_streaming);
@@ -643,7 +731,8 @@ int icm20948_accel_stop(void)
 	icm20948_record_first_error(&first_error, ret);
 	ret = icm20948_write_reg(ICM20948_REG_FIFO_EN_2, 0U);
 	icm20948_record_first_error(&first_error, ret);
-	if (atomic_get(&icm20948_consumer_failed) == 0) {
+	if ((atomic_get(&icm20948_consumer_failed) == 0) &&
+	    (atomic_get(&icm20948_fifo_faulted) == 0)) {
 		ret = icm20948_drain_fifo();
 		icm20948_record_first_error(&first_error, ret);
 	}
@@ -662,7 +751,12 @@ int icm20948_accel_stop(void)
 	k_mutex_unlock(&icm20948_io_lock);
 
 	if (first_error == 0) {
-		LOG_INF("ICM-20948 accelerometer stopped");
+		if (icm20948_accel_fifo_diagnostics.recovery_count != 0U) {
+			LOG_INF("ICM-20948 accelerometer stopped; recovered FIFO counts=%u",
+				(unsigned int)icm20948_accel_fifo_diagnostics.recovery_count);
+		} else {
+			LOG_INF("ICM-20948 accelerometer stopped");
+		}
 	}
 
 	return first_error;

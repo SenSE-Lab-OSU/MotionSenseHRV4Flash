@@ -416,7 +416,6 @@ static int ecg_record_open_current_chunk(void)
 static int ecg_record_prepare_next_chunk(void)
 {
 	struct fs_file_t file;
-	uint8_t *metadata = filesystem_scratch_buffer();
 	uint32_t next_index = ecg_record_chunk_index + 1U;
 	int ret;
 
@@ -426,11 +425,9 @@ static int ecg_record_prepare_next_chunk(void)
 	if (ret != 0) {
 		return ret;
 	}
-	msense_ecg_file_header_build(metadata,
-				     ecg_record_session_id, next_index);
 	ret = filesystem_preallocate_file(
 		&file, ecg_record_next_path, MSENSE_ECG_FILE_BYTES,
-		metadata, MSENSE_ECG_FILE_HEADER_BYTES, false);
+		NULL, 0U, false);
 	if (ret == 0) {
 		ecg_record_next_prepared = true;
 	}
@@ -459,6 +456,8 @@ static int ecg_record_close_current_chunk(bool sync_before_close)
 
 static int ecg_record_activate_next_chunk(void)
 {
+	uint8_t *metadata = filesystem_scratch_buffer();
+	ssize_t written;
 	int ret;
 
 	if (!ecg_record_next_prepared) {
@@ -472,14 +471,24 @@ static int ecg_record_activate_next_chunk(void)
 	ecg_record_chunk_index++;
 	ecg_record_chunk_block_count = 0U;
 	ret = filesystem_open_preallocated_file(
-		&ecg_record_file, ecg_record_next_path,
-		MSENSE_ECG_FILE_HEADER_BYTES);
+		&ecg_record_file, ecg_record_next_path, 0U);
 	if (ret != 0) {
 		return ret;
 	}
 	ecg_record_file_open = true;
 	strcpy(ecg_record_path, ecg_record_next_path);
 	ecg_record_next_prepared = false;
+	msense_ecg_file_header_build(metadata, ecg_record_session_id,
+				     ecg_record_chunk_index);
+	written = fs_write(&ecg_record_file, metadata,
+			   MSENSE_ECG_FILE_HEADER_BYTES);
+	if (written != (ssize_t)MSENSE_ECG_FILE_HEADER_BYTES) {
+		return written < 0 ? (int)written : -EIO;
+	}
+	ret = fs_sync(&ecg_record_file);
+	if (ret != 0) {
+		return ret;
+	}
 	ret = k_work_submit_to_queue(&my_work_q, &ecg_record_prepare_work);
 	return ret < 0 ? ret : 0;
 }
@@ -513,7 +522,6 @@ static void ecg_record_control_work_handler(struct k_work *work)
 		}
 		if (ret != 0 && ecg_record_file_open) {
 			(void)ecg_record_close_current_chunk(false);
-			(void)fs_unlink(ecg_record_path);
 		}
 		break;
 	case ECG_RECORD_CONTROL_CLOSE:

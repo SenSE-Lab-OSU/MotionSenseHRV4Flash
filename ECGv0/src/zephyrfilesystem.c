@@ -529,6 +529,7 @@ int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
 	struct fs_dirent entry;
 	FRESULT expand_ret;
 	ssize_t written;
+	bool write_attempted = false;
 	int ret;
 
 	if (file == NULL || path == NULL || (header == NULL && header_bytes != 0U)) {
@@ -552,6 +553,7 @@ int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
 		goto fail;
 	}
 	if (header_bytes != 0U) {
+		write_attempted = true;
 		written = fs_write(file, header, header_bytes);
 		if (written != (ssize_t)header_bytes) {
 			ret = written < 0 ? (int)written : -EIO;
@@ -568,7 +570,10 @@ int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
 
 fail:
 	(void)fs_close(file);
-	(void)fs_unlink(path);
+	/* A data-write attempt may already have programmed its NAND page. */
+	if (!write_attempted) {
+		(void)fs_unlink(path);
+	}
 	return ret;
 }
 

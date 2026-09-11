@@ -300,7 +300,6 @@ static int accel_record_open_current_chunk(void)
 static int accel_record_prepare_next_chunk(void)
 {
 	struct fs_file_t file;
-	uint8_t *metadata = filesystem_scratch_buffer();
 	uint32_t next_index = accel_record_chunk_index + 1U;
 	int ret;
 
@@ -310,10 +309,9 @@ static int accel_record_prepare_next_chunk(void)
 	if (ret != 0) {
 		return ret;
 	}
-	accel_record_format_build_header(metadata);
 	ret = filesystem_preallocate_file(
 		&file, accel_record_next_path, ACCEL_RECORD_FORMAT_FILE_BYTES,
-		metadata, ACCEL_RECORD_FORMAT_BLOCK_BYTES, false);
+		NULL, 0U, false);
 	if (ret == 0) {
 		accel_record_next_prepared = true;
 	}
@@ -322,6 +320,8 @@ static int accel_record_prepare_next_chunk(void)
 
 static int accel_record_activate_next_chunk(void)
 {
+	uint8_t *metadata = filesystem_scratch_buffer();
+	ssize_t written;
 	int ret;
 
 	if (!accel_record_next_prepared) {
@@ -336,15 +336,20 @@ static int accel_record_activate_next_chunk(void)
 	accel_record_chunk_data_bytes = 0U;
 	accel_record_chunk_full = false;
 	ret = filesystem_open_preallocated_file(
-		&accel_record_file, accel_record_next_path,
-		ACCEL_RECORD_FORMAT_BLOCK_BYTES);
+		&accel_record_file, accel_record_next_path, 0U);
 	if (ret != 0) {
 		return ret;
 	}
 	accel_record_file_open = true;
 	strcpy(accel_record_path, accel_record_next_path);
 	accel_record_next_prepared = false;
-	return 0;
+	accel_record_format_build_header(metadata);
+	written = fs_write(&accel_record_file, metadata,
+			   ACCEL_RECORD_FORMAT_BLOCK_BYTES);
+	if (written != (ssize_t)ACCEL_RECORD_FORMAT_BLOCK_BYTES) {
+		return written < 0 ? (int)written : -EIO;
+	}
+	return fs_sync(&accel_record_file);
 }
 
 static void accel_record_prepare_work_handler(struct k_work *work)
@@ -434,7 +439,6 @@ static void accel_record_control_work_handler(struct k_work *work)
 		if (ret != 0 && accel_record_file_open) {
 			(void)fs_close(&accel_record_file);
 			accel_record_file_open = false;
-			(void)fs_unlink(accel_record_path);
 		}
 		break;
 
@@ -468,9 +472,6 @@ static void accel_record_control_work_handler(struct k_work *work)
 		if (accel_record_file_open) {
 			ret = fs_close(&accel_record_file);
 			accel_record_file_open = false;
-			if (fs_unlink(accel_record_path) != 0 && ret == 0) {
-				ret = -EIO;
-			}
 		}
 		break;
 

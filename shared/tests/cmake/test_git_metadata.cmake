@@ -26,12 +26,17 @@ endfunction()
 
 function(generate_metadata source_dir output_file)
 	set(generator_git_executable "${GIT_EXECUTABLE}")
+	set(generator_command "${CMAKE_COMMAND}")
 	if(ARGC GREATER 2)
 		set(generator_git_executable "${ARGV2}")
 	endif()
+	if(ARGC GREATER 3)
+		list(APPEND generator_command -E env "SOURCE_DATE_EPOCH=${ARGV3}"
+			"${CMAKE_COMMAND}")
+	endif()
 
 	execute_process(
-		COMMAND "${CMAKE_COMMAND}"
+		COMMAND ${generator_command}
 			"-DOUTPUT_FILE=${output_file}"
 			"-DSOURCE_DIR=${source_dir}"
 			"-DGIT_EXECUTABLE=${generator_git_executable}"
@@ -55,6 +60,14 @@ function(expect_header output_file commit tree_state)
 		message(FATAL_ERROR
 			"Unexpected metadata header for ${output_file}:\n${header_contents}")
 	endif()
+	if(ARGC GREATER 3)
+		set(expected_build_date "#define MSENSE_BUILD_DATE_UTC \"${ARGV3}\"")
+		string(FIND "${header_contents}" "${expected_build_date}" build_date_position)
+		if(build_date_position EQUAL -1)
+			message(FATAL_ERROR
+				"Unexpected build date in metadata header for ${output_file}:\n${header_contents}")
+		endif()
+	endif()
 endfunction()
 
 file(REMOVE_RECURSE "${TEST_BINARY_DIR}")
@@ -75,6 +88,11 @@ set(expected_commit "${RUN_GIT_OUTPUT}")
 
 generate_metadata("${test_repository}" "${metadata_header}")
 expect_header("${metadata_header}" "${expected_commit}" "clean")
+
+set(source_date_epoch_header "${TEST_BINARY_DIR}/generated/msense_git_metadata_epoch.h")
+generate_metadata("${test_repository}" "${source_date_epoch_header}" "${GIT_EXECUTABLE}"
+	"1704067200")
+expect_header("${source_date_epoch_header}" "${expected_commit}" "clean" "2024-01-01")
 
 file(APPEND "${test_repository}/tracked.txt" "unstaged\n")
 generate_metadata("${test_repository}" "${metadata_header}")

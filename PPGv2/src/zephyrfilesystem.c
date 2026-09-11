@@ -854,12 +854,12 @@ int write_device_info_file(const char *device_name, const char *device_id_hex,
 
 	written = snprintf(uuid_contents, sizeof(uuid_contents),
 			   "Name: %s\nDevice ID: %s\nVersion: %s"
-			   "\nGit Commit: %s\nGit Tree: %s"
+			   "\nBuild Date (UTC): %s\nGit Commit: %s\nGit Tree: %s"
 			   "\nppg format: %s\naccel format: %s"
 			   "\nFor a more complete description of how this device works, please visit "
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
 			   device_name, device_id_hex, dis_model,
-			   MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
+			   MSENSE_BUILD_DATE_UTC, MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
 			   ppg_file.sensor_format, accel_file.sensor_format);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;

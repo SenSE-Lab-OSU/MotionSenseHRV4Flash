@@ -8,6 +8,7 @@ endif()
 
 set(git_commit "unknown")
 set(git_tree_state "unknown")
+string(TIMESTAMP build_date_utc "%Y-%m-%d" UTC)
 
 if(DEFINED GIT_EXECUTABLE AND NOT GIT_EXECUTABLE STREQUAL "" AND
    EXISTS "${GIT_EXECUTABLE}")
@@ -48,6 +49,7 @@ string(CONCAT generated_header
 	"\n"
 	"#define MSENSE_GIT_COMMIT \"${git_commit}\"\n"
 	"#define MSENSE_GIT_TREE_STATE \"${git_tree_state}\"\n"
+	"#define MSENSE_BUILD_DATE_UTC \"${build_date_utc}\"\n"
 	"\n"
 	"#endif /* MSENSE_GIT_METADATA_H_ */\n"
 )

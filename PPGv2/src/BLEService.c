@@ -23,6 +23,7 @@
 #include "BLEService.h"
 #include "msense_msc_media.h"
 #include "msense_sensor_stream.h"
+#include "msense_storage_log_backend.h"
 #include "msense_fatal_retention.h"
 
 #include <nrfx_rtc.h>
@@ -633,10 +634,18 @@ static int publish_ppg_msc_host_media(void)
 
 static int finalize_ppg_filesystem_for_host(void)
 {
+  int drain_ret;
   int ret;
 
   if (atomic_get(&ppg_collection_workqueue_ready) == 0) {
     return -ENODEV;
+  }
+
+  /* Queue draining rejects new writes, so finish log callbacks first. */
+  drain_ret = msense_storage_log_drain();
+  ppg_filesystem_log_disable_and_wait();
+  if (drain_ret != 0) {
+    LOG_WRN("Storage log drain timed out: %d", drain_ret);
   }
 
   ret = filesystem_drain_pending_work();
@@ -976,6 +985,7 @@ static int enter_ppg_collection_mode(void)
     LOG_ERR("Unable to enable PPG filesystem workqueue: %d", ret);
     goto start_failed;
   }
+  ppg_filesystem_log_enable();
 
   msense_fatal_stage_set(MSENSE_FATAL_STAGE_PPG_START);
   ppg_config();
@@ -998,13 +1008,12 @@ static int enter_ppg_collection_mode(void)
   collecting_data = true;
   host_wants_collection = true;
   msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_READY);
-  ppg_filesystem_log_enable();
   k_mutex_unlock(&ppg_collection_transition_lock);
   return 0;
 
 start_failed:
   start_ret = ret;
-  ppg_filesystem_log_disable_and_wait();
+  LOG_ERR("PPG collection start failed: %d", start_ret);
   atomic_clear(&ppg_collection_producer_gate);
   if (rtc_started || sensors_configured) {
     ppg_stop_producers();
@@ -1049,7 +1058,6 @@ static int exit_ppg_collection_mode(bool retain_host_request)
   }
 
 	LOG_INF("Leaving PPG collection mode");
-	ppg_filesystem_log_disable_and_wait();
 	msense_sensor_stream_recording_stopped();
 	ppg_stop_producers();
   if (ppg_collection_faulted()) {

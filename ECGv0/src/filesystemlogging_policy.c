@@ -28,7 +28,7 @@ void ecg_filesystem_log_disable_and_wait(void)
 bool msense_storage_log_write_enabled(void)
 {
 	return (atomic_get(&ecg_filesystem_log_writes_enabled) != 0) &&
-	       file_system_ready && collecting_data && !battery_low && !reset_lock;
+	       file_system_ready;
 }
 
 int msense_storage_log_append(const uint8_t *data, size_t length)

@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Wait until the logger thread has delivered all messages queued before the
+ * drain marker to this backend. */
+int msense_storage_log_drain(void);
+
 /* Application policy hooks. The common backend owns Zephyr logging mechanics;
  * products own collection state and their record-stream choice. */
 bool msense_storage_log_write_enabled(void);

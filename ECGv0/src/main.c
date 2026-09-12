@@ -29,6 +29,7 @@
 #include "ecgRecordFormat.h"
 #include "msense_device_identity.h"
 #include "msense_sensor_stream.h"
+#include "msense_storage_log_backend.h"
 #include "msense_git_metadata.h"
 #include "msense_fatal_retention.h"
 #include "zephyrfilesystem.h"
@@ -758,6 +759,27 @@ static void ecg_collection_transition_thread(void *arg1, void *arg2,
 	}
 }
 
+static int stop_ecg_filesystem_log(void)
+{
+	struct k_work_sync log_sync;
+	int drain_ret;
+	int ret;
+
+	drain_ret = msense_storage_log_drain();
+	ecg_filesystem_log_disable_and_wait();
+	if (drain_ret != 0) {
+		LOG_WRN("Storage log drain timed out: %d", drain_ret);
+	}
+
+	/* The final partial buffer reuses the full-buffer write work item. */
+	(void)k_work_flush(&log_work_item.work, &log_sync);
+	ret = flush_data_buffer(customlog);
+	if (ret != 0) {
+		return ret;
+	}
+	return filesystem_logger_stop();
+}
+
 static int finalize_ecg_filesystem_for_host(void)
 {
 	int ret;
@@ -766,11 +788,7 @@ static int finalize_ecg_filesystem_for_host(void)
 		return -ENODEV;
 	}
 
-	ret = flush_data_buffer(customlog);
-	if (ret != 0) {
-		return ret;
-	}
-	ret = filesystem_logger_stop();
+	ret = stop_ecg_filesystem_log();
 	if (ret != 0) {
 		return ret;
 	}
@@ -1108,6 +1126,7 @@ int enter_ecg_collection_mode(void)
 	bool collection_mount_ready = false;
 	bool ecg_start_submitted = false;
 	bool ecg_started = false;
+	bool filesystem_log_enabled = false;
 	bool stream_started = false;
 	bool fsync_started = false;
 	bool icm_started = false;
@@ -1158,6 +1177,8 @@ int enter_ecg_collection_mode(void)
 	if (ret != 0) {
 		goto start_failed;
 	}
+	ecg_filesystem_log_enable();
+	filesystem_log_enabled = true;
 	ret = accel_recorder_start(session_id);
 	if (ret != 0) {
 		LOG_ERR("Failed to prepare accelerometer recording: %d", ret);
@@ -1213,13 +1234,12 @@ int enter_ecg_collection_mode(void)
 	collecting_data = true;
 	host_wants_collection = true;
 	msense_fatal_stage_set(MSENSE_FATAL_STAGE_COLLECTION_READY);
-	ecg_filesystem_log_enable();
 	k_mutex_unlock(&collection_mode_lock);
 	return 0;
 
 start_failed:
 	start_ret = ret;
-	ecg_filesystem_log_disable_and_wait();
+	LOG_ERR("ECG collection start failed: %d", start_ret);
 	cleanup_ret = 0;
 	if (ecg_started) {
 		ret = ecg_recorder_stop();
@@ -1264,6 +1284,13 @@ start_failed:
 	if (cleanup_ret == 0) {
 		cleanup_ret = shutdown_ecg_filesystem_after_start_failure(
 			collection_mount_ready);
+	} else if (filesystem_log_enabled &&
+		   atomic_get(&msc_ownership_faulted) == 0) {
+		LOG_ERR("ECG collection startup cleanup failed: %d", cleanup_ret);
+		ret = stop_ecg_filesystem_log();
+		if (ret != 0) {
+			LOG_WRN("ECG startup log finalization failed: %d", ret);
+		}
 	}
 
 	set_firmware_disk_read_only();
@@ -1301,7 +1328,6 @@ int exit_ecg_collection_mode(void)
 
 	LOG_INF("Leaving ECG collection mode");
 	host_wants_collection = false;
-	ecg_filesystem_log_disable_and_wait();
 
 	/* Keep the stream alive until its second marker, then stop all producers. */
 	while (imu_fsync_timing_edge_count_get() < 2U) {
@@ -1355,6 +1381,14 @@ int exit_ecg_collection_mode(void)
 	rtc0_collection_counter_stop();
 
 	if (stop_ret != 0) {
+		if (atomic_get(&msc_ownership_faulted) == 0) {
+			LOG_ERR("ECG producer stop failed: %d; keeping MSC medium absent",
+				stop_ret);
+			ret = stop_ecg_filesystem_log();
+			if (ret != 0) {
+				LOG_WRN("ECG fault log finalization failed: %d", ret);
+			}
+		}
 		ecg_storage_transition_fault("ECG producer stop", stop_ret);
 		k_mutex_unlock(&collection_mode_lock);
 		return stop_ret;

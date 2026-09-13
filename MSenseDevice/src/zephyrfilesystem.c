@@ -781,7 +781,7 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
 	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) | IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) | 
-	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
+	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH) | IS_ENABLED(CONFIG_DISK_DRIVER_DHARA)) {
 		mnt->mnt_point = "/SD:";
 	}
 

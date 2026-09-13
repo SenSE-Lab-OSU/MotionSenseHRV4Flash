@@ -483,7 +483,7 @@ static int disk_sdmmc_init(const struct device *dev)
 	return disk_access_register(&sdmmc_disk);
 }
 
-
+#ifdef CONFIG_DISK_DRIVER_RAW_NAND
 	DEVICE_DT_INST_DEFINE(0,						
 			&disk_sdmmc_init,					
 			NULL,							
@@ -492,5 +492,4 @@ static int disk_sdmmc_init(const struct device *dev)
 			POST_KERNEL,						
 			80,				
 			NULL);
-
-//DT_INST_FOREACH_STATUS_OKAY(DISK_ACCESS_SDMMC_INIT)
+#endif

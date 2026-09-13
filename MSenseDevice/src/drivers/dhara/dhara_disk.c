@@ -36,7 +36,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(dhara_disk, 3);
+LOG_MODULE_REGISTER(dhara_disk, 4);
 
 /* Both disk drivers define the same device instance and the same disk_info, so only
  * one of them can be in a build.
@@ -191,7 +191,7 @@ static int disk_dhara_access_ioctl(struct disk_info *disk, uint8_t cmd, void *bu
 	case DISK_IOCTL_GET_ERASE_BLOCK_SZ:
 		// dhara presents a flat remapped sector space and does its own erase
 		// block accounting, so there is nothing for the file system to align to
-		(*(uint32_t *)buf) = 1;
+		(*(uint32_t *)buf) = 64; // NAND_PAGES_PER_ERASE_BLOCK;
 		break;
 	case DISK_IOCTL_CTRL_SYNC:
 		{
@@ -309,7 +309,7 @@ static int disk_sdmmc_init(const struct device *dev)
 	sdmmc_disk.name = "SD";
 	return disk_access_register(&sdmmc_disk);
 }
-
+#ifdef CONFIG_DISK_DRIVER_DHARA
 DEVICE_DT_INST_DEFINE(0,
 		&disk_sdmmc_init,
 		NULL,
@@ -318,3 +318,4 @@ DEVICE_DT_INST_DEFINE(0,
 		POST_KERNEL,
 		80,
 		NULL);
+#endif

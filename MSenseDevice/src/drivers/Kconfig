@@ -44,7 +44,7 @@ menuconfig DISK_DRIVER_DHARA
     prompt "Disk Driver using dhara as the flash translation layer, instead of the SENSE lab custom nor solution."
     select BAD_SECTOR_SAVING_RUNTIME
     help
-        Not Currently Implemented, but uses Dhara's virtual addressing to handle bad blocks, wear leveling, and sector erasing
+        uses Dhara's virtual addressing to handle bad blocks, wear leveling, and sector erasing
         for the current nand driver.
 
 menuconfig SPI_NOR_CUSTOM_DRIVER

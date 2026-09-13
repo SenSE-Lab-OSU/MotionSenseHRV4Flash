@@ -22,7 +22,9 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #include <zephyr/storage/flash_map.h>
 #endif
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+// both disk drivers expose the same nand_disk.h surface, and dhara_disk.c is built
+// on the same spi_nand/bad_block layer, so either one needs these declarations
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
 #include "drivers/nand/bad_block.h"
@@ -813,7 +815,7 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
 	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) | IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) | 
-	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
+	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH) | IS_ENABLED(CONFIG_DISK_DRIVER_DHARA)) {
 		mnt->mnt_point = "/SD:";
 	}
 

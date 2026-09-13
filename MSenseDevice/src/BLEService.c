@@ -5,7 +5,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
-#include "drivers/jdec_nor/custom_qspi.h"
 
 #include "ppgSensor.h"
 #include "imuSensor.h"
@@ -25,7 +24,9 @@
 #error "IMU_RTC_TICK_HZ must divide the 32768 Hz RTC clock exactly"
 #endif
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+// either disk driver exposes the same nand_disk.h surface, and spi_nand.h is what
+// pulls in the zephyr flash API used by the chip erase path below
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
 #include "drivers/nand/bad_block.h"
@@ -388,7 +389,7 @@ void reset_device(bool reset_bad_blocks){
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
     reset_lock = true;
-    #if CONFIG_DISK_DRIVER_RAW_NAND
+    #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
     if (reset_bad_blocks){
       LOG_WRN("Erasing bad block table...");
       spi_nand_multi_chip_reset_bad_block(flash_device);
@@ -545,7 +546,7 @@ void storage_clear_led();
 
 
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 /* Re-runs a bad block scan on request from the reset characteristic. The stored
  * table is cleared first: register_bad_block() only records while the one time scan
  * flag is down, so without that a rescan would find blocks and then discard them.
@@ -620,7 +621,7 @@ uint16_t offset, uint8_t flags){
     
     storage_clear_led();
     k_sleep(K_SECONDS(1));
-    #if CONFIG_DISK_DRIVER_RAW_NAND
+    #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
     // 200 rescans for the factory bad block marks, 201 runs the destructive scan.
     // Both rebuild the bad block table rather than clearing user data.
     if (val == 200 || val == 201){

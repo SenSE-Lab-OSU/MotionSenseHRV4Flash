@@ -1217,6 +1217,7 @@ int spi_init(const struct device *dev)
 	// scan; both are persisted through the settings subsystem
 	if (IS_ENABLED(CONFIG_SETTINGS)){
 	//bad_sector_storage_init(dev);
+	
 	}
 
 	set_flash(dev, 0);

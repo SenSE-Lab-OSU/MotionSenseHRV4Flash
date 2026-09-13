@@ -147,7 +147,7 @@ static int disk_dhara_access_write(struct disk_info *disk, const uint8_t *buf,
 
 	for (uint32_t x = 0; x < count; x++){
 		dhara_error_t err = DHARA_E_NONE;
-
+		LOG_DBG("performing disk write at sector %u for %u counts", sector + x, count);
 		if (dhara_map_write(&map, sector + x, &buf[x * DHARA_DISK_SECTOR_SIZE],
 				    &err) < 0){
 			LOG_ERR("dhara write sect %u failed: %s", sector + x,

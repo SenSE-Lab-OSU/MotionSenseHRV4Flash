@@ -120,6 +120,8 @@ Commands are case-sensitive:
    connect any
    collect on|off
    status
+   remote status
+   reset 121|132
    start [id]
    start infinity [id]
    stop [id]
@@ -135,6 +137,14 @@ are intentionally unsupported.
 
 ``collect on`` and ``collect off`` write the collection-enable characteristic
 on a connected PPG or ECG peer and report the acknowledged result.
+
+For legacy ``MSense4PPG-`` firmware without NUS, discovery continues through
+the proprietary control and status services. ``remote status`` reads its
+eight-byte status register. ``reset 121`` requests a normal reset and ``reset
+132`` clears the persisted bad-block table before reset. Reset writes use an
+ATT write with response; the command port separately reports write acceptance,
+disconnect, advertising, reconnection, and handle rediscovery. Reconnection is
+bounded to five minutes.
 
 ``start`` chooses a nonzero session ID, unless one is supplied. ``start
 infinity`` works for PPG and ECG. Stream IDs are monotonic for one connection, including

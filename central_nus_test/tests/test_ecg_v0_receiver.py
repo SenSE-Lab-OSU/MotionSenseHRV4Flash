@@ -121,6 +121,7 @@ class EcgV0ReceiverHarnessTest(unittest.TestCase):
 #define BT_HCI_ERR_REMOTE_USER_TERM_CONN 0x13
 #define BT_GATT_ITER_STOP 0U
 #define BT_GATT_ITER_CONTINUE 1U
+#define BINARY_PORT_NUS_RELAY 1
 
 typedef int atomic_t;
 typedef int k_spinlock_key_t;
@@ -170,6 +171,7 @@ struct tester_context {{
     struct stream_statistics statistics;
     int state;
     uint32_t capture_generation;
+    uint32_t unsolicited_nus_ignored;
     uint8_t peer_device_type;
     bool subscribed;
     bool start_infinity;
@@ -197,6 +199,7 @@ static struct ecg_rx_block_slot ecg_rx_slots[ECG_RX_BLOCK_SLOT_COUNT];
 static struct end_completion_work end_completion;
 static struct k_work stream_progress_work;
 static atomic_t relay_close_after_notification;
+static atomic_t binary_port_mode;
 static int protocol_failures;
 static int submit_calls;
 static int validate_calls;
@@ -319,6 +322,7 @@ static void reset_receiver(void) {{
     tester.peer_device_type = MSENSE_SENSOR_STREAM_DEVICE_ECG;
     tester.subscribed = true;
     tester.conn = &old_connection;
+    binary_port_mode = BINARY_PORT_NUS_RELAY;
     for (unsigned int i = 0; i < ECG_RX_BLOCK_SLOT_COUNT; ++i)
         ecg_rx_slots[i].state = ECG_RX_BLOCK_FREE;
     protocol_failures = submit_calls = validate_calls = 0;
@@ -552,6 +556,12 @@ static void test_subscription_removal_and_relay_order(void) {{
     assert(nus_notification(&old_connection, NULL, NULL, 0U) == BT_GATT_ITER_STOP);
     assert(protocol_failures == 0 && !tester.subscribed);
     assert(tester.state == TESTER_FINISHING && disconnected_connection == &old_connection);
+
+    reset_receiver();
+    binary_port_mode = 0;
+    assert(nus_notification(&old_connection, NULL, data, sizeof(data)) == BT_GATT_ITER_CONTINUE);
+    assert(tester.unsolicited_nus_ignored == 1U);
+    assert(relay_calls == 0 && notification_calls == 0 && protocol_failures == 0);
 
     reset_receiver();
     notification_is_ecg_data = true;

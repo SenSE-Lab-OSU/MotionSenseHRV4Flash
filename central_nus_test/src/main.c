@@ -56,11 +56,21 @@
 	DT_NODE_HAS_PROP(DT_ALIAS(msense_relay_uart), hw_flow_control)
 #define MSENSE_NAME_PREFIX "MSense"
 #define MSENSE_BLINKY_NAME "MSenseBlinky"
+#define LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS 300U
+#define LEGACY_RESET_RECONNECT_TIMEOUT K_SECONDS(LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS)
+#define LEGACY_RESET_DISCONNECT_GRACE_SECONDS 2U
+#define LEGACY_RESET_DISCONNECT_GRACE K_SECONDS(LEGACY_RESET_DISCONNECT_GRACE_SECONDS)
 
 #define COLLECTION_CONTROL_SERVICE_UUID \
 	BT_UUID_128_ENCODE(0xda39c930, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
 #define COLLECTION_ENABLE_UUID \
 	BT_UUID_128_ENCODE(0xda39c931, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
+#define LEGACY_RESET_UUID \
+	BT_UUID_128_ENCODE(0xda39c934, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
+#define LEGACY_STATUS_SERVICE_UUID \
+	BT_UUID_128_ENCODE(0xda39c940, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
+#define LEGACY_STATUS_REGISTER_UUID \
+	BT_UUID_128_ENCODE(0xda39c942, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f)
 
 #define NUS_HEADER_MESSAGE_TYPE_OFFSET 3U
 #define NUS_HEADER_SESSION_ID_OFFSET 4U
@@ -214,6 +224,7 @@ struct tester_context {
 	uint32_t next_session_id;
 	uint32_t relay_sequence;
 	uint32_t relay_dropped;
+	uint32_t unsolicited_nus_ignored;
 	uint32_t last_command_session_id;
 	uint32_t capture_generation;
 	uint16_t att_mtu;
@@ -233,6 +244,13 @@ struct tester_context {
 	bool reconnect_after_stream;
 	bool collect_write_pending;
 	uint16_t collect_handle;
+	bool reset_write_pending;
+	bool reset_reconnect_pending;
+	bool reset_waiting_for_disconnect;
+	bool status_read_pending;
+	uint8_t reset_code;
+	uint16_t reset_handle;
+	uint16_t status_handle;
 	int64_t last_progress_ms;
 	uint16_t end_status;
 	bt_addr_le_t peer_address;
@@ -257,9 +275,17 @@ static struct bt_gatt_write_params command_write_params;
 static uint8_t command_write_data[MSENSE_SENSOR_STREAM_COMMAND_BYTES];
 static struct bt_gatt_write_params collect_write_params;
 static uint8_t collect_write_data;
+static struct bt_gatt_write_params reset_write_params;
+static uint8_t reset_write_data;
+static struct bt_gatt_read_params status_read_params;
 static struct bt_uuid_128 collection_control_uuid =
 	BT_UUID_INIT_128(COLLECTION_CONTROL_SERVICE_UUID);
 static struct bt_uuid_128 collection_enable_uuid = BT_UUID_INIT_128(COLLECTION_ENABLE_UUID);
+static struct bt_uuid_128 legacy_reset_uuid = BT_UUID_INIT_128(LEGACY_RESET_UUID);
+static struct bt_uuid_128 legacy_status_service_uuid =
+	BT_UUID_INIT_128(LEGACY_STATUS_SERVICE_UUID);
+static struct bt_uuid_128 legacy_status_register_uuid =
+	BT_UUID_INIT_128(LEGACY_STATUS_REGISTER_UUID);
 static char command_rx_buffer[COMMAND_LINE_BYTES];
 static size_t command_rx_length;
 static bool command_rx_overlong;
@@ -267,6 +293,9 @@ static struct ecg_rx_block_slot ecg_rx_slots[ECG_RX_BLOCK_SLOT_COUNT];
 static struct end_completion_work end_completion;
 static void stream_progress_work_handler(struct k_work *work);
 K_WORK_DELAYABLE_DEFINE(stream_progress_work, stream_progress_work_handler);
+static void legacy_reset_reconnect_timeout_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(legacy_reset_reconnect_timeout,
+			legacy_reset_reconnect_timeout_handler);
 
 K_MSGQ_DEFINE(command_queue, sizeof(struct command_line), 8, 4);
 K_MSGQ_DEFINE(control_event_queue, sizeof(struct control_event), 16, 4);
@@ -300,11 +329,15 @@ static struct msense_dfu_wire_parser dfu_wire_parser;
 static void start_scan(void);
 static void start_smp_discovery(struct bt_conn *conn);
 static void start_collection_control_discovery(struct bt_conn *conn);
+static void start_legacy_status_discovery(struct bt_conn *conn);
+static void start_post_nus_discovery(struct bt_conn *conn);
 static struct bt_conn *connection_ref(void);
 static void command_write_complete(struct bt_conn *conn, uint8_t err,
 				   struct bt_gatt_write_params *params);
 static int issue_nus_command(uint8_t opcode, uint32_t session_id);
 static int issue_collect_write(bool enable);
+static int issue_legacy_reset(uint8_t code);
+static int issue_legacy_status_read(void);
 static void issue_deferred_stop(void);
 static void mark_protocol_failure(const char *reason);
 static void stream_progress_stop(void);
@@ -1772,6 +1805,17 @@ static uint8_t nus_notification(struct bt_conn *conn,
 		post_event("NUS subscription removed");
 		return BT_GATT_ITER_STOP;
 	}
+	if (atomic_get(&binary_port_mode) != BINARY_PORT_NUS_RELAY) {
+		uint32_t ignored;
+		k_spinlock_key_t key = k_spin_lock(&tester.lock);
+
+		ignored = ++tester.unsolicited_nus_ignored;
+		k_spin_unlock(&tester.lock, key);
+		if (ignored == 1U) {
+			post_event("NUS_UNSOLICITED_IGNORED length=%u", length);
+		}
+		return BT_GATT_ITER_CONTINUE;
+	}
 	stream_data = is_data_notification(data, length);
 	if (stream_data && !relay_enqueue(data, length)) {
 		mark_protocol_failure("relay delivery failed");
@@ -1805,7 +1849,7 @@ static void subscribe_complete(struct bt_conn *conn, uint8_t err,
 		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS subscription failed: ATT 0x%02x", err);
-		start_smp_discovery(conn);
+		start_post_nus_discovery(conn);
 		return;
 	}
 
@@ -1823,7 +1867,7 @@ static void subscribe_complete(struct bt_conn *conn, uint8_t err,
 
 	if (mtu < REQUIRED_ATT_MTU) {
 		post_event("ERROR negotiated ATT MTU %u is below %u", mtu, REQUIRED_ATT_MTU);
-		start_smp_discovery(conn);
+		start_post_nus_discovery(conn);
 		return;
 	}
 	post_event("NUS_READY mtu=%u tx=0x%04x rx=0x%04x cccd=0x%04x", mtu,
@@ -1842,7 +1886,8 @@ static void collection_control_discovery_complete(struct bt_gatt_dm *dm, void *c
 	const struct bt_gatt_dm_attr *value;
 	struct bt_conn *conn = bt_gatt_dm_conn_get(dm);
 	uint8_t device_type;
-	uint16_t handle = 0U;
+	uint16_t collect_handle = 0U;
+	uint16_t reset_handle = 0U;
 	k_spinlock_key_t key;
 
 	ARG_UNUSED(context);
@@ -1851,23 +1896,36 @@ static void collection_control_discovery_complete(struct bt_gatt_dm *dm, void *c
 		value = bt_gatt_dm_desc_by_uuid(dm, characteristic,
 					&collection_enable_uuid.uuid);
 		if (value != NULL) {
-			handle = value->handle;
+			collect_handle = value->handle;
+		}
+	}
+	characteristic = bt_gatt_dm_char_by_uuid(dm, &legacy_reset_uuid.uuid);
+	if (characteristic != NULL) {
+		value = bt_gatt_dm_desc_by_uuid(dm, characteristic, &legacy_reset_uuid.uuid);
+		if (value != NULL) {
+			reset_handle = value->handle;
 		}
 	}
 	key = k_spin_lock(&tester.lock);
-	tester.collect_handle = handle;
+	tester.collect_handle = collect_handle;
+	tester.reset_handle = reset_handle;
 	device_type = tester.peer_device_type;
 	k_spin_unlock(&tester.lock, key);
 	(void)bt_gatt_dm_data_release(dm);
-	if (handle == 0U) {
+	if (collect_handle == 0U) {
 		post_event("COLLECT_UNAVAILABLE type=%s reason=characteristic_not_found",
 			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG");
 	} else {
 		post_event("COLLECT_READY type=%s handle=0x%04x",
 			   device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG ? "ECG" : "PPG",
-			   handle);
+			   collect_handle);
 	}
-	start_smp_discovery(conn);
+	if (reset_handle == 0U) {
+		post_event("LEGACY_RESET_UNAVAILABLE reason=characteristic_not_found");
+	} else {
+		post_event("LEGACY_RESET_READY handle=0x%04x", reset_handle);
+	}
+	start_legacy_status_discovery(conn);
 }
 
 static void collection_control_discovery_service_not_found(struct bt_conn *conn,
@@ -1875,14 +1933,14 @@ static void collection_control_discovery_service_not_found(struct bt_conn *conn,
 {
 	ARG_UNUSED(context);
 	post_event("COLLECT_UNAVAILABLE reason=service_not_found");
-	start_smp_discovery(conn);
+	start_legacy_status_discovery(conn);
 }
 
 static void collection_control_discovery_error(struct bt_conn *conn, int err, void *context)
 {
 	ARG_UNUSED(context);
 	post_event("ERROR collection discovery failed: %d", err);
-	start_smp_discovery(conn);
+	start_legacy_status_discovery(conn);
 }
 
 static const struct bt_gatt_dm_cb collection_control_discovery_callbacks = {
@@ -1893,12 +1951,105 @@ static const struct bt_gatt_dm_cb collection_control_discovery_callbacks = {
 
 static void start_collection_control_discovery(struct bt_conn *conn)
 {
-	int err = bt_gatt_dm_start(conn, &collection_control_uuid.uuid,
+	int err;
+	k_spinlock_key_t key = k_spin_lock(&tester.lock);
+
+	tester.state = TESTER_DISCOVERING;
+	k_spin_unlock(&tester.lock, key);
+	err = bt_gatt_dm_start(conn, &collection_control_uuid.uuid,
 				   &collection_control_discovery_callbacks, NULL);
 
 	if (err != 0) {
 		post_event("ERROR collection discovery could not start: %d", err);
-		start_smp_discovery(conn);
+		start_legacy_status_discovery(conn);
+	}
+}
+
+static void legacy_discovery_finished(struct bt_conn *conn)
+{
+	uint16_t collect_handle;
+	uint16_t reset_handle;
+	uint16_t status_handle;
+	uint8_t reset_code;
+	bool reset_reconnect_pending;
+	k_spinlock_key_t key = k_spin_lock(&tester.lock);
+
+	collect_handle = tester.collect_handle;
+	reset_handle = tester.reset_handle;
+	status_handle = tester.status_handle;
+	reset_code = tester.reset_code;
+	reset_reconnect_pending = tester.reset_reconnect_pending;
+	if (reset_reconnect_pending) {
+		tester.reset_reconnect_pending = false;
+	}
+	k_spin_unlock(&tester.lock, key);
+	post_event("LEGACY_HANDLES collection=0x%04x reset=0x%04x status=0x%04x",
+		   collect_handle, reset_handle, status_handle);
+	if (reset_reconnect_pending) {
+		(void)k_work_cancel_delayable(&legacy_reset_reconnect_timeout);
+		post_event("RESET_REDISCOVERED code=%u collection=0x%04x reset=0x%04x status=0x%04x",
+			   reset_code, collect_handle, reset_handle, status_handle);
+	}
+	start_smp_discovery(conn);
+}
+
+static void legacy_status_discovery_complete(struct bt_gatt_dm *dm, void *context)
+{
+	const struct bt_gatt_dm_attr *characteristic;
+	const struct bt_gatt_dm_attr *value;
+	struct bt_conn *conn = bt_gatt_dm_conn_get(dm);
+	uint16_t handle = 0U;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(context);
+	characteristic = bt_gatt_dm_char_by_uuid(dm, &legacy_status_register_uuid.uuid);
+	if (characteristic != NULL) {
+		value = bt_gatt_dm_desc_by_uuid(dm, characteristic,
+					&legacy_status_register_uuid.uuid);
+		if (value != NULL) {
+			handle = value->handle;
+		}
+	}
+	key = k_spin_lock(&tester.lock);
+	tester.status_handle = handle;
+	k_spin_unlock(&tester.lock, key);
+	(void)bt_gatt_dm_data_release(dm);
+	if (handle == 0U) {
+		post_event("REMOTE_STATUS_UNAVAILABLE reason=characteristic_not_found");
+	} else {
+		post_event("REMOTE_STATUS_READY handle=0x%04x", handle);
+	}
+	legacy_discovery_finished(conn);
+}
+
+static void legacy_status_discovery_service_not_found(struct bt_conn *conn, void *context)
+{
+	ARG_UNUSED(context);
+	post_event("REMOTE_STATUS_UNAVAILABLE reason=service_not_found");
+	legacy_discovery_finished(conn);
+}
+
+static void legacy_status_discovery_error(struct bt_conn *conn, int err, void *context)
+{
+	ARG_UNUSED(context);
+	post_event("ERROR remote status discovery failed: %d", err);
+	legacy_discovery_finished(conn);
+}
+
+static const struct bt_gatt_dm_cb legacy_status_discovery_callbacks = {
+	.completed = legacy_status_discovery_complete,
+	.service_not_found = legacy_status_discovery_service_not_found,
+	.error_found = legacy_status_discovery_error,
+};
+
+static void start_legacy_status_discovery(struct bt_conn *conn)
+{
+	int err = bt_gatt_dm_start(conn, &legacy_status_service_uuid.uuid,
+				   &legacy_status_discovery_callbacks, NULL);
+
+	if (err != 0) {
+		post_event("ERROR remote status discovery could not start: %d", err);
+		legacy_discovery_finished(conn);
 	}
 }
 
@@ -1917,7 +2068,7 @@ static void discovery_complete(struct bt_gatt_dm *dm, void *context)
 		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS handle discovery failed: %d", err);
-		start_smp_discovery(conn);
+		start_post_nus_discovery(conn);
 		return;
 	}
 
@@ -1939,6 +2090,7 @@ static void discovery_complete(struct bt_gatt_dm *dm, void *context)
 		tester.state = TESTER_FAILED;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS subscribe request failed: %d", err);
+		start_post_nus_discovery(conn);
 	}
 }
 
@@ -1951,7 +2103,7 @@ static void discovery_service_not_found(struct bt_conn *conn, void *context)
 	tester.subscribed = false;
 	k_spin_unlock(&tester.lock, key);
 	post_event("NUS_UNAVAILABLE reason=not_found");
-	start_smp_discovery(conn);
+	start_post_nus_discovery(conn);
 }
 
 static void discovery_error(struct bt_conn *conn, int err, void *context)
@@ -1963,7 +2115,7 @@ static void discovery_error(struct bt_conn *conn, int err, void *context)
 	tester.subscribed = false;
 	k_spin_unlock(&tester.lock, key);
 	post_event("ERROR NUS discovery failed: %d", err);
-	start_smp_discovery(conn);
+	start_post_nus_discovery(conn);
 }
 
 static const struct bt_gatt_dm_cb discovery_callbacks = {
@@ -1986,6 +2138,21 @@ static void start_nus_discovery(struct bt_conn *conn)
 		tester.subscribed = false;
 		k_spin_unlock(&tester.lock, key);
 		post_event("ERROR NUS discovery could not start: %d", err);
+		start_post_nus_discovery(conn);
+	}
+}
+
+static void start_post_nus_discovery(struct bt_conn *conn)
+{
+	uint8_t device_type;
+	k_spinlock_key_t key = k_spin_lock(&tester.lock);
+
+	device_type = tester.peer_device_type;
+	k_spin_unlock(&tester.lock, key);
+	if (device_type == MSENSE_SENSOR_STREAM_DEVICE_PPG ||
+	    device_type == MSENSE_SENSOR_STREAM_DEVICE_ECG) {
+		start_collection_control_discovery(conn);
+	} else {
 		start_smp_discovery(conn);
 	}
 }
@@ -1993,6 +2160,7 @@ static void start_nus_discovery(struct bt_conn *conn)
 static void report_peer_ready(bool smp_ready)
 {
 	bool nus_ready;
+	bool legacy_ready;
 	bool report = false;
 	bool peer_address_valid;
 	bt_addr_le_t peer_address;
@@ -2004,6 +2172,8 @@ static void report_peer_ready(bool smp_ready)
 	tester.smp_ready = smp_ready;
 	tester.smp_discovery_started = false;
 	nus_ready = tester.subscribed;
+	legacy_ready = tester.collect_handle != 0U || tester.reset_handle != 0U ||
+		       tester.status_handle != 0U;
 	peer_address_valid = tester.peer_address_valid;
 	peer_address = tester.peer_address;
 	memcpy(peer_name, tester.peer_name, sizeof(peer_name));
@@ -2014,7 +2184,7 @@ static void report_peer_ready(bool smp_ready)
 	}
 	if (tester.state == TESTER_MTU_EXCHANGE || tester.state == TESTER_DISCOVERING ||
 	    tester.state == TESTER_SUBSCRIBING) {
-		tester.state = (smp_ready || nus_ready) ? TESTER_READY : TESTER_FAILED;
+		tester.state = (smp_ready || nus_ready || legacy_ready) ? TESTER_READY : TESTER_FAILED;
 	}
 	k_spin_unlock(&tester.lock, key);
 
@@ -2022,8 +2192,9 @@ static void report_peer_ready(bool smp_ready)
 		(void)bt_addr_to_str(&peer_address.a, peer_address_text, sizeof(peer_address_text));
 	}
 	if (report) {
-		post_event("PEER_READY nus=%u smp=%u peer_name=%s peer_addr=%s peer_addr_type=%u",
-			   nus_ready, smp_ready, peer_name[0] == '\0' ? "none" : peer_name,
+		post_event("PEER_READY nus=%u smp=%u legacy=%u peer_name=%s peer_addr=%s peer_addr_type=%u",
+			   nus_ready, smp_ready, legacy_ready,
+			   peer_name[0] == '\0' ? "none" : peer_name,
 			   peer_address_text,
 			   peer_address_valid ? (unsigned int)peer_address.type : (unsigned int)UINT8_MAX);
 	}
@@ -2101,6 +2272,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
 {
 	char address[BT_ADDR_LE_STR_LEN];
 	int ret;
+	bool reset_reconnect_pending;
+	uint8_t reset_code;
 	k_spinlock_key_t key;
 
 	if (!notification_for_current_connection(conn)) {
@@ -2131,8 +2304,14 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	tester.smp_ready = false;
 	tester.smp_discovery_started = false;
 	tester.peer_ready_reported = false;
+	tester.unsolicited_nus_ignored = 0U;
+	reset_reconnect_pending = tester.reset_reconnect_pending;
+	reset_code = tester.reset_code;
 	k_spin_unlock(&tester.lock, key);
 	post_event("CONNECTED %s", address);
+	if (reset_reconnect_pending) {
+		post_event("RESET_RECONNECTED code=%u address=%s", reset_code, address);
+	}
 	update_link_info_from_connection(conn);
 	post_ble_link(conn);
 
@@ -2152,6 +2331,9 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	struct bt_conn *held_conn = NULL;
 	bool stream_was_active;
 	bool reconnect = false;
+	bool reset_reconnect = false;
+	bool reset_response_pending = false;
+	uint8_t reset_code = 0U;
 	k_spinlock_key_t key;
 
 	key = k_spin_lock(&tester.lock);
@@ -2165,6 +2347,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		tester.command_pending = false;
 		tester.collect_write_pending = false;
 		tester.collect_handle = 0U;
+		reset_response_pending = tester.reset_write_pending;
+		tester.reset_write_pending = false;
+		tester.reset_waiting_for_disconnect = false;
+		tester.reset_handle = 0U;
+		tester.status_read_pending = false;
+		tester.status_handle = 0U;
 		tester.stop_after_start_ack = false;
 		tester.att_mtu = 0U;
 		tester.smp_ready = false;
@@ -2178,7 +2366,15 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		} else {
 			ecg_release_filling_slot_locked();
 			tester.state = TESTER_IDLE;
-			reconnect = tester.reconnect_enabled && tester.peer_address_valid;
+			reset_reconnect = tester.reset_reconnect_pending &&
+					  tester.peer_address_valid;
+			if (reset_reconnect) {
+				tester.scan_target = SCAN_TARGET_RECONNECT;
+				tester.state = TESTER_SCANNING;
+				reset_code = tester.reset_code;
+			} else {
+				reconnect = tester.reconnect_enabled && tester.peer_address_valid;
+			}
 		}
 		nus_client.conn = NULL;
 	}
@@ -2192,7 +2388,15 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		relay_request_idle();
 		post_event("DISCONNECTED reason=0x%02x%s", reason,
 			   stream_was_active ? " stream_aborted" : "");
-		if (reconnect) {
+		if (reset_reconnect) {
+			if (reset_response_pending) {
+				post_event("RESET_ATT code=%u status=no_response_disconnect", reset_code);
+			}
+			post_event("RESET_DISCONNECTED code=%u reason=0x%02x", reset_code, reason);
+			(void)k_work_reschedule(&legacy_reset_reconnect_timeout,
+						LEGACY_RESET_RECONNECT_TIMEOUT);
+			start_scan();
+		} else if (reconnect) {
 			dfu_request_reconnect(NULL);
 		}
 	}
@@ -2320,6 +2524,8 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	char address_text[BT_ADDR_LE_STR_LEN];
 	struct bt_conn *connection = NULL;
 	uint8_t device_type;
+	uint8_t reset_code = 0U;
+	bool reset_reconnect = false;
 	int err;
 	k_spinlock_key_t key;
 
@@ -2350,6 +2556,8 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 			return;
 		}
 		tester.state = TESTER_CONNECTING;
+		reset_reconnect = tester.reset_reconnect_pending;
+		reset_code = tester.reset_code;
 	} else if (name_matches_target(name.value, target) && device_type != 0U) {
 		tester.state = TESTER_CONNECTING;
 	} else {
@@ -2359,6 +2567,10 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	k_spin_unlock(&tester.lock, key);
 
 	bt_addr_le_to_str(address, address_text, sizeof(address_text));
+	if (reset_reconnect) {
+		post_event("RESET_ADVERTISING code=%u name=%s address=%s", reset_code,
+			   name.value, address_text);
+	}
 	if (bt_le_scan_stop() != 0) {
 		post_event("ERROR could not stop scan for %s", name.value);
 		return;
@@ -2384,6 +2596,9 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 	tester.peer_address = *address;
 	tester.peer_address_valid = true;
 	tester.peer_device_type = device_type;
+	tester.collect_handle = 0U;
+	tester.reset_handle = 0U;
+	tester.status_handle = 0U;
 	memset(tester.peer_name, 0, sizeof(tester.peer_name));
 	strncpy(tester.peer_name, name.value, sizeof(tester.peer_name) - 1U);
 	memset(&tester.link, 0, sizeof(tester.link));
@@ -2648,6 +2863,180 @@ static void collect_write_complete(struct bt_conn *conn, uint8_t err,
 	}
 }
 
+static void reset_write_complete(struct bt_conn *conn, uint8_t err,
+				 struct bt_gatt_write_params *params)
+{
+	uint8_t code = *(const uint8_t *)params->data;
+	bool current;
+	k_spinlock_key_t key = k_spin_lock(&tester.lock);
+
+	current = tester.conn == conn;
+	if (current) {
+		tester.reset_write_pending = false;
+	}
+	if (current && err != 0U) {
+		tester.reset_waiting_for_disconnect = true;
+	}
+	k_spin_unlock(&tester.lock, key);
+	if (!current) {
+		return;
+	} else if (err != 0U) {
+		post_event("RESET_ATT code=%u status=error att=0x%02x", code, err);
+		(void)k_work_reschedule(&legacy_reset_reconnect_timeout,
+					LEGACY_RESET_DISCONNECT_GRACE);
+	} else {
+		post_event("RESET_ATT code=%u status=accepted", code);
+	}
+}
+
+static int issue_legacy_reset(uint8_t code)
+{
+	struct bt_conn *connection = connection_ref();
+	uint16_t handle;
+	int err;
+	k_spinlock_key_t key;
+
+	if (connection == NULL) {
+		return -ENOTCONN;
+	}
+	key = k_spin_lock(&tester.lock);
+	handle = tester.reset_handle;
+	if (tester.conn != connection || handle == 0U || tester.reset_write_pending ||
+	    tester.collect_write_pending || tester.status_read_pending || tester.write_pending ||
+	    tester.command_pending) {
+		k_spin_unlock(&tester.lock, key);
+		bt_conn_unref(connection);
+		return -EBUSY;
+	}
+	tester.reset_write_pending = true;
+	tester.reset_reconnect_pending = true;
+	tester.reset_waiting_for_disconnect = false;
+	tester.reset_code = code;
+	k_spin_unlock(&tester.lock, key);
+
+	reset_write_data = code;
+	memset(&reset_write_params, 0, sizeof(reset_write_params));
+	reset_write_params.func = reset_write_complete;
+	reset_write_params.handle = handle;
+	reset_write_params.offset = 0U;
+	reset_write_params.data = &reset_write_data;
+	reset_write_params.length = sizeof(reset_write_data);
+	err = bt_gatt_write(connection, &reset_write_params);
+	bt_conn_unref(connection);
+	if (err != 0) {
+		key = k_spin_lock(&tester.lock);
+		tester.reset_write_pending = false;
+		tester.reset_reconnect_pending = false;
+		tester.reset_waiting_for_disconnect = false;
+		k_spin_unlock(&tester.lock, key);
+		return err;
+	}
+	(void)k_work_reschedule(&legacy_reset_reconnect_timeout,
+				LEGACY_RESET_RECONNECT_TIMEOUT);
+	post_event("RESET_ATT code=%u status=queued handle=0x%04x", code, handle);
+	return 0;
+}
+
+static uint8_t legacy_status_read_complete(struct bt_conn *conn, uint8_t err,
+					   struct bt_gatt_read_params *params,
+					   const void *data, uint16_t length)
+{
+	const uint8_t *bytes = data;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(params);
+	if (!notification_for_current_connection(conn)) {
+		return BT_GATT_ITER_STOP;
+	}
+	key = k_spin_lock(&tester.lock);
+	tester.status_read_pending = false;
+	k_spin_unlock(&tester.lock, key);
+	if (err != 0U) {
+		post_event("REMOTE_STATUS status=error att=0x%02x", err);
+	} else if (data == NULL) {
+		post_event("REMOTE_STATUS status=error reason=empty");
+	} else {
+		post_event("REMOTE_STATUS status=success length=%u hex=%02x%02x%02x%02x%02x%02x%02x%02x",
+			   length, length > 0U ? bytes[0] : 0U, length > 1U ? bytes[1] : 0U,
+			   length > 2U ? bytes[2] : 0U, length > 3U ? bytes[3] : 0U,
+			   length > 4U ? bytes[4] : 0U, length > 5U ? bytes[5] : 0U,
+			   length > 6U ? bytes[6] : 0U, length > 7U ? bytes[7] : 0U);
+	}
+	return BT_GATT_ITER_STOP;
+}
+
+static int issue_legacy_status_read(void)
+{
+	struct bt_conn *connection = connection_ref();
+	uint16_t handle;
+	int err;
+	k_spinlock_key_t key;
+
+	if (connection == NULL) {
+		return -ENOTCONN;
+	}
+	key = k_spin_lock(&tester.lock);
+	handle = tester.status_handle;
+	if (tester.conn != connection || handle == 0U || tester.status_read_pending ||
+	    tester.reset_write_pending || tester.collect_write_pending || tester.write_pending ||
+	    tester.command_pending) {
+		k_spin_unlock(&tester.lock, key);
+		bt_conn_unref(connection);
+		return -EBUSY;
+	}
+	tester.status_read_pending = true;
+	k_spin_unlock(&tester.lock, key);
+
+	memset(&status_read_params, 0, sizeof(status_read_params));
+	status_read_params.func = legacy_status_read_complete;
+	status_read_params.handle_count = 1U;
+	status_read_params.single.handle = handle;
+	status_read_params.single.offset = 0U;
+	err = bt_gatt_read(connection, &status_read_params);
+	bt_conn_unref(connection);
+	if (err != 0) {
+		key = k_spin_lock(&tester.lock);
+		tester.status_read_pending = false;
+		k_spin_unlock(&tester.lock, key);
+	}
+	return err;
+}
+
+static void legacy_reset_reconnect_timeout_handler(struct k_work *work)
+{
+	bool stop_scan = false;
+	bool waiting_for_disconnect;
+	uint8_t code;
+	k_spinlock_key_t key;
+
+	ARG_UNUSED(work);
+	key = k_spin_lock(&tester.lock);
+	if (!tester.reset_reconnect_pending) {
+		k_spin_unlock(&tester.lock, key);
+		return;
+	}
+	code = tester.reset_code;
+	waiting_for_disconnect = tester.reset_waiting_for_disconnect;
+	tester.reset_reconnect_pending = false;
+	tester.reset_write_pending = false;
+	tester.reset_waiting_for_disconnect = false;
+	if (tester.conn == NULL && tester.state == TESTER_SCANNING) {
+		tester.state = TESTER_IDLE;
+		stop_scan = true;
+	}
+	k_spin_unlock(&tester.lock, key);
+	if (stop_scan) {
+		(void)bt_le_scan_stop();
+	}
+	if (waiting_for_disconnect) {
+		post_event("RESET_DISCONNECT_TIMEOUT code=%u grace_s=%u", code,
+			   LEGACY_RESET_DISCONNECT_GRACE_SECONDS);
+	} else {
+		post_event("RESET_RECONNECT_TIMEOUT code=%u timeout_s=%u", code,
+			   LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS);
+	}
+}
+
 static int issue_collect_write(bool enable)
 {
 	struct bt_conn *connection = connection_ref();
@@ -2821,6 +3210,9 @@ static void print_status(void)
 	uint32_t relay_dropped;
 	bool subscribed;
 	bool smp_ready;
+	uint16_t collect_handle;
+	uint16_t reset_handle;
+	uint16_t status_handle;
 	bool peer_address_valid;
 	bt_addr_le_t peer_address;
 	char peer_name[sizeof(tester.peer_name)];
@@ -2831,6 +3223,9 @@ static void print_status(void)
 	mtu = tester.att_mtu;
 	subscribed = tester.subscribed;
 	smp_ready = tester.smp_ready;
+	collect_handle = tester.collect_handle;
+	reset_handle = tester.reset_handle;
+	status_handle = tester.status_handle;
 	peer_address_valid = tester.peer_address_valid;
 	peer_address = tester.peer_address;
 	memcpy(peer_name, tester.peer_name, sizeof(peer_name));
@@ -2846,7 +3241,8 @@ static void print_status(void)
 
 	command_printf("STATUS state=%s subscribed=%u smp=%u mtu=%u id=%u bytes=%llu data=%llu "
 		       "offset=%llu record_index=%llu relay_dropped=%u binary_mode=%d peer_name=%s peer_addr=%s "
-		       "peer_addr_type=%u", tester_state_name(state),
+		       "peer_addr_type=%u collect_handle=0x%04x reset_handle=0x%04x status_handle=0x%04x",
+		       tester_state_name(state),
 		       subscribed, smp_ready, mtu,
 		       metadata.session_id, (unsigned long long)metadata.expected_byte_offset,
 		       (unsigned long long)metadata.received_data_messages,
@@ -2855,7 +3251,8 @@ static void print_status(void)
 				   metadata.record_size : 0U), relay_dropped,
 		       (int)atomic_get(&binary_port_mode),
 		       peer_name[0] == '\0' ? "none" : peer_name, peer_address_text,
-		       peer_address_valid ? (unsigned int)peer_address.type : (unsigned int)UINT8_MAX);
+		       peer_address_valid ? (unsigned int)peer_address.type : (unsigned int)UINT8_MAX,
+		       collect_handle, reset_handle, status_handle);
 	throughput_end_ms =
 		state == TESTER_RECEIVING ? k_uptime_get() : statistics.total.last_data_ms;
 	print_live_throughput(metadata.session_id, &statistics.total, throughput_end_ms);
@@ -2865,6 +3262,7 @@ static void print_status(void)
 static void show_help(void)
 {
 	command_printf("COMMANDS: help | scan | connect ppg|ecg|any | collect on|off | status | "
+		       "remote status | reset 121|132 | "
 		       "start [infinity] [id] | "
 		       "stop [id] | cancel [id] | disconnect | dfu capabilities|status|list|begin|abort|erase|"
 		       "test|confirm|reset");
@@ -2981,6 +3379,37 @@ static void handle_command(struct command_line *line)
 	}
 	if (strcmp(command, "status") == 0 && argument == NULL) {
 		print_status();
+		return;
+	}
+	if (strcmp(command, "remote") == 0) {
+		int err;
+
+		if (argument == NULL || strcmp(argument, "status") != 0 || extra != NULL) {
+			command_printf("ERR usage: remote status");
+			return;
+		}
+		err = issue_legacy_status_read();
+		if (err != 0) {
+			command_printf("ERR remote status read %d", err);
+		} else {
+			command_printf("REMOTE_STATUS_SENT");
+		}
+		return;
+	}
+	if (strcmp(command, "reset") == 0) {
+		int err;
+
+		if (argument == NULL || extra != NULL || !parse_u32(argument, &value) ||
+		    (value != 121U && value != 132U)) {
+			command_printf("ERR usage: reset 121|132");
+			return;
+		}
+		err = issue_legacy_reset((uint8_t)value);
+		if (err != 0) {
+			command_printf("ERR reset %u write %d", value, err);
+		} else {
+			command_printf("RESET_SENT code=%u", value);
+		}
 		return;
 	}
 	if (strcmp(command, "scan") == 0 && argument == NULL) {

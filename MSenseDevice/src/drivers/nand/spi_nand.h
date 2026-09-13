@@ -305,6 +305,8 @@ int multi_nand_page_write(const struct device* dev, uint32_t page_number, const 
 
 int multi_nand_block_erase(const struct device* dev, uint32_t page_number);
 
+bool multi_nand_page_is_erased(const struct device* dev, uint32_t page_number);
+
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest);
 
 int spi_nand_page_write(const struct device* dev, off_t page_address, const void* src, size_t size);

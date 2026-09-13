@@ -85,22 +85,15 @@ K_MUTEX_DEFINE(disk_access_mutex);
 
 /* We will need to make this all be enabled by a KConfig. */
 
-uint8_t check_buffer[4096];
 static int check_duplicate_sector_write(const struct disk_info* disk, int sector_num){
 
-	multi_nand_page_read(disk->dev, sector_num, check_buffer);
-	for (int x = 0; x < 4096; x++){
-		if (check_buffer[x] != 0xff){
-			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-			#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-			// sector_num is logical; record the physical sector that failed
-			register_bad_sector(sector_num);
-			#endif
-			duplicate_sector_writes++;
-			//print_page_hex(check_buffer, 4096, false);
-			return -1;
-			
-		}
+	if (!multi_nand_page_is_erased(disk->dev, sector_num)){
+		LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
+		#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
+		register_bad_sector(sector_num);
+		#endif
+		duplicate_sector_writes++;
+		return -1;
 	}
 	return 0;
 }

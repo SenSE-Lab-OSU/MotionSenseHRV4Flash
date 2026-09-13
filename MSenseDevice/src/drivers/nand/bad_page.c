@@ -184,11 +184,12 @@ void print_bad_sect_info()
 	}
 }
 
+/* Records a bad sector unconditionally. register_bad_sector() gates this behind the
+ * first boot scan, but a caller with authoritative knowledge (dhara_nand_mark_bad)
+ * has to be able to record a block whether or not that scan has already run.
+ */
 // eventually we should just change this to blocks.
-int register_bad_sector(uint32_t sector_num){
-	// after the first boot scan the table is treated as the fixed factory bad
-	// block list, unless runtime registration is explicitly enabled
-	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_SECTOR_SAVING_RUNTIME)){
+int mark_bad_sector(uint32_t sector_num){
     if (use_blocks){
         sector_num = convert_page_to_block(sector_num);
         sector_num = convert_block_to_page(0, sector_num);
@@ -222,8 +223,40 @@ int register_bad_sector(uint32_t sector_num){
 	LOG_WRN("New bad sector hit! sect %u, total bad sectors: %d", sector_num,
 		total_bad_sectors);
 	save_bad_sectors_arr();
+	return total_bad_sectors;
+}
+
+int register_bad_sector(uint32_t sector_num){
+	// after the first boot scan the table is treated as the fixed factory bad
+	// block list, unless runtime registration is explicitly enabled
+	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_SECTOR_SAVING_RUNTIME)){
+		return mark_bad_sector(sector_num);
 	}
 	return total_bad_sectors;
+}
+
+/* True if the block holding this sector is in the bad table. register_bad_sector()
+ * keeps the table sorted ascending and duplicate free, so this is a binary search.
+ */
+bool is_sector_bad(uint32_t sector_num){
+	if (use_blocks){
+		sector_num = convert_block_to_page(0, convert_page_to_block(sector_num));
+	}
+	int lo = 0;
+	int hi = total_bad_sectors - 1;
+	while (lo <= hi){
+		int mid = lo + ((hi - lo) / 2);
+		if (bad_sectors[mid] == sector_num){
+			return true;
+		}
+		if (bad_sectors[mid] < sector_num){
+			lo = mid + 1;
+		}
+		else{
+			hi = mid - 1;
+		}
+	}
+	return false;
 }
 
 /* Maps a logical sector onto the physical one by stepping over every bad entry at
@@ -251,6 +284,8 @@ int total_bad_sectors = 0;
 bool bad_block_scan_done;
 int bad_sector_storage_init(const struct device *dev){return 0;}
 int register_bad_sector(uint32_t sector_num){return 0;}
+int mark_bad_sector(uint32_t sector_num){return 0;}
+bool is_sector_bad(uint32_t sector_num){return false;}
 int save_bad_sectors_arr(){return 0;}
 int load_bad_sectors_arr(){return 0;}
 int erase_bad_sectors_arr(){return 0;}

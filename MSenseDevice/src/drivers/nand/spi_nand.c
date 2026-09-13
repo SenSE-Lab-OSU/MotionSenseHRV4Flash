@@ -788,6 +788,27 @@ int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
 	return ret;
 }
 
+static uint8_t page_erased_buffer[4096];
+
+/* True if every byte of the page still reads as erased. Deliberately free of any
+ * side effects: a written page is not a bad one, so recording bad sectors is left
+ * to the caller. Used by the custom FTL's duplicate write guard and by
+ * dhara_nand_is_free().
+ */
+bool multi_nand_page_is_erased(const struct device* dev, uint32_t page_number){
+	int ret = multi_nand_page_read(dev, page_number, page_erased_buffer);
+	if (ret != 0){
+		// a page we cannot read cleanly is not one we can safely program into
+		return false;
+	}
+	for (int x = 0; x < 4096; x++){
+		if (page_erased_buffer[x] != 0xff){
+			return false;
+		}
+	}
+	return true;
+}
+
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	current_reads++;
 	acquire_device(dev);

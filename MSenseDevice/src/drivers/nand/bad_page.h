@@ -27,6 +27,14 @@ int save_bad_sectors_arr();
 int load_bad_sectors_arr();
 int erase_bad_sectors_arr();
 int register_bad_sector(uint32_t sector_num);
+
+/* Unconditional form of register_bad_sector(), for callers that already know the
+ * block is bad and must not be gated on the first boot scan having run.
+ */
+int mark_bad_sector(uint32_t sector_num);
+
+/* True if the block holding this sector is recorded bad. */
+bool is_sector_bad(uint32_t sector_num);
 int get_sector_offset(int sector_num);
 void print_bad_sect_info();
 

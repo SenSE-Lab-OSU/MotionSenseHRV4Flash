@@ -1216,7 +1216,7 @@ int spi_init(const struct device *dev)
 	// restores the bad sector table and runs the one-time manufacturer bad block
 	// scan; both are persisted through the settings subsystem
 	if (IS_ENABLED(CONFIG_SETTINGS)){
-	bad_sector_storage_init(dev);
+	//bad_sector_storage_init(dev);
 	}
 
 	set_flash(dev, 0);

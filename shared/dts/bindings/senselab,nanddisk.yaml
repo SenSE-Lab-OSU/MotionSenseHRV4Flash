@@ -1,7 +1,8 @@
 description: |
   SenseLab raw NAND disk implemented by identical SPI NAND packages on one SPI
-  controller. The controller's cs-gpios array describes the physical package
-  population; the child properties describe one package exactly. The driver
+  controller. The first num-flashchips entries in the controller's cs-gpios
+  array describe the NAND package population; later entries may select sibling
+  devices. The child properties describe one NAND package exactly. The driver
   derives total logical capacity from individual-size and num-flashchips, so a
   4 GiB population never needs to be represented in a 32-bit byte property.
 
@@ -26,8 +27,8 @@ properties:
     type: int
     required: true
     description: |
-      Number of populated, identical NAND packages. This must equal the parent
-      SPI controller's cs-gpios array length.
+      Number of populated, identical NAND packages selected by the first entries
+      in the parent SPI controller's cs-gpios array.
 
   dies-per-flash:
     type: int

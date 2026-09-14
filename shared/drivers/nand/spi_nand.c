@@ -23,7 +23,6 @@
 #include <zephyr/pm/device.h>
 
 #include "spi_nand.h"
-#include "jesd216.h"
 #include "flash_priv.h"
 #include "bad_page.h"
 
@@ -31,6 +30,28 @@ int erase_file_table();
 
 
 LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
+
+#define NAND_STATUS_POLL_INTERVAL_US 100U
+#define NAND_PAGE_READ_TIMEOUT_US 250U
+#define NAND_PAGE_PROGRAM_TIMEOUT_US 750U
+#define NAND_BLOCK_ERASE_TIMEOUT_US 12000U
+#define NAND_RESET_NO_COMMAND_US 1500U
+#define NAND_RESET_POLL_TIMEOUT_US 1000U
+
+#define NAND_STATUS_ERASE_FAIL BIT(2)
+#define NAND_STATUS_PROGRAM_FAIL BIT(3)
+
+K_MUTEX_DEFINE(storage_spi_bus_mutex);
+
+void storage_spi_bus_lock(void)
+{
+	k_mutex_lock(&storage_spi_bus_mutex, K_FOREVER);
+}
+
+void storage_spi_bus_unlock(void)
+{
+	k_mutex_unlock(&storage_spi_bus_mutex);
+}
 
 /* Device Power Management Notes
 *
@@ -93,20 +114,12 @@ int current_die[NAND_FLASH_COUNT] = {0};
 // parameter for multiple flashes.
 int current_flash = 0;
 
-static int spi_nor_write_protection_set(const struct device *dev,
-					bool write_protect);
-
-struct jesd216_erase_type erasetype = {
-		.cmd = SPI_NOR_CMD_BE
-	};
-/* Get pointer to array of supported erase types.  Static const for
-* minimal, data for runtime and devicetree.
-*/
-static inline const struct jesd216_erase_type* dev_erase_types(const struct device *dev)
-{
-	
-	return &erasetype;
-}
+static int get_features(const struct device *dev, uint8_t register_select,
+			uint8_t *data);
+static int set_features(const struct device *dev, uint8_t register_select,
+			uint8_t data);
+static int set_die(const struct device *dev, int die_select);
+static int set_flash(const struct device *dev, int flash_id);
 
 /* Get the size of the flash device.  Data for runtime, constant for
 * minimal and devicetree.
@@ -337,14 +350,9 @@ static int spi_cmd(const struct device* dev, uint8_t opcode, void* dest, size_t 
 	return spi_nand_access(dev, &request); 
 }
 
-static uint8_t get_status(const struct device* dev){
-
-	uint8_t data;
-	uint8_t reg_cmd = 0xC0;
-
-	data = get_features(dev, reg_cmd);
-	return data;
-
+static int get_status(const struct device *dev, uint8_t *status)
+{
+	return get_features(dev, REGISTER_STATUS, status);
 }
 
 static int write_enable(const struct device* dev){
@@ -369,16 +377,12 @@ static int write_disable(const struct device* dev){
 }
 
 
-int reset(const struct device* dev){
-
-	spi_cmd(dev, SPI_NAND_RESET, NULL, 0);
-	
-	//spi_rdsr(dev);
-
-	return 0;
+static int spi_nand_reset(const struct device *dev)
+{
+	return spi_cmd(dev, SPI_NAND_RESET, NULL, 0);
 }
 
-int set_die(const struct device* dev, int die_select){
+static int set_die(const struct device* dev, int die_select){
 	const struct spi_flash_config *cfg = dev->config;
 	if ((current_flash < 0) || (current_flash >= cfg->num_flashes) ||
 	    (die_select < 0) || (die_select >= cfg->dies_per_flash)) {
@@ -405,7 +409,7 @@ int set_die(const struct device* dev, int die_select){
 
 
 
-int set_flash(const struct device* dev, int flash_id){
+static int set_flash(const struct device* dev, int flash_id){
 	const struct spi_flash_config *cfg = dev->config;
 	if ((flash_id < 0) || (flash_id >= cfg->num_flashes)) {
 		return -EINVAL;
@@ -415,31 +419,31 @@ int set_flash(const struct device* dev, int flash_id){
 }
 
 
-uint8_t get_features(const struct device* dev, uint8_t register_select){
-
-	uint8_t data;
+static int get_features(const struct device *dev, uint8_t register_select,
+			uint8_t *data)
+{
+	if (data == NULL) {
+		return -EINVAL;
+	}
 
 	spi_send_request request = {
 		.opcode = SPI_NAND_GF,
 		.addr = &register_select,
 		.addr_length = 1,
-		.data = &data,
+		.data = data,
 		.data_length = 1,
 	};
 
-	int res = spi_nand_access(dev, &request);
-
-	if (res == 0){
-		return data;
+	int ret = spi_nand_access(dev, &request);
+	if (ret != 0) {
+		LOG_WRN("get features failed: %d", ret);
 	}
-	else {
-		LOG_WRN("get features err");
-		return 253;
-	}
+	return ret;
 }
 
-// Should only be used to set all features. to only set an induvidual feature, use set_feature 
-int set_features(const struct device* dev, uint8_t register_select, uint8_t data){
+static int set_features(const struct device* dev, uint8_t register_select,
+			uint8_t data){
+	uint8_t readback;
 
 	spi_send_request write_features_request = {
 		.opcode = 0x1F,
@@ -450,20 +454,15 @@ int set_features(const struct device* dev, uint8_t register_select, uint8_t data
 		.data_length = 1
 	};
 
-	int res = spi_nand_access(dev, &write_features_request);
-	if (res == 0){
-		uint8_t readback = get_features(dev, register_select);
-	if (readback == data){
-		return 0;
+	int ret = spi_nand_access(dev, &write_features_request);
+	if (ret != 0) {
+		return ret;
 	}
-	else{
-		return -2;
+	ret = get_features(dev, register_select, &readback);
+	if (ret != 0) {
+		return ret;
 	}
-	}
-	else {
-		return -1;
-	}
-
+	return readback == data ? 0 : -EIO;
 }
 
 
@@ -482,22 +481,32 @@ int set_features(const struct device* dev, uint8_t register_select, uint8_t data
  * @param dev The device structure
  * @return 0 on success, negative errno code otherwise
  */
-int spi_flash_wait_until_ready(const struct device *dev)
+static int spi_nand_wait_until_ready(const struct device *dev,
+				     uint32_t timeout_us,
+				     uint8_t *final_status)
 {
-	int waitcycles = 0;
-	int ret = 0;
-	uint8_t reg;
+	k_timepoint_t deadline;
+	int ret;
 
-	do {
-		waitcycles++;
-		reg = get_status(dev);
-	} while (!ret && (reg & SPI_NOR_WIP_BIT) && waitcycles <= 2000000000);
-	LOG_DBG("wait completed with %i cycles", waitcycles);
-	if (waitcycles > 1900000000){
-		LOG_ERR("wait c time out");
-		ret = -1;
+	if (final_status == NULL) {
+		return -EINVAL;
 	}
-	return ret;
+	deadline = sys_timepoint_calc(K_USEC(timeout_us));
+
+	while (true) {
+		ret = get_status(dev, final_status);
+		if (ret != 0) {
+			return ret;
+		}
+		if ((*final_status & SPI_NOR_WIP_BIT) == 0U) {
+			return 0;
+		}
+		if (sys_timepoint_expired(deadline)) {
+			LOG_ERR("NAND ready timeout after %u us", timeout_us);
+			return -ETIMEDOUT;
+		}
+		k_sleep(K_USEC(NAND_STATUS_POLL_INTERVAL_US));
+	}
 }
 
 
@@ -509,6 +518,8 @@ int spi_flash_wait_until_ready(const struct device *dev)
 */
 static void acquire_device(const struct device *dev)
 {
+	storage_spi_bus_lock();
+
 	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
 		struct spi_nor_data *const driver_data = dev->data;
 
@@ -532,56 +543,14 @@ static void release_device(const struct device *dev)
 
 		k_sem_give(&driver_data->sem);
 	}
+
+	storage_spi_bus_unlock();
 }
 
 
 
 
-/**
- * @brief Read the status register.
- *
- * @note The device must be externally acquired before invoking this
- * function.
- *
- * @param dev Device struct
- *
- * @return the non-negative value of the status register, or an error code.
- */
-uint8_t spi_rdsr(const struct device *dev)
-{
-	uint8_t status = get_status(dev);
-	if (status > 3){
-	LOG_WRN("status register: %d", status);
-	}
-	if (status == 255){
-		LOG_ERR("err bad register reading");
-	}
-	
-	return status;
-}
-
-/**
- * @brief Write the status register.
- *
- * @note The device must be externally acquired before invoking this
- * function.
- *
- * @param dev Device struct
- * @param sr The new value of the status register
- *
- * @return 0 on success or a negative error code.
- */
-int spi_nor_wrsr(const struct device *dev,
-			uint8_t sr)
-{	
-	int ret = set_features(dev, REGISTER_STATUS, sr);
-	spi_flash_wait_until_ready(dev);
-	
-
-	return ret;
-}
-
-int spi_unlock_memory(const struct device* dev){
+static int spi_unlock_memory(const struct device* dev){
 
 	int ret = set_features(dev, REGISTER_BLOCKLOCK, 0);
 	return ret;
@@ -592,6 +561,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	int page_addr = 0;
 	int bad_blocks = 0;
 	uint8_t dest;
+	uint8_t status;
 	off_t error_address = 4096;
 	int total_device_size = (dev_flash_size(dev) / dev_page_size(dev)) /
 				NAND_PAGES_PER_ERASE_BLOCK;
@@ -636,18 +606,23 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	res = spi_nand_access(dev, &pread_cinstr_cfg);
 	if (res != 0) {
 		LOG_WRN("read transfer err: %x", res);
-		continue;
+		release_device(dev);
+		return res;
 	}
-	spi_flash_wait_until_ready(dev);
+	res = spi_nand_wait_until_ready(dev, NAND_PAGE_READ_TIMEOUT_US,
+					&status);
+	if (res != 0) {
+		LOG_WRN("read completion err: %x", res);
+		release_device(dev);
+		return res;
+	}
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0) {
 		LOG_WRN("buff transfer err: %x", res);
-		continue;
+		release_device(dev);
+		return res;
 	}
-	spi_flash_wait_until_ready(dev);
-
-	uint8_t status = spi_rdsr(dev);
 	if (status != 0){
 	LOG_WRN("read with stat %i", status);
 	}
@@ -666,16 +641,22 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 
 
 int spi_nand_parameter_page_read(const struct device* dev, void* dest){
-	
-	uint8_t current_config = get_features(dev, REGISTER_CONFIGURATION);
+	uint8_t current_config;
+	int ret = get_features(dev, REGISTER_CONFIGURATION, &current_config);
+
+	if (ret != 0) {
+		return ret;
+	}
 	uint8_t current_config_mask = current_config | 0x5; 
 	uint8_t code = current_config_mask & 0x3;
-	int ret = set_features(dev, REGISTER_CONFIGURATION, code);
+	ret = set_features(dev, REGISTER_CONFIGURATION, code);
+	if (ret != 0) {
+		return ret;
+	}
 
-	spi_nand_page_read(dev, 0x01, dest);
-	ret = set_features(dev, REGISTER_CONFIGURATION, current_config);
-	
-	return ret;
+	ret = spi_nand_page_read(dev, 0x01, dest);
+	int restore_ret = set_features(dev, REGISTER_CONFIGURATION, current_config);
+	return ret != 0 ? ret : restore_ret;
 }
 
 // since spi_nand_page_read only works on one flash, we have to do work to make it work 
@@ -704,8 +685,11 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 	current_reads++;
 	acquire_device(dev);
 	LOG_DBG("reading bytes at address %ld", page_addr);
-	nrfx_err_t res = 0;
+	int res = 0;
 	int wait_res = 0;
+	uint8_t reg_status = 0;
+	uint8_t ecc_status;
+	int status;
 
 	uint8_t addr_buf[] = {
 		page_addr >> 16,
@@ -735,21 +719,25 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
-	wait_res = spi_flash_wait_until_ready(dev);
+	wait_res = spi_nand_wait_until_ready(dev, NAND_PAGE_READ_TIMEOUT_US,
+					   &reg_status);
+	if (wait_res != 0) {
+		LOG_WRN("read completion error: %d", wait_res);
+		goto out;
+	}
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
-	if (res != 0 || wait_res != 0) {
+	if (res != 0) {
 		LOG_WRN("buffer transfer error: %x", res);
 		goto out;
 	}
 
 out:
-	uint8_t reg_status = spi_rdsr(dev);
-	uint8_t ecc_status = (reg_status >> 4) & 0x07U;
-	int status = res != 0 ? (int)res : wait_res;
+	ecc_status = (reg_status >> 4) & 0x07U;
+	status = res != 0 ? (int)res : wait_res;
 
 	LOG_DBG("finished read! with status 0x%02x", reg_status);
-	switch (ecc_status) {
+	switch (status == 0 ? ecc_status : 0U) {
 	case 0:
 		break;
 	case 1:
@@ -788,10 +776,13 @@ out:
 
 
 int spi_nand_page_write(const struct device* dev, off_t page_address, const void* src, size_t size){
+	int disable_ret;
+	int ret;
+	uint8_t status = 0;
+
 	current_writes++;
 	acquire_device(dev);
 	LOG_DBG("writing %d bytes at address %ld", size, page_address);
-	nrfx_err_t res = 0;
 
 	uint8_t pe_addr_buf[] = {
 	page_address >> 16,
@@ -815,49 +806,65 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 		.addr = pe_addr_buf,
 		.addr_length = 3
 	};
-	res = write_enable(dev);
-
-	res = spi_nand_access(dev, &pl_cinstr_cfg);
-	if (res != 0) {
-		LOG_WRN("load error: %x", res);
-		release_device(dev);
-		return res;
+	ret = write_enable(dev);
+	if (ret != 0) {
+		goto cleanup;
 	}
 
-	//LOG_DBG("load completed!");
-
-	//Start Execute Process
-
-	res = spi_nand_access(dev, &pe_cinstr_cfg);
-	if (res != 0){
-		LOG_WRN("lfm_start: %x", res);
-		release_device(dev);
-		return res;
+	ret = spi_nand_access(dev, &pl_cinstr_cfg);
+	if (ret != 0) {
+		LOG_WRN("program load failed: %d", ret);
+		goto cleanup;
 	}
-	// wait for operation to finish, issue the get feature command.
-	spi_flash_wait_until_ready(dev);
-	//k_sleep()
-	uint8_t status = spi_rdsr(dev);
-	write_disable(dev);
+
+	ret = spi_nand_access(dev, &pe_cinstr_cfg);
+	if (ret != 0) {
+		int settle_ret;
+
+		LOG_WRN("program execute failed: %d", ret);
+		settle_ret = spi_nand_wait_until_ready(dev,
+					 NAND_PAGE_PROGRAM_TIMEOUT_US, &status);
+		if (settle_ret != 0) {
+			LOG_WRN("program settle failed: %d", settle_ret);
+		}
+		goto cleanup;
+	}
+
+	ret = spi_nand_wait_until_ready(dev, NAND_PAGE_PROGRAM_TIMEOUT_US,
+					&status);
+	if ((ret == 0) && ((status & NAND_STATUS_PROGRAM_FAIL) != 0U)) {
+		LOG_ERR("program failed: status=0x%02x", status);
+		ret = -EIO;
+	} else if (ret == 0) {
+		LOG_DBG("program status=0x%02x", status);
+	}
+
+cleanup:
+	disable_ret = write_disable(dev);
+	if (ret == 0) {
+		ret = disable_ret;
+	} else if (disable_ret != 0) {
+		LOG_WRN("program write disable failed: %d", disable_ret);
+	}
 	release_device(dev);
-	LOG_DBG("write completed! with status %i", status);
-	if (status != 0){
-		LOG_WRN("page write returned status %d", status);
+	LOG_DBG("write completed with result %d", ret);
+	if (ret != 0) {
+		LOG_WRN("page write returned %d", ret);
 	}
-	
-	return status;
-
+	return ret;
 }
 
 
 
 // addr is the first page of the block
 int spi_nand_block_erase(const struct device* dev, off_t addr){
+	int disable_ret;
+	int ret;
+	uint8_t status = 0;
+
 	acquire_device(dev);
 	current_erases++;
 
-	//LOG_DBG("erasing block at %d", block_addr);
-	write_enable(dev);
 	uint8_t pe_addr_buf[] = {
 	addr >> 16,
 	addr >> 8,
@@ -869,17 +876,44 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 		.addr = pe_addr_buf,
 		.addr_length = 3
 	};
-	
 
-	spi_nand_access(dev, &erase);
-	spi_flash_wait_until_ready(dev);
-	int status = spi_rdsr(dev);
-	write_disable(dev);
-	LOG_DBG("erase completed! with status %i", status);
+	ret = write_enable(dev);
+	if (ret != 0) {
+		goto cleanup;
+	}
+
+	ret = spi_nand_access(dev, &erase);
+	if (ret != 0) {
+		int settle_ret;
+
+		LOG_WRN("block erase command failed: %d", ret);
+		settle_ret = spi_nand_wait_until_ready(dev,
+					 NAND_BLOCK_ERASE_TIMEOUT_US, &status);
+		if (settle_ret != 0) {
+			LOG_WRN("block erase settle failed: %d", settle_ret);
+		}
+		goto cleanup;
+	}
+
+	ret = spi_nand_wait_until_ready(dev, NAND_BLOCK_ERASE_TIMEOUT_US,
+					&status);
+	if ((ret == 0) && ((status & NAND_STATUS_ERASE_FAIL) != 0U)) {
+		LOG_ERR("block erase failed: status=0x%02x", status);
+		ret = -EIO;
+	} else if (ret == 0) {
+		LOG_DBG("block erase status=0x%02x", status);
+	}
+
+cleanup:
+	disable_ret = write_disable(dev);
+	if (ret == 0) {
+		ret = disable_ret;
+	} else if (disable_ret != 0) {
+		LOG_WRN("erase write disable failed: %d", disable_ret);
+	}
 	release_device(dev);
-
-	return status;
-
+	LOG_DBG("erase completed with result %d", ret);
+	return ret;
 }
 
 
@@ -989,24 +1023,54 @@ static int spi_read_jedec_id(const struct device *dev,
 	return ret;
 }
 
-static int flash_reset_and_unlock(const struct device* dev){
-	
+static int flash_reset_and_unlock(const struct device *dev)
+{
+	const struct spi_flash_config *cfg = dev->config;
+	uint8_t status = 0;
+	int restore_ret;
+	int ret;
+
 	/* Check for block protect bits that need to be cleared.  This
 	* information cannot be determined from SFDP content, so the
 	* devicetree node property must be set correctly for any device
 	* that powers up with block protect enabled.
 	*/
 	acquire_device(dev);
-	reset(dev);
-	spi_flash_wait_until_ready(dev);
-	int ret = spi_unlock_memory(dev);
-	uint8_t status = spi_rdsr(dev);
-	uint8_t configuration = get_features(dev, REGISTER_CONFIGURATION);
-	uint8_t blocklock = get_features(dev, REGISTER_BLOCKLOCK);
-	LOG_DBG("NAND registers: status=%d configuration=%i blocklock=%i",
-		status, configuration, blocklock);
+	ret = spi_nand_reset(dev);
+	/* A RESET transfer error is ambiguous, so keep the bus quiet regardless. */
+	k_sleep(K_USEC(NAND_RESET_NO_COMMAND_US));
+	if (ret != 0) {
+		goto out;
+	}
+	ret = spi_nand_wait_until_ready(dev, NAND_RESET_POLL_TIMEOUT_US,
+					&status);
+	if (ret != 0) {
+		goto out;
+	}
+
+	current_die[current_flash] = 0;
+	for (int die = 0; die < cfg->dies_per_flash; die++) {
+		ret = set_die(dev, die);
+		if (ret != 0) {
+			break;
+		}
+		ret = spi_unlock_memory(dev);
+		if (ret != 0) {
+			break;
+		}
+		LOG_DBG("NAND package %d die %d unlocked; reset status=0x%02x",
+			current_flash, die, status);
+	}
+
+	restore_ret = set_die(dev, 0);
+	if (ret == 0) {
+		ret = restore_ret;
+	} else if (restore_ret != 0) {
+		LOG_WRN("failed to restore die 0: %d", restore_ret);
+	}
+
+out:
 	release_device(dev);
-	
 	return ret;
 }
 
@@ -1070,9 +1134,7 @@ static int spi_configure(const struct device *dev, const struct spi_flash_config
 		return -EINVAL;
 	}
 
-	flash_reset_and_unlock(dev); 
-
-	return 0;
+	return flash_reset_and_unlock(dev);
 }
 
 #ifdef CONFIG_PM_DEVICE
@@ -1197,168 +1259,4 @@ void print_page_hex(uint8_t* data_buf, int size, bool shorten){
 		}
 	}
 	printk("\n end \n");
-}
-
-
-static int spi_nand_read_template(const struct device *dev, off_t addr, void *dest,
-			size_t size)
-{
-	
-	const size_t flash_size = dev_die_size(dev);
-	int ret;
-
-	/* should be between 0 and flash size */
-	if ((addr < 0) || ((addr + size) > flash_size)) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-
-	//CODE GOES HERE
-	
-
-	release_device(dev);
-	return ret;
-}
-
-
-static int spi_nand_write_template(const struct device *dev, off_t addr,
-			const void *src,
-			size_t size)
-{
-	
-	const size_t flash_size = dev_die_size(dev);
-	const uint16_t page_size = dev_page_size(dev);
-	int ret = 0;
-
-	/* should be between 0 and flash size */
-	if ((addr < 0) || ((size + addr) > flash_size)) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-	
-	ret = spi_nor_write_protection_set(dev, false);
-	if (ret == 0) {
-		while (size > 0) {
-			size_t to_write = size;
-
-			/* Don't write more than a page. */
-			if (to_write >= page_size) {
-				to_write = page_size;
-			}
-
-			/* Don't write across a page boundary */
-			if (((addr + to_write - 1U) / page_size)
-			!= (addr / page_size)) {
-				to_write = page_size - (addr % page_size);
-			}
-
-			write_enable(dev);
-			//ret = spi_nor_cmd_addr_write(dev, SPI_NOR_CMD_PP, addr,
-			//			src, to_write);
-			spi_nand_page_write(dev, addr, src, to_write);
-			if (ret != 0) {
-				break;
-			}
-
-			size -= to_write;
-			src = (const uint8_t *)src + to_write;
-			addr += to_write;
-
-			spi_flash_wait_until_ready(dev);
-		}
-	}
-
-	int ret2 = spi_nor_write_protection_set(dev, true);
-
-	if (!ret) {
-		ret = ret2;
-	}
-
-	release_device(dev);
-	return ret;
-}
-
-
-static int spi_nand_erase_template(const struct device *dev, off_t addr, size_t size)
-{
-	current_erases++;
-	const size_t flash_size = dev_die_size(dev);
-	int ret = 0;
-
-	/* erase area must be subregion of device */
-	if ((addr < 0) || ((size + addr) > flash_size)) {
-		return -EINVAL;
-	}
-
-	/* address must be sector-aligned */
-	if (!SPI_NOR_IS_SECTOR_ALIGNED(addr)) {
-		return -EINVAL;
-	}
-
-	/* size must be a multiple of sectors */
-	if ((size % SPI_NOR_SECTOR_SIZE) != 0) {
-		return -EINVAL;
-	}
-
-	acquire_device(dev);
-	ret = spi_nor_write_protection_set(dev, false);
-
-	while ((size > 0) && (ret == 0)) {
-		write_enable(dev);
-
-		if (size == flash_size) {
-			/* chip erase */
-			//spi_nor_cmd_write(dev, SPI_NOR_CMD_CE);
-			size -= flash_size;
-		} else {
-			const struct jesd216_erase_type *erase_types =
-				dev_erase_types(dev);
-			const struct jesd216_erase_type *bet = NULL;
-
-			for (uint8_t ei = 0; ei < JESD216_NUM_ERASE_TYPES; ++ei) {
-				const struct jesd216_erase_type *etp =
-					&erase_types[ei];
-
-				if ((etp->exp != 0)
-					&& SPI_NOR_IS_ALIGNED(addr, etp->exp)
-					&& (size >= BIT(etp->exp))
-					&& ((bet == NULL)
-					|| (etp->exp > bet->exp))) {
-					bet = etp;
-				}
-			}
-			if (bet != NULL) {
-				//spi_nor_cmd_addr_write(dev, bet->cmd, addr, NULL, 0);
-				addr += BIT(bet->exp);
-				size -= BIT(bet->exp);
-			} else {
-				LOG_DBG("Can't erase %zu at 0x%lx",
-					size, (long)addr);
-				ret = -EINVAL;
-			}
-		}
-#ifdef __XCC__
-		/*
-		* FIXME: remove this hack once XCC is fixed.
-		*
-		* Without this volatile return value, XCC would segfault
-		* compiling this file complaining about failure in CGPREP
-		* phase.
-		*/
-		volatile int xcc_ret =
-#endif
-		spi_flash_wait_until_ready(dev);
-	}
-
-	int ret2 = spi_nor_write_protection_set(dev, true);
-
-	if (!ret) {
-		ret = ret2;
-	}
-
-	release_device(dev);
-
-	return ret;
 }

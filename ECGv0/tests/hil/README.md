@@ -13,7 +13,9 @@ does not instrument page writes or test the NAND alignment invariant directly.
 - Connect the ECG USB CDC/MSC interface and an external probe configured for the
   ECG target. This runner drives the ECG directly; no Central is used.
 - Identify the probe serial, ELF, CDC port, ECG USB serial, MSC drive, and a new
-  evidence directory. Do not infer them from historical COM or drive letters.
+  evidence directory. The output directory must not already exist; if it does,
+  the runner exits without changing it. Do not infer values from historical COM
+  or drive letters.
 - Start awake and idle, or pass `--wake-first`; the first short release then only
   wakes the device. Never substitute a long press.
 - Before the baseline snapshot, perform an explicitly reviewed normal FatFS
@@ -54,8 +56,17 @@ python ECGv0/tests/hil/run_cleanup_hil.py run `
   --port <COM-port> --usb-serial <ECG-USB-serial> `
   --drive <MSC-root> --output <new-evidence-directory> `
   --wake-first --format-argv-json <reviewed-format-argv.json> `
+  --preflight-log <complete-native-boot-log.txt> `
   --acquisition-seconds 30
 ```
+
+`--preflight-log` accepts one or more complete native logs captured after the
+format/reboot and before acquisition. The runner preserves and scans them for
+NAND initialization, package/die setup, mount, timeout/`-ETIMEDOUT`,
+`P_FAIL`/`E_FAIL`, and SPIM4/shared-storage-bus errors. It does not require a
+success string: current production logging may be silent on successful setup.
+If no complete log is available, the summary records `NOT_PROVIDED`; initial
+driver setup is then a manual observability gap, not a tested pass.
 
 For each session the runner starts a fixed-duration UART capture, injects one normal start
 release, performs no probe/debug access during acquisition, injects one stop
@@ -77,6 +88,9 @@ such failure from a storage subsystem fails the run; unrelated sensor-register
 and connection messages are not storage failures. Bad-block lines are reported
 separately
 in `summary.json` because bad-block behavior is outside this campaign.
+After each session, the runner also requires every file present after the
+previous phase—including `uuid.txt` and all earlier recordings—to remain
+present with the same SHA-256 content hash.
 
 An optional post-session reset/remount persistence check accepts a JSON file
 containing the exact reset command as an argv array:
@@ -94,11 +108,11 @@ the supported system-reset procedure for the connected target.
 - Each session creates unique files: at least one fixed 4 MiB ECF2/ECB2 ECG
   recording, one ACF3/ACB1 accelerometer recording with its ACT2 trailer at the
   existing endpoint, and one storage log.
-- Existing recording files are unchanged, the two ECG recording IDs differ,
+- Every prior file is byte-identical after each later session, the two ECG recording IDs differ,
   and CRC/structure/sample checks pass using the proven validators.
 - Each new storage log contains, in order: `Leaving ECG collection mode`,
   `Closing storage log`, and `Storage log end`.
-- If requested, reset/remount preserves byte-identical files and they validate
+- If requested, reset/remount preserves every prior file byte-identically and recordings validate
   again.
 
 `summary.json` is the machine-readable result; any failed required check makes

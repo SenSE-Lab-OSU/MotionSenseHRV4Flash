@@ -41,13 +41,6 @@ int create_test_file(int writes);
 
 int create_test_files(int number_of_files);
 
-int write_to_file(const void* data, size_t size);
-
-
-
-void reset_log_file();
-
-
 int submit_write(const void* data, size_t size, enum sensor_type type);
 
 

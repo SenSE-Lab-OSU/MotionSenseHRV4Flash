@@ -3,7 +3,7 @@
 extern bool VerifyWrites;
 extern bool CheckDuplicateAccess;
 
-extern struct disk_info sdmmc_disk;
+extern struct disk_info nand_disk;
 
 void set_read_only(bool enable);
 

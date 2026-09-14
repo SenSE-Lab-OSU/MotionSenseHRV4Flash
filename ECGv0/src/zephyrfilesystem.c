@@ -1258,7 +1258,7 @@ int test_desk_driver(){
 	// you can do:
 	//const struct device* filesystem_device = DEVICE_DT_INST_GET(0);
 	// OR
-	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	const struct device* filesystem_device2 = nand_disk.dev;
 	spi_nand_page_write(filesystem_device2, 63, write_buf, sizeof(read_buf));
 	spi_nand_page_write(filesystem_device2, 64, write_buf, sizeof(read_buf));
 	spi_nand_page_read(filesystem_device2, 63, read_buf);

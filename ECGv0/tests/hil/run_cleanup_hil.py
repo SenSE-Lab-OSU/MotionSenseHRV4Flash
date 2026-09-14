@@ -29,15 +29,18 @@ ACCEL_NAME = re.compile(r"^(?:\d+)?ac\d+_\d{4}\.bin$", re.IGNORECASE)
 LOG_NAME = re.compile(r"^(?:\d+)?log\d+\.txt$", re.IGNORECASE)
 FILE_BYTES = 4 * 1024 * 1024
 STORAGE_CONTEXT = re.compile(
-    r"\b(?:nand|spi_nand|nand_disk|fatfs|filesystem|zephyrfilesystem|dhara|disk)\b|"
+    r"\b(?:nand|spi_nand|nand_disk|nor|spi_nor|fatfs|filesystem|zephyrfilesystem|dhara|disk|fs)\b|"
+    r"\b(?:spi4|spim4|nrfx_spim|spi[-_ ]controller|storage[-_ ]bus)\b|"
     r"\bstorage(?:\b|_)|\b(?:double|duplicate)[-_ ]program\b|"
     r"\b(?:duplicate|reused?)[-_ ](?:logical|physical)?[-_ ]?page\b",
     re.IGNORECASE,
 )
 ERROR_WORD = re.compile(
     r"fail(?:ed|ure|s)?|errors?|fault|corrupt(?:ed|ion)?|uncorrectable|"
-    r"\bEIO\b|\berr\b|\bret\b|duplicate|mismatch|reject(?:ed|ing)?|too big|"
-    r"returned status|lfm_start|<err>",
+    r"\bEIO\b|\berr\b|\bret\b|duplicate|mismatch|does not match|unable|"
+    r"couldn'?t|not ready|reject(?:ed|ing)?|too big|"
+    r"returned status|lfm_start|timeout|timed out|ETIMEDOUT|"
+    r"(?:P_FAIL|E_FAIL)\s*(?:=|:)?\s*1\b|<err>",
     re.IGNORECASE,
 )
 BAD_BLOCK = re.compile(r"bad[ _-]?blocks?", re.IGNORECASE)
@@ -72,6 +75,36 @@ def snapshot(root: Path) -> dict[str, dict[str, int]]:
     return result
 
 
+def content_snapshot(root: Path) -> dict[str, str]:
+    if not root.is_dir():
+        raise HilError(f"MSC drive is not readable: {root}")
+    return {path.relative_to(root).as_posix(): sha256(path)
+            for path in sorted(candidate for candidate in root.iterdir()
+                               if candidate.is_file())}
+
+
+def require_preserved(root: Path, expected: dict[str, str]) -> dict[str, object]:
+    for name, digest in expected.items():
+        path = root / name
+        if not path.is_file():
+            raise HilError(f"prior file was deleted: {name}")
+        if sha256(path) != digest:
+            raise HilError(f"prior file content changed: {name}")
+    return {"result": "PASS", "files": sorted(expected)}
+
+
+def create_output_directory(output: Path) -> None:
+    if output.exists():
+        raise HilError(f"output directory already exists: {output}")
+    output.mkdir(parents=True)
+
+
+def write_summary(output: Path, summary: dict[str, object], created: bool) -> None:
+    if created:
+        (output / "summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
+
 def wait_for_snapshot(root: Path, timeout: float, settle: float) -> dict[str, dict[str, int]]:
     deadline = time.monotonic() + timeout
     previous = None
@@ -100,10 +133,6 @@ def is_recording_name(name: str) -> bool:
 
 def new_recordings(before: dict[str, dict[str, int]],
                    after: dict[str, dict[str, int]]) -> list[str]:
-    changed = [name for name in before if name in after and before[name] != after[name]
-               and is_recording_name(name)]
-    if changed:
-        raise HilError("existing recording files changed: " + ", ".join(changed))
     return sorted(name for name in after if name not in before and is_recording_name(name))
 
 
@@ -118,7 +147,9 @@ def scan_storage_errors(text: str) -> dict[str, object]:
                               line, re.IGNORECASE)
         if counters and "tot " in line.lower() and all(int(value) == 0 for value in counters):
             continue
-        if STORAGE_CONTEXT.search(line) and ERROR_WORD.search(line):
+        evaluated = re.sub(r"(?:P_FAIL|E_FAIL)\s*(?:=|:)?\s*0\b", "", line,
+                           flags=re.IGNORECASE)
+        if STORAGE_CONTEXT.search(line) and ERROR_WORD.search(evaluated):
             failures.append(line)
     if failures:
         raise HilError("UART reported NAND/storage errors: " + " | ".join(failures))
@@ -147,6 +178,23 @@ def revalidate_evidence(paths: list[Path], summary_path: Path | None) -> int:
     return 0 if summary["result"] == "PASS" else 1
 
 
+def collect_preflight(paths: list[Path] | None, destination: Path) -> dict[str, object]:
+    if not paths:
+        return {"result": "NOT_PROVIDED",
+                "observability": "no complete native boot/preflight log supplied"}
+    destination.mkdir()
+    files = []
+    for index, source in enumerate(paths, 1):
+        if not source.is_file():
+            raise HilError(f"preflight log is absent: {source}")
+        target = destination / f"{index:02d}-{source.name}"
+        shutil.copy2(source, target)
+        scan = scan_storage_errors(target.read_text(encoding="utf-8", errors="replace"))
+        files.append({"source": str(source), "evidence": str(target),
+                      "sha256": sha256(target), "storage_scan": scan})
+    return {"result": "PASS", "files": files}
+
+
 def run_argv_file(path: Path, label: str, output: Path) -> dict[str, object]:
     command = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
@@ -156,7 +204,8 @@ def run_argv_file(path: Path, label: str, output: Path) -> dict[str, object]:
     output.with_suffix(".stderr.txt").write_text(completed.stderr, encoding="utf-8")
     if completed.returncode != 0:
         raise HilError(f"{label} command failed with code {completed.returncode}")
-    return {"result": "PASS", "argv_json": str(path), "exit_code": completed.returncode}
+    return {"result": "PASS", "argv_json": str(path), "exit_code": completed.returncode,
+            "storage_scan": scan_storage_errors(completed.stdout + "\n" + completed.stderr)}
 
 
 def load_module(path: Path, name: str):
@@ -337,7 +386,7 @@ def validate_files(validator, paths: list[Path]) -> dict[str, object]:
     }
 
 
-def run_session(args, index: int, before, button, validator, output: Path):
+def run_session(args, index: int, before, prior_hashes, button, validator, output: Path):
     session_dir = output / f"session-{index}"
     session_dir.mkdir(parents=True, exist_ok=False)
     process = stdout = stderr = None
@@ -357,26 +406,24 @@ def run_session(args, index: int, before, button, validator, output: Path):
             (session_dir / "uart.txt").read_text(encoding="utf-8", errors="replace"))
         after, selected = wait_for_files(args.drive, before, args.remount_timeout,
                                          args.settle_seconds)
+        preservation = require_preserved(args.drive, prior_hashes)
+        current_hashes = content_snapshot(args.drive)
         (session_dir / "post.json").write_text(
             json.dumps(after, indent=2) + "\n", encoding="utf-8")
         copied = copy_selected(args.drive, selected, session_dir / "new-files")
         validation = validate_files(validator, copied)
-        return after, {
+        return after, current_hashes, {
             "session": index, "result": "PASS", "buttons": buttons,
             "uart": capture, "uart_storage_scan": uart_scan,
-            "new_files": selected, "validation": validation,
+            "new_files": selected, "prior_files": preservation,
+            "validation": validation,
         }
     finally:
         stop_capture(process, stdout, stderr)
 
 
-def reset_and_verify(args, sessions: list[dict[str, object]]) -> dict[str, object]:
-    command = json.loads(args.reset_argv_json.read_text(encoding="utf-8"))
-    if not isinstance(command, list) or not command or not all(isinstance(x, str) for x in command):
-        raise HilError("reset argv JSON must be a non-empty array of strings")
-    completed = subprocess.run(command, text=True, capture_output=True)
-    if completed.returncode != 0:
-        raise HilError("reset command failed: " + (completed.stdout + completed.stderr).strip())
+def reset_and_verify(args, sessions: list[dict[str, object]], prior_hashes) -> dict[str, object]:
+    control = run_argv_file(args.reset_argv_json, "reset", args.output / "reset")
     deadline = time.monotonic() + args.remount_timeout
     expected = []
     for session in sessions:
@@ -385,12 +432,15 @@ def reset_and_verify(args, sessions: list[dict[str, object]]) -> dict[str, objec
                         for name in session["new_files"])
     while time.monotonic() < deadline:
         try:
+            preservation = require_preserved(args.drive, prior_hashes)
             for saved, live in expected:
                 if not live.is_file() or sha256(live) != sha256(saved):
                     raise OSError(f"persistence mismatch: {live}")
             validation = validate_files(load_module(args.validator_tool, "ecg_validator_reset"),
                                         [live for _, live in expected])
-            return {"result": "PASS", "files": len(expected), "validation": validation}
+            return {"result": "PASS", "files": len(expected),
+                    "control": control, "prior_files": preservation,
+                    "validation": validation}
         except (OSError, HilError):
             time.sleep(0.5)
     raise HilError("reset/remount persistence validation timed out")
@@ -426,13 +476,61 @@ def self_test() -> None:
         for failure in ("filesystem write failed: -5 EIO",
                         "<err> spi_nand: NAND ECC uncorrectable",
                         "<wrn> spi_nand: page write returned status 8",
-                        "<wrn> spi_nand: err block erase 3: -5"):
+                        "<wrn> spi_nand: err block erase 3: -5",
+                        "nand_disk initialization failed: -5",
+                        "fatfs mount timed out: -110 ETIMEDOUT",
+                        "spi4 controller fault while accessing storage bus",
+                        "spi_nand status P_FAIL=1",
+                        "spi_nor: JEDEC ID read failed: -5"):
             try:
                 scan_storage_errors(failure)
             except HilError:
                 pass
             else:
                 raise AssertionError("storage failure was accepted")
+        assert scan_storage_errors("spi_nand status P_FAIL=0 E_FAIL=0")["result"] == "PASS"
+
+        preserved = content_snapshot(root)
+        victim = root / "uuid.txt"
+        original = victim.read_bytes()
+        victim.unlink()
+        try:
+            require_preserved(root, preserved)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("deleted prior file was accepted")
+        victim.write_bytes(original)
+        victim.write_bytes(b"X" * len(original))
+        try:
+            require_preserved(root, preserved)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("same-size prior-file corruption was accepted")
+        victim.write_bytes(original)
+        assert require_preserved(root, preserved)["result"] == "PASS"
+
+        existing = root / "existing-output"
+        existing.mkdir()
+        (existing / "summary.json").write_text("sentinel", encoding="utf-8")
+        (existing / "evidence.bin").write_bytes(b"evidence")
+        output_before = content_snapshot(existing)
+        created = False
+        try:
+            create_output_directory(existing)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("existing output directory was accepted")
+        finally:
+            write_summary(existing, {"result": "FAIL"}, created)
+        assert content_snapshot(existing) == output_before
+
+        boot = root / "boot.txt"
+        boot.write_text("spi_nand status P_FAIL=0 E_FAIL=0", encoding="utf-8")
+        preflight = collect_preflight([boot], root / "preflight")
+        assert preflight["result"] == "PASS" and preflight["files"][0]["sha256"]
     print("run_cleanup_hil.py self-test: PASS (no hardware access)")
 
 
@@ -466,6 +564,8 @@ def parse_args(argv=None):
     run.add_argument("--allow-port-change", action="store_true")
     run.add_argument("--reset-argv-json", type=Path,
                      help="optional JSON argv array for reset/remount persistence check")
+    run.add_argument("--preflight-log", type=Path, nargs="+",
+                     help="complete native boot/preflight logs to preserve and scan")
     clean = run.add_mutually_exclusive_group(required=True)
     clean.add_argument("--format-argv-json", type=Path,
                        help="JSON argv array for an explicitly reviewed normal FatFS format command")
@@ -500,10 +600,10 @@ def main(argv=None) -> int:
         "usb_serial": args.usb_serial, "port": args.port, "drive": str(args.drive),
         "sessions": [],
     }
+    output_created = False
     try:
-        if args.output.exists():
-            raise HilError(f"output directory already exists: {args.output}")
-        args.output.mkdir(parents=True)
+        create_output_directory(args.output)
+        output_created = True
         if not args.elf.is_file():
             raise HilError(f"ELF is absent: {args.elf}")
         summary["elf_sha256"] = sha256(args.elf)
@@ -527,10 +627,13 @@ def main(argv=None) -> int:
                            ", ".join(stale))
         (args.output / "baseline.json").write_text(
             json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+        summary["preflight"] = collect_preflight(args.preflight_log,
+                                                  args.output / "preflight")
+        prior_hashes = content_snapshot(args.drive)
         recording_ids = []
         for index in (1, 2):
-            baseline, session = run_session(args, index, baseline, button,
-                                            validator, args.output)
+            baseline, prior_hashes, session = run_session(
+                args, index, baseline, prior_hashes, button, validator, args.output)
             summary["sessions"].append(session)
             session_ids = {entry["recording_id"]
                            for entry in session["validation"]["ecg"]}
@@ -540,7 +643,8 @@ def main(argv=None) -> int:
         if len(set(recording_ids)) != 2:
             raise HilError("two sessions did not produce two unique ECG recording IDs")
         if args.reset_argv_json:
-            summary["reset_persistence"] = reset_and_verify(args, summary["sessions"])
+            summary["reset_persistence"] = reset_and_verify(
+                args, summary["sessions"], prior_hashes)
         summary["result"] = "PASS"
         return_code = 0
     except Exception as error:
@@ -548,9 +652,7 @@ def main(argv=None) -> int:
         return_code = 1
     finally:
         summary["ended_utc"] = utc_now()
-        if args.output.exists():
-            (args.output / "summary.json").write_text(
-                json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        write_summary(args.output, summary, output_created)
     print(json.dumps(summary, indent=2))
     return return_code
 

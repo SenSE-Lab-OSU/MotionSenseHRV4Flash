@@ -6,14 +6,13 @@
 
 /*
  * NAND flash disk driver with unique lightweight Flash Translation Layer (FTL) that uses an external NOR for simplified ECC.
- * avalible via zephyr SD subsystem
+ * available through Zephyr's disk subsystem
  */
 
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/flash.h>
-#include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/sys/crc.h>
 #include "bad_page.h"
@@ -23,13 +22,6 @@
 #define DT_DRV_COMPAT senselab_nanddisk
 
 LOG_MODULE_REGISTER(nand_disk, 3);
-
-enum sd_status {
-	SD_UNINIT,
-	SD_ERROR,
-	SD_OK,
-};
-
 
 // File System Controls
 // on write, checks whether the a certain page is already written to. 
@@ -63,18 +55,6 @@ bool read_only = false;
  * that while still blocking other threads. A binary semaphore would deadlock. */
 K_MUTEX_DEFINE(disk_access_mutex);
 
-
-#define FILE_TABLE_NAND_PARTITION	slot0_partition
-
-
-#ifdef CONFIG_PARTITION_MANAGER_ENABLED
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(PM_FATFILETABLE_PARTITION_NAME)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(PM_FATFILETABLE_PARTITION_NAME)
-#else
-
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(FILE_TABLE_NAND_PARTITION)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
-#endif 
 
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_ALIAS(storage_nor))
 #define FILETABLE_PARTITION_OFFSET 0
@@ -138,9 +118,15 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
+	int ret;
+
 	// the stored crcs no longer describe the (now blank) sectors
 	memset(file_table_crc_valid, 0, sizeof(file_table_crc_valid));
-	return flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET, file_table_sector_num*4096);
+	storage_spi_bus_lock();
+	ret = flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET,
+			  file_table_sector_num * 4096);
+	storage_spi_bus_unlock();
+	return ret;
 }
 
 
@@ -152,14 +138,13 @@ static int file_table_access(void* buf, int sector_num, bool write){
 	int ret;
 	LOG_DBG("accessing file table, sect %d", sector_num);
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
-	struct flash_pages_info* page_info_ptr;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*sector_num);
-	//flash_get_page_info_by_offs(soc_flash, address, page_info_ptr);
 	//sector cannot be greater than the allocated file table segment size
 	if ((sector_num < 0) || (sector_num >= file_table_sector_num)){
 		LOG_ERR("sector num %d too big for file allocation table", sector_num);
 		return -1;
 	}
+	storage_spi_bus_lock();
 
 	if (write){
 		// remember what this sector is supposed to contain so reads can be checked against it
@@ -170,7 +155,7 @@ static int file_table_access(void* buf, int sector_num, bool write){
 		if (ret != 0){
 			nor_fails++;
 			LOG_ERR("nor flash erase failure! tot %d", nor_fails);
-			return ret;
+			goto out;
 		}
 		ret = flash_write(soc_flash, address, buf, 4096);
 		if (ret != 0){
@@ -197,6 +182,8 @@ static int file_table_access(void* buf, int sector_num, bool write){
 			LOG_ERR("nor failed to read! tot err: %d", nor_fails);
 		}
 	}
+out:
+	storage_spi_bus_unlock();
 	return ret;
 }
 
@@ -217,21 +204,8 @@ bool get_read_only(){
 
 
 
-static int disk_nand_access_init(struct disk_info *disk)
-{
-	const struct device* dev = disk->dev;
-	
-	int sucess = spi_init(dev);
-	if (sucess != 0){
-		LOG_WRN("disk_nand_init failed %d", sucess);
-	}
-	
-	
-	return 0;
-}
-
-
-static int disk_acess_init2(struct disk_info *disk){
+static int nand_disk_noop_init(struct disk_info *disk){
+	ARG_UNUSED(disk);
 
 	#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
 	//load_bad_sectors_arr();
@@ -241,24 +215,8 @@ static int disk_acess_init2(struct disk_info *disk){
 
 static int disk_nand_access_status(struct disk_info *disk)
 {
+	ARG_UNUSED(disk);
 	//LOG_DBG("Accessing Status");
-	const struct device* dev = disk->dev;
-	
-	// need to test to see if this actually works, have not verified yet
-	const struct spi_flash_config* cfg = dev->config;
-	struct spi_nor_data* data = dev->data;
-	/*
-	if (!sd_is_card_present(cfg->host_controller)) {
-		return DISK_STATUS_NOMEDIA;
-	}
-	if (data->status == SD_OK) {
-		return DISK_STATUS_OK;
-	} else {
-		return DISK_STATUS_UNINIT;
-	}
-	*/
-	//uint8_t status = spi_rdsr(dev);
-	
 	if (read_only){
 		//return DISK_STATUS_WR_PROTECT;
 		return DISK_STATUS_OK;
@@ -421,30 +379,24 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
 		(*(uint32_t *)buf) = dev_pages_per_erase_block(dev);
 		break;
 	case DISK_IOCTL_CTRL_SYNC:
-		/* Ensure card is not busy with data write.
-		 * Note that SD stack does not support enabling caching, so
-		 * cache flush is not required here
-		 */
-		return 0; //spi_flash_wait_until_ready(dev);
+		/* NAND operations complete synchronously and have no disk cache. */
+		return 0;
 	default:
 		return -ENOTSUP;
 	}
 	return 0;
-
-
-	return 0; //sdmmc_ioctl(&data->card, cmd, buf);
 }
 
-static const struct disk_operations sdmmc_disk_ops = {
-	.init = disk_acess_init2,
+static const struct disk_operations nand_disk_ops = {
+	.init = nand_disk_noop_init,
 	.status = disk_nand_access_status,
 	.read = disk_nand_access_read,
 	.write = disk_nand_access_write,
 	.ioctl = disk_nand_access_ioctl,
 };
 
-struct disk_info sdmmc_disk = {
-	.ops = &sdmmc_disk_ops,
+struct disk_info nand_disk = {
+	.ops = &nand_disk_ops,
 };
 
 #define CONFIG_SPI_FLASH_LAYOUT_PAGE_SIZE 4096
@@ -462,9 +414,9 @@ BUILD_ASSERT(DT_INST_NODE_HAS_PROP(0, pages_per_erase_block),
 	     "nanddisk pages-per-erase-block is required");
 BUILD_ASSERT(DT_INST_PROP(0, num_flashchips) <= 4,
 	     "the MT29 driver supports at most four DTS-described packages");
-BUILD_ASSERT(DT_PROP_LEN(DT_BUS(DT_DRV_INST(0)), cs_gpios) ==
+BUILD_ASSERT(DT_PROP_LEN(DT_BUS(DT_DRV_INST(0)), cs_gpios) >=
 	     DT_INST_PROP(0, num_flashchips),
-	     "nanddisk num-flashchips must equal its SPI controller cs-gpios count");
+	     "nanddisk needs at least num-flashchips SPI controller chip selects");
 BUILD_ASSERT(DT_INST_PROP(0, page_size) == 4096,
 	     "raw NAND disk sectors must be 4096-byte NAND pages");
 BUILD_ASSERT(DT_INST_PROP(0, pages_per_erase_block) == NAND_PAGES_PER_ERASE_BLOCK,
@@ -561,27 +513,26 @@ static struct spi_nor_data spi_nor_data_0;
 
 
 
-static int disk_sdmmc_init(const struct device *dev)
+static int nand_disk_device_init(const struct device *dev)
 {
-	//struct sdmmc_data* data = dev->data;
-	//data->status = SD_UNINIT;
+	int ret;
 
-	//spi_nor_data* nand_data = dev->data;
-
-	sdmmc_disk.dev = dev;
-	sdmmc_disk.name = "SD";//dev->name;
-	int status = disk_nand_access_init(&sdmmc_disk);
-	return disk_access_register(&sdmmc_disk);
+	nand_disk.dev = dev;
+	nand_disk.name = "SD";
+	ret = spi_init(dev);
+	if (ret != 0) {
+		LOG_ERR("NAND initialization failed: %d", ret);
+		return ret;
+	}
+	return disk_access_register(&nand_disk);
 }
 
 
 	DEVICE_DT_INST_DEFINE(0,						
-			&disk_sdmmc_init,					
+			&nand_disk_device_init,
 			NULL,							
 			&spi_nor_data_0,					
 			&spi_flash_config_0,					
 			POST_KERNEL,						
 			80,				
 			NULL);
-
-//DT_INST_FOREACH_STATUS_OKAY(DISK_ACCESS_SDMMC_INIT)

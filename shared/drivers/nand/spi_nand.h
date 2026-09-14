@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifndef __SPI_NOR_H__
-#define __SPI_NOR_H__
+#ifndef SENSELAB_SPI_NAND_H_
+#define SENSELAB_SPI_NAND_H_
 
 #include <zephyr/sys/util.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/flash.h>
 
 
-//This is the raw nand driver, which does not use any FTL or heap (sram caching.) partial programs are limited to 4.
+/* Raw NAND transport used beneath Dhara; data writes submit complete pages. */
 
 
 #define SPI_MAX_ID_LEN	3
@@ -211,7 +211,7 @@ typedef struct spi_send_request {
 } spi_send_request;
 
 /**
- * struct spi_nor_data - Structure for defining the SPI NOR access
+ * struct spi_nor_data - Runtime synchronization state for SPI NAND access
  * @sem: The semaphore to access to the flash
  */
 struct spi_nor_data {
@@ -269,8 +269,6 @@ uint32_t dev_pages_per_erase_block(const struct device *dev);
 
 uint32_t dev_total_sector_count(const struct device *dev);
 
-int spi_flash_wait_until_ready(const struct device *dev);
-
 uint32_t convert_block_to_page(uint32_t page, uint32_t block);
 
 uint32_t convert_page_to_block(uint32_t page_number);
@@ -278,21 +276,6 @@ uint32_t convert_page_to_block(uint32_t page_number);
 off_t convert_page_to_address(const struct device* dev, uint32_t page);
 
 off_t convert_block_to_singledie_address(uint32_t block);
-
-uint8_t get_features(const struct device* dev, uint8_t register_select);
-
-int set_features(const struct device* dev, uint8_t register_select, uint8_t data);
-
-
-/* Set the Die. if 0, use the first die, if 1, use the second. */
-int set_die(const struct device* dev, int die);
-
-int set_flash(const struct device* dev, int flash_id);
-
-uint8_t spi_rdsr(const struct device *dev);
-
-int spi_nor_wrsr(const struct device *dev,
-			uint8_t sr);
 
 int detect_manufacturer_bad_blocks(const struct device* dev);
 
@@ -317,4 +300,8 @@ int spi_nand_multi_chip_reset_bad_block(const struct device* dev);
 
 int spi_init(const struct device *dev);
 
-#endif /*__SPI_NOR_H__*/
+/* Serializes complete NAND command sequences with the sibling SPI NOR. */
+void storage_spi_bus_lock(void);
+void storage_spi_bus_unlock(void);
+
+#endif /* SENSELAB_SPI_NAND_H_ */

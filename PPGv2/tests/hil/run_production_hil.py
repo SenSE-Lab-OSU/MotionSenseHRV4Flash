@@ -32,15 +32,18 @@ SHUTDOWN_MARKERS = (
     "Storage log end",
 )
 STORAGE_CONTEXT = re.compile(
-    r"\b(?:nand|spi_nand|nand_disk|fatfs|filesystem|zephyrfilesystem|dhara|disk)\b|"
+    r"\b(?:nand|spi_nand|nand_disk|nor|spi_nor|fatfs|filesystem|zephyrfilesystem|dhara|disk|fs)\b|"
+    r"\b(?:spi4|spim4|nrfx_spim|spi[-_ ]controller|storage[-_ ]bus)\b|"
     r"\bstorage(?:\b|_)|\b(?:double|duplicate)[-_ ]program\b|"
     r"\b(?:duplicate|reused?)[-_ ](?:logical|physical)?[-_ ]?page\b",
     re.IGNORECASE,
 )
 ERROR_WORD = re.compile(
     r"fail(?:ed|ure|s)?|errors?|fault|corrupt(?:ed|ion)?|uncorrectable|"
-    r"\bEIO\b|\berr\b|\bret\b|duplicate|mismatch|reject(?:ed|ing)?|too big|"
-    r"returned status|lfm_start|<err>",
+    r"\bEIO\b|\berr\b|\bret\b|duplicate|mismatch|does not match|unable|"
+    r"couldn'?t|not ready|reject(?:ed|ing)?|too big|"
+    r"returned status|lfm_start|timeout|timed out|ETIMEDOUT|"
+    r"(?:P_FAIL|E_FAIL)\s*(?:=|:)?\s*1\b|<err>",
     re.IGNORECASE,
 )
 BAD_BLOCK = re.compile(r"bad[ _-]?blocks?", re.IGNORECASE)
@@ -72,6 +75,36 @@ def snapshot(root: Path) -> dict[str, dict[str, int]]:
     return result
 
 
+def content_snapshot(root: Path) -> dict[str, str]:
+    if not root.is_dir():
+        raise HilError(f"MSC drive is not readable: {root}")
+    return {path.relative_to(root).as_posix(): sha256(path)
+            for path in sorted(candidate for candidate in root.iterdir()
+                               if candidate.is_file())}
+
+
+def require_preserved(root: Path, expected: dict[str, str]) -> dict[str, object]:
+    for name, digest in expected.items():
+        path = root / name
+        if not path.is_file():
+            raise HilError(f"prior file was deleted: {name}")
+        if sha256(path) != digest:
+            raise HilError(f"prior file content changed: {name}")
+    return {"result": "PASS", "files": sorted(expected)}
+
+
+def create_output_directory(output: Path) -> None:
+    if output.exists():
+        raise HilError(f"output directory already exists: {output}")
+    output.mkdir(parents=True)
+
+
+def write_summary(output: Path, summary: dict[str, object], created: bool) -> None:
+    if created:
+        (output / "summary.json").write_text(
+            json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+
+
 def wait_for_snapshot(root: Path, timeout: float, settle: float):
     deadline = time.monotonic() + timeout
     previous = None
@@ -93,10 +126,6 @@ def wait_for_snapshot(root: Path, timeout: float, settle: float):
 
 
 def new_recording_files(before, after) -> list[str]:
-    changed = [name for name in before if name in after and before[name] != after[name]
-               and RECORDING_NAME.fullmatch(name)]
-    if changed:
-        raise HilError("existing recording files changed: " + ", ".join(changed))
     return sorted(name for name in after if name not in before and RECORDING_NAME.fullmatch(name))
 
 
@@ -111,7 +140,9 @@ def scan_storage_errors(text: str) -> dict[str, object]:
                               line, re.IGNORECASE)
         if counters and "tot " in line.lower() and all(int(value) == 0 for value in counters):
             continue
-        if STORAGE_CONTEXT.search(line) and ERROR_WORD.search(line):
+        evaluated = re.sub(r"(?:P_FAIL|E_FAIL)\s*(?:=|:)?\s*0\b", "", line,
+                           flags=re.IGNORECASE)
+        if STORAGE_CONTEXT.search(line) and ERROR_WORD.search(evaluated):
             failures.append(line)
     if failures:
         raise HilError("NAND/storage errors reported: " + " | ".join(failures))
@@ -138,6 +169,23 @@ def revalidate_evidence(paths: list[Path], summary_path: Path | None) -> int:
         summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
     return 0 if summary["result"] == "PASS" else 1
+
+
+def collect_preflight(paths: list[Path] | None, destination: Path) -> dict[str, object]:
+    if not paths:
+        return {"result": "NOT_PROVIDED",
+                "observability": "no complete native boot/preflight log supplied"}
+    destination.mkdir()
+    files = []
+    for index, source in enumerate(paths, 1):
+        if not source.is_file():
+            raise HilError(f"preflight log is absent: {source}")
+        target = destination / f"{index:02d}-{source.name}"
+        shutil.copy2(source, target)
+        scan = scan_storage_errors(target.read_text(encoding="utf-8", errors="replace"))
+        files.append({"source": str(source), "evidence": str(target),
+                      "sha256": sha256(target), "storage_scan": scan})
+    return {"result": "PASS", "files": files}
 
 
 def require_ordered_markers(text: str, repetitions: int) -> None:
@@ -391,7 +439,8 @@ def wait_for_session_files(args, before):
     raise HilError(f"PPG MSC remount/file settle timed out: {last}")
 
 
-def run_stream_session(args, index: int, session_id: int, before, stream_module):
+def run_stream_session(args, index: int, session_id: int, before, prior_hashes,
+                       stream_module):
     root = args.output / f"session-{index}"
     root.mkdir()
     stream_dir = root / "stream"
@@ -412,6 +461,8 @@ def run_stream_session(args, index: int, session_id: int, before, stream_module)
     ])
     central_scan = scan_storage_errors(central_text)
     after, names = wait_for_session_files(args, before)
+    preservation = require_preserved(args.drive, prior_hashes)
+    current_hashes = content_snapshot(args.drive)
     (root / "post.json").write_text(json.dumps(after, indent=2) + "\n", encoding="utf-8")
     copied = []
     for name in names:
@@ -426,15 +477,18 @@ def run_stream_session(args, index: int, session_id: int, before, stream_module)
         raise HilError(f"PPG session {index} log shutdown markers are missing or out of order")
     for entry in validation:
         entry.pop("text", None)
-    return after, {"session": index, "session_id": session_id, "result": "PASS",
+    return after, current_hashes, {
+                   "session": index, "session_id": session_id, "result": "PASS",
                    "stream": stream_summary, "central_storage_scan": central_scan,
-                   "new_files": names, "shutdown_markers": "ordered",
+                   "new_files": names, "prior_files": preservation,
+                   "shutdown_markers": "ordered",
                    "on_media": validation}
 
 
-def verify_persistence(args, sessions):
+def verify_persistence(args, sessions, prior_hashes):
     run_argv_file(args.reset_argv_json, args.output / "reset", "reset")
     wait_for_snapshot(args.drive, args.remount_timeout, args.settle_seconds)
+    preservation = require_preserved(args.drive, prior_hashes)
     checked = []
     for session in sessions:
         for name in session["new_files"]:
@@ -443,7 +497,7 @@ def verify_persistence(args, sessions):
             if not live.is_file() or sha256(saved) != sha256(live):
                 raise HilError(f"reset persistence mismatch: {name}")
             checked.append(name)
-    return {"result": "PASS", "files": checked}
+    return {"result": "PASS", "files": checked, "prior_files": preservation}
 
 
 def self_test() -> None:
@@ -493,13 +547,61 @@ def self_test() -> None:
         for failure in ("NAND program failed: EIO",
                         "<err> spi_nand: NAND ECC uncorrectable",
                         "<wrn> spi_nand: page write returned status 8",
-                        "<wrn> spi_nand: err block erase 3: -5"):
+                        "<wrn> spi_nand: err block erase 3: -5",
+                        "nand_disk initialization failed: -5",
+                        "fatfs mount timed out: -110 ETIMEDOUT",
+                        "spi4 controller fault while accessing storage bus",
+                        "spi_nand status E_FAIL: 1",
+                        "spi_nor: JEDEC ID read failed: -5"):
             try:
                 scan_storage_errors(failure)
             except HilError:
                 pass
             else:
                 raise AssertionError("storage error was accepted")
+        assert scan_storage_errors("spi_nand status P_FAIL=0 E_FAIL=0")["result"] == "PASS"
+
+        preserved = content_snapshot(root)
+        victim = root / "ppg100.bin"
+        original = victim.read_bytes()
+        victim.unlink()
+        try:
+            require_preserved(root, preserved)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("deleted prior file was accepted")
+        victim.write_bytes(original)
+        victim.write_bytes(b"y" * len(original))
+        try:
+            require_preserved(root, preserved)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("same-size prior-file corruption was accepted")
+        victim.write_bytes(original)
+        assert require_preserved(root, preserved)["result"] == "PASS"
+
+        existing = root / "existing-output"
+        existing.mkdir()
+        (existing / "summary.json").write_text("sentinel", encoding="utf-8")
+        (existing / "evidence.bin").write_bytes(b"evidence")
+        output_before = content_snapshot(existing)
+        created = False
+        try:
+            create_output_directory(existing)
+        except HilError:
+            pass
+        else:
+            raise AssertionError("existing output directory was accepted")
+        finally:
+            write_summary(existing, {"result": "FAIL"}, created)
+        assert content_snapshot(existing) == output_before
+
+        boot = root / "boot.txt"
+        boot.write_text("spi_nand status P_FAIL=0 E_FAIL=0", encoding="utf-8")
+        preflight = collect_preflight([boot], root / "preflight")
+        assert preflight["result"] == "PASS" and preflight["files"][0]["sha256"]
     print("run_production_hil.py self-test: PASS (no hardware access)")
 
 
@@ -532,6 +634,8 @@ def parse_args(argv=None):
     run.add_argument("--ppg-baud", type=int, default=115200)
     run.add_argument("--allow-port-change", action="store_true")
     run.add_argument("--reset-argv-json", type=Path)
+    run.add_argument("--preflight-log", type=Path, nargs="+",
+                     help="complete native boot/preflight logs to preserve and scan")
     args = parser.parse_args(argv)
     if args.command == "run":
         if len(set(args.session_ids)) != 2 or any(not 0 < value <= 0xFFFFFFFF
@@ -561,10 +665,10 @@ def main(argv=None) -> int:
                "ppg": {"usb_serial": args.ppg_usb_serial, "port": args.ppg_port},
                "drive": str(args.drive), "sessions": []}
     native_process = native_stdout = native_stderr = None
+    output_created = False
     try:
-        if args.output.exists():
-            raise HilError(f"output directory already exists: {args.output}")
-        args.output.mkdir(parents=True)
+        create_output_directory(args.output)
+        output_created = True
         for path in (args.dfu_tool, args.stream_tool, args.capture_tool, args.image):
             if not path.is_file():
                 raise HilError(f"required input is absent: {path}")
@@ -590,10 +694,13 @@ def main(argv=None) -> int:
                            ", ".join(stale))
         (args.output / "baseline.json").write_text(
             json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+        summary["preflight"] = collect_preflight(args.preflight_log,
+                                                  args.output / "preflight")
+        prior_hashes = content_snapshot(args.drive)
         native_process, native_stdout, native_stderr = start_native_capture(args)
         for index, session_id in enumerate(args.session_ids, 1):
-            baseline, session = run_stream_session(args, index, session_id, baseline,
-                                                   stream_module)
+            baseline, prior_hashes, session = run_stream_session(
+                args, index, session_id, baseline, prior_hashes, stream_module)
             summary["sessions"].append(session)
             if native_process.poll() is not None:
                 raise HilError("native UART capture ended before both sessions completed")
@@ -601,7 +708,8 @@ def main(argv=None) -> int:
             native_process, native_stdout, native_stderr, args)
         native_process = native_stdout = native_stderr = None
         if args.reset_argv_json:
-            summary["reset_persistence"] = verify_persistence(args, summary["sessions"])
+            summary["reset_persistence"] = verify_persistence(
+                args, summary["sessions"], prior_hashes)
         summary["result"] = "PASS"
         code = 0
     except Exception as error:
@@ -610,9 +718,7 @@ def main(argv=None) -> int:
     finally:
         stop_native_capture(native_process, native_stdout, native_stderr)
         summary["ended_utc"] = utc_now()
-        if args.output.exists():
-            (args.output / "summary.json").write_text(
-                json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        write_summary(args.output, summary, output_created)
     print(json.dumps(summary, indent=2))
     return code
 

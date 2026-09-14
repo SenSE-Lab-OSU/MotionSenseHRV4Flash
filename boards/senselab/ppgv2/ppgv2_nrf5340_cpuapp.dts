@@ -89,21 +89,7 @@ zephyr_udc0: &usbd {
 &ieee802154 { status = "okay"; };
 
 &spi0 {
-	compatible = "nordic,nrf-spim";
-	status = "okay";
-	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
-	pinctrl-0 = <&storage_spi_default>;
-	pinctrl-1 = <&storage_spi_sleep>;
-	pinctrl-names = "default", "sleep";
-
-	mx25u80: mx25u8035f@0 {
-		compatible = "jedec,spi-nor";
-		reg = <0>;
-		size = <8388608>;
-		spi-max-frequency = <8000000>;
-		jedec-id = [c2 25 34];
-		status = "okay";
-	};
+	status = "disabled";
 };
 
 &spi1 { status = "disabled"; };
@@ -131,7 +117,8 @@ zephyr_udc0: &usbd {
 	compatible = "nordic,nrf-spim";
 	status = "okay";
 	cs-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>, <&gpio0 4 GPIO_ACTIVE_LOW>,
-		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>;
+		   <&gpio0 21 GPIO_ACTIVE_LOW>, <&gpio0 19 GPIO_ACTIVE_LOW>,
+		   <&gpio0 5 GPIO_ACTIVE_LOW>;
 	pinctrl-0 = <&storage_spi_default>;
 	pinctrl-1 = <&storage_spi_sleep>;
 	pinctrl-names = "default", "sleep";
@@ -149,6 +136,15 @@ zephyr_udc0: &usbd {
 		pages-per-erase-block = <64>;
 		spi-max-frequency = <8000000>;
 		jedec-id = [ff 2c 47];
+		status = "okay";
+	};
+
+	mx25u80: mx25u8035f@4 {
+		compatible = "jedec,spi-nor";
+		reg = <4>;
+		size = <8388608>;
+		spi-max-frequency = <8000000>;
+		jedec-id = [c2 25 34];
 		status = "okay";
 	};
 };

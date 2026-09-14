@@ -1,24 +1,12 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/storage/flash_map.h>
 #include "spi_nand_bad_page_api.h"
+#include "spi_nand.h"
 #include "bad_page.h"
 
 
 LOG_MODULE_REGISTER(spi_nand_bad_page, CONFIG_FLASH_LOG_LEVEL);
 
-
-#define FILE_TABLE_NAND_PARTITION	slot0_partition
-
-
-#ifdef CONFIG_PARTITION_MANAGER_ENABLED
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(PM_FATFILETABLE_PARTITION_NAME)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(PM_FATFILETABLE_PARTITION_NAME)
-#else
-
-#define FILETABLE_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(FILE_TABLE_NAND_PARTITION)
-#define FILETABLE_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(FILE_TABLE_NAND_PARTITION)
-#endif 
 
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_ALIAS(storage_nor))
 #define FILETABLE_PARTITION_OFFSET 0
@@ -53,10 +41,12 @@ int save_bad_sectors_arr(){
 	// start address for bad sectors
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
 	int ret = 0;
+	storage_spi_bus_lock();
 	ret = flash_erase(soc_flash, address, total_bad_sect_arr_size);
 	if (ret == 0){
 		ret = flash_write(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
 	}
+	storage_spi_bus_unlock();
 	return ret;
 };
 
@@ -68,7 +58,9 @@ int load_bad_sectors_arr()
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
 	int ret = 0;
 	
+	storage_spi_bus_lock();
 	ret = flash_read(soc_flash, address, bad_sectors, total_bad_sect_arr_size);
+	storage_spi_bus_unlock();
 	// if the memory is all 1s, that means we haven't written to the array yet
 	if (bad_sectors[0] == 0xFFFFFFFF){
 		LOG_INF("first load bad sect arr, saving");
@@ -132,7 +124,10 @@ int erase_bad_sectors_arr()
 {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	off_t address = FILETABLE_PARTITION_OFFSET + (4096*(file_table_sector_num+1));
-	int ret = flash_erase(soc_flash, address, sizeof(uint32_t)*bad_sector_detect_limit);
+	storage_spi_bus_lock();
+	int ret = flash_erase(soc_flash, address,
+			      sizeof(uint32_t) * bad_sector_detect_limit);
+	storage_spi_bus_unlock();
 	return ret;
 
 }

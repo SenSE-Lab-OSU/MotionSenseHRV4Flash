@@ -106,11 +106,6 @@ typedef struct data_upload_buffer {
 
 // settings
 bool use_random_files = false;
-bool direct_write_file = true; 
-
-
-
-
 // internally linked globals
 static struct fs_mount_t fs_mnt;
 static bool filesystem_mounted;
@@ -504,11 +499,6 @@ int shutdown_filesystem(void)
 	return unmount_ret;
 }
 
-void reset_log_file(){
-	LOG_ERR("Direct log-file reset is disabled outside the PPG storage owner");
-	filesystem_latch_fault();
-}
-
 static int sensor_write_failure(enum sensor_type sensor, const char *operation,
 				int error)
 {
@@ -714,16 +704,6 @@ static int sensor_write_to_file(const void *data, size_t size,
 
 	return 0;
 }
-
-int write_to_file(const void* data, size_t size)
-{
-	ARG_UNUSED(data);
-	ARG_UNUSED(size);
-	LOG_ERR("Direct filesystem writes are disabled outside the PPG storage owner");
-	filesystem_latch_fault();
-	return -ENOTSUP;
-}
-
 
 void work_write(struct k_work* item){
 	
@@ -1245,12 +1225,11 @@ uint8_t test_read_buf[4096];
 void print_out_page(int page_num){
 	
 	// can also just change this to disk_read()
-	const struct device* filesystem_device2 = sdmmc_disk.dev;
+	const struct device* filesystem_device2 = nand_disk.dev;
 	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
-	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
 	if (page_num > 1500){
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);
-		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 2, 1);
+		disk_nand_access_read(&nand_disk, test_read_buf, page_num + 1, 1);
+		disk_nand_access_read(&nand_disk, test_read_buf, page_num + 2, 1);
 	}
 	
 	//(filesystem_device2, page_num, test_read_buf);

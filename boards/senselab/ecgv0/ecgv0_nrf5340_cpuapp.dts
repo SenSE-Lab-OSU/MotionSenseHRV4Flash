@@ -15,8 +15,6 @@
 		zephyr,console = &cdc_acm_uart0;
 		zephyr,shell-uart = &cdc_acm_uart0;
 		zephyr,bt-hci = &bt_hci_ipc0;
-		nordic,802154-spinel-ipc = &ipc0;
-		zephyr,ieee802154 = &ieee802154;
 		zephyr,flash = &flash0;
 		zephyr,sram = &sram0_image;
 		zephyr,code-partition = &slot0_partition;
@@ -72,7 +70,6 @@
 	};
 };
 
-&adc { status = "okay"; };
 &gpiote { status = "okay"; };
 &gpio0 { status = "okay"; };
 &gpio1 { status = "okay"; };
@@ -96,7 +93,6 @@ zephyr_udc0: &usbd {
 &usbreg { status = "okay"; };
 
 &ipc0 { status = "okay"; };
-&ieee802154 { status = "okay"; };
 
 &spi0 {
 	status = "disabled";

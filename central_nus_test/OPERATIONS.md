@@ -134,7 +134,7 @@ Send one case-sensitive ASCII command terminated by CR, LF, or CRLF:
 | `collect on` / `collect off` | For a connected PPG or ECG peer, write its normal collection-enable characteristic with response. Use `on` before streaming and `off` only when intentionally ending acquisition. |
 | `status` | Print stream state, NUS/SMP readiness, MTU, relay state, live throughput, link information, and machine-parseable `peer_name`, `peer_addr`, and `peer_addr_type`. |
 | `remote status` | Read the connected legacy MSenseDevice eight-byte status register. |
-| `reset 121` / `reset 132` | Send an acknowledged legacy reset write. Code 121 is a normal reset; 132 clears the bad-block table before reset. The Central scans for the same address for at most five minutes. |
+| `reset 68` / `reset 121` / `reset 132` | For a connected ECG or PPG, send an acknowledged legacy reset write. Code 68 formats storage and reboots, 121 is a normal reset, and 132 clears the bad-block table before reset. The Central scans for the same address for at most five minutes. |
 | `start [infinity] [id]` | Request a PPG or ECG v0 stream. Both support `infinity`; `id` is an optional nonzero decimal or `0x` uint32. |
 | `stop [id]` | Stop a v0 stream at its submitted record boundary (PPG 16 bytes, ECG 4096); without `id`, uses the active session. It is valid once the START write has completed. |
 | `cancel [id]` | Alias for `stop`; retained as a command alias; both products use STOP semantics. |

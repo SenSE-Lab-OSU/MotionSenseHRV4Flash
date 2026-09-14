@@ -1,4 +1,4 @@
-"""Focused source contracts for the legacy MSenseDevice HIL control path."""
+"""Focused source contracts for the legacy MotionSense HIL control path."""
 
 from pathlib import Path
 import re
@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CENTRAL = ROOT / "central_nus_test/src/main.c"
-PERIPHERAL = ROOT / "MSenseDevice/src/BLEService.h"
+PERIPHERALS = (ROOT / "ECGv0/src/BLEService.h", ROOT / "PPGv2/src/BLEService.h")
 
 
 def function_body(source: str, name: str) -> str:
@@ -26,7 +26,7 @@ class LegacyMsenseControlTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.central = CENTRAL.read_text()
-        cls.peripheral = PERIPHERAL.read_text()
+        cls.peripherals = [path.read_text() for path in PERIPHERALS]
 
     def test_uuid_suffixes_match_peripheral_header(self):
         pairs = {
@@ -42,16 +42,17 @@ class LegacyMsenseControlTest(unittest.TestCase):
                 self.central,
                 re.DOTALL,
             )
-            peripheral = re.search(
-                rf"#define {peripheral_name}\s+.*?0x([0-9A-F]{{2}}),\s*0xC9,\s*0x39,\s*0xDA",
-                self.peripheral,
-                re.DOTALL,
-            )
             self.assertIsNotNone(central, central_name)
-            self.assertIsNotNone(peripheral, peripheral_name)
-            # Header arrays are little-endian; byte 12 is the low byte of word 1.
-            self.assertEqual(int(central.group(1), 16) & 0xFF,
-                             int(peripheral.group(1), 16))
+            for peripheral_text in self.peripherals:
+                peripheral = re.search(
+                    rf"#define {peripheral_name}\s+.*?0x([0-9A-F]{{2}}),\s*0xC9,\s*0x39,\s*0xDA",
+                    peripheral_text,
+                    re.DOTALL,
+                )
+                self.assertIsNotNone(peripheral, peripheral_name)
+                # Header arrays are little-endian; byte 12 is the low byte of word 1.
+                self.assertEqual(int(central.group(1), 16) & 0xFF,
+                                 int(peripheral.group(1), 16))
 
     def test_missing_nus_still_discovers_legacy_services(self):
         unavailable = function_body(self.central, "discovery_service_not_found")
@@ -71,7 +72,9 @@ class LegacyMsenseControlTest(unittest.TestCase):
 
     def test_reset_command_is_restricted_and_reconnect_is_bounded(self):
         handler = function_body(self.central, "handle_command")
-        self.assertRegex(handler, r"value != 121U && value != 132U")
+        self.assertRegex(handler, r"value != 68U && value != 121U && value != 132U")
+        self.assertIn("ERR usage: reset 68|121|132", handler)
+        self.assertIn('command_printf("RESET_SENT code=%u", value)', handler)
         reset = function_body(self.central, "issue_legacy_reset")
         self.assertIn("bt_gatt_write(connection, &reset_write_params)", reset)
         self.assertIn("legacy_reset_reconnect_timeout", reset)

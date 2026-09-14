@@ -121,7 +121,7 @@ Commands are case-sensitive:
    collect on|off
    status
    remote status
-   reset 121|132
+   reset 68|121|132
    start [id]
    start infinity [id]
    stop [id]
@@ -140,7 +140,8 @@ on a connected PPG or ECG peer and report the acknowledged result.
 
 For legacy ``MSense4PPG-`` firmware without NUS, discovery continues through
 the proprietary control and status services. ``remote status`` reads its
-eight-byte status register. ``reset 121`` requests a normal reset and ``reset
+eight-byte status register. For either a connected ECG or PPG, ``reset 68``
+formats storage and reboots, ``reset 121`` requests a normal reset, and ``reset
 132`` clears the persisted bad-block table before reset. Reset writes use an
 ATT write with response; the command port separately reports write acceptance,
 disconnect, advertising, reconnection, and handle rediscovery. Reconnection is

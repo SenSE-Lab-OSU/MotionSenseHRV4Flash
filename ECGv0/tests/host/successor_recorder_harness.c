@@ -40,7 +40,7 @@ static struct k_sem accel_record_control_done, ecg_record_control_done;
 static struct k_spinlock accel_record_state_lock;
 static int my_work_q;
 static atomic_t accel_record_failed, accel_record_rotating;
-static bool accel_record_file_open, accel_record_next_prepared;
+static bool accel_record_file_open, accel_record_file_retired, accel_record_next_prepared;
 static bool accel_record_chunk_full;
 static uint32_t accel_record_chunk_full_block_count;
 static uint32_t accel_record_chunk_data_bytes, accel_record_chunk_index;
@@ -195,6 +195,7 @@ static void reset(void)
     built_ecg_chunk = 0U;
     accel_record_failed = accel_record_rotating = 0;
     accel_record_file_open = ecg_record_file_open = true;
+    accel_record_file_retired = false;
     accel_record_next_prepared = ecg_record_next_prepared = false;
     accel_record_chunk_full = true;
     accel_record_chunk_full_block_count = 7U;

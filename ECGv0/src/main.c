@@ -603,12 +603,6 @@ static void filesystem_workqueue_init(void)
   k_work_queue_start(&my_work_q, my_stack_area,
                      K_THREAD_STACK_SIZEOF(my_stack_area), WORKQUEUE_PRIORITY, &cfg);
 
-  k_work_init(&ecg_work_item.work, work_write);
-  ecg_work_item.sensor = ecg;
-
-  k_work_init(&log_work_item.work, work_write);
-  log_work_item.sensor = customlog;
-
   filesystem_workqueue_started = true;
 }
 
@@ -761,7 +755,6 @@ static void ecg_collection_transition_thread(void *arg1, void *arg2,
 
 static int stop_ecg_filesystem_log(void)
 {
-	struct k_work_sync log_sync;
 	int drain_ret;
 	int ret;
 
@@ -771,9 +764,7 @@ static int stop_ecg_filesystem_log(void)
 		LOG_WRN("Storage log drain timed out: %d", drain_ret);
 	}
 
-	/* The final partial buffer reuses the full-buffer write work item. */
-	(void)k_work_flush(&log_work_item.work, &log_sync);
-	ret = flush_data_buffer(customlog);
+	ret = filesystem_logger_flush();
 	if (ret != 0) {
 		return ret;
 	}
@@ -1056,7 +1047,6 @@ static int run_ecg_manual_test_file_action(enum ecg_storage_action action)
 		goto test_failed;
 	}
 
-	filesystem_clear_collection_id();
 	reset_lock = false;
 	collecting_data = false;
 	host_wants_collection = false;
@@ -1167,7 +1157,6 @@ int enter_ecg_collection_mode(void)
 	}
 	collection_mount_ready = true;
 	session_id = collection_session_id();
-	filesystem_set_collection_id(session_id);
 	if (!filesystem_workqueue_started) {
 		ret = -ENODEV;
 		goto start_failed;
@@ -1297,7 +1286,6 @@ start_failed:
 	host_wants_collection = false;
 	collecting_data = false;
 	if (cleanup_ret == 0 && !filesystem_is_mounted()) {
-		filesystem_clear_collection_id();
 		if (usb_enabled) {
 			cleanup_ret = publish_msc_host_media();
 		}
@@ -1416,7 +1404,6 @@ int exit_ecg_collection_mode(void)
 		}
 	}
 
-	filesystem_clear_collection_id();
 	collecting_data = false;
 	blink_usb_mode_pattern();
 	k_mutex_unlock(&collection_mode_lock);

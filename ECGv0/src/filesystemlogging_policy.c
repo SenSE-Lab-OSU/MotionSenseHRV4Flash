@@ -41,10 +41,10 @@ int msense_storage_log_append(const uint8_t *data, size_t length)
 		return (int)length;
 	}
 
-	ret = store_data(data, length, customlog);
+	ret = filesystem_logger_append(data, length);
 	k_mutex_unlock(&ecg_filesystem_log_callback_lock);
 	if (ret != 0) {
-		/* store_data() latched the fault; consume this record to avoid retries. */
+		/* Consume a failed log record to avoid retrying a storage write. */
 		return (int)length;
 	}
 	return (int)length;

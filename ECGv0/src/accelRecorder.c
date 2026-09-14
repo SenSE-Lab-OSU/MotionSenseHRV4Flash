@@ -66,6 +66,8 @@ static atomic_t accel_record_rotating;
 static atomic_t accel_record_rotation_completion_pending;
 static bool accel_record_initialized;
 static bool accel_record_file_open;
+static bool accel_record_file_retired;
+static bool accel_record_retired_handle_live;
 static bool accel_record_next_prepared;
 static bool accel_record_chunk_full;
 static uint32_t accel_record_session_full_block_count;
@@ -236,21 +238,30 @@ static int accel_record_write_trailer(uint8_t *metadata)
 	ssize_t written;
 	int ret;
 
+	if (accel_record_file_retired) {
+		return -EIO;
+	}
 	accel_record_format_build_trailer(metadata,
 					  accel_record_chunk_data_bytes);
 	ret = fs_seek(&accel_record_file, ACCEL_RECORD_FORMAT_TRAILER_OFFSET,
 		      FS_SEEK_SET);
 	if (ret != 0) {
+		accel_record_file_retired = true;
+		accel_record_retired_handle_live = true;
+		accel_record_file_open = false;
 		return ret;
 	}
 
 	written = fs_write(&accel_record_file, metadata,
 			   ACCEL_RECORD_FORMAT_TRAILER_BYTES);
 	if (written != (ssize_t)ACCEL_RECORD_FORMAT_TRAILER_BYTES) {
+		accel_record_file_retired = true;
+		accel_record_retired_handle_live = true;
+		accel_record_file_open = false;
 		return (written < 0) ? (int)written : -EIO;
 	}
 
-	return fs_sync(&accel_record_file);
+	return 0;
 }
 
 static int accel_record_close_current_chunk(void)
@@ -258,18 +269,23 @@ static int accel_record_close_current_chunk(void)
 	int ret = 0;
 	int close_ret;
 
-	if (!accel_record_file_open) {
-		return 0;
+	if (!accel_record_file_open || accel_record_file_retired) {
+		return accel_record_file_retired ? -EIO : 0;
 	}
 
 	ret = accel_record_write_trailer(filesystem_scratch_buffer());
-	close_ret = fs_close(&accel_record_file);
-	accel_record_file_open = false;
-	if ((ret == 0) && (close_ret != 0)) {
-		ret = close_ret;
+	if (ret != 0) {
+		return ret;
 	}
-
-	return ret;
+	close_ret = fs_close(&accel_record_file);
+	fs_file_t_init(&accel_record_file);
+	accel_record_file_open = false;
+	if (close_ret != 0) {
+		accel_record_file_retired = true;
+		accel_record_retired_handle_live = false;
+		return close_ret;
+	}
+	return 0;
 }
 
 static int accel_record_open_current_chunk(void)
@@ -277,6 +293,9 @@ static int accel_record_open_current_chunk(void)
 	uint8_t *metadata = filesystem_scratch_buffer();
 	int ret;
 
+	if (accel_record_file_retired) {
+		return -EIO;
+	}
 	ret = filesystem_make_recording_chunk_path(
 		accel_record_path, sizeof(accel_record_path), "ac",
 		accel_record_session_id, accel_record_chunk_index);
@@ -303,6 +322,9 @@ static int accel_record_prepare_next_chunk(void)
 	uint32_t next_index = accel_record_chunk_index + 1U;
 	int ret;
 
+	if (accel_record_file_retired) {
+		return -EIO;
+	}
 	ret = filesystem_make_recording_chunk_path(
 		accel_record_next_path, sizeof(accel_record_next_path), "ac",
 		accel_record_session_id, next_index);
@@ -324,7 +346,7 @@ static int accel_record_activate_next_chunk(void)
 	ssize_t written;
 	int ret;
 
-	if (!accel_record_next_prepared) {
+	if (accel_record_file_retired || !accel_record_next_prepared) {
 		return -ENOSPC;
 	}
 	ret = accel_record_close_current_chunk();
@@ -357,7 +379,7 @@ static void accel_record_prepare_work_handler(struct k_work *work)
 	int ret;
 
 	ARG_UNUSED(work);
-	if (!accel_record_file_open || accel_record_next_prepared ||
+	if (!accel_record_file_open || accel_record_file_retired || accel_record_next_prepared ||
 	    atomic_get(&accel_record_failed) != 0) {
 		return;
 	}
@@ -375,11 +397,18 @@ static void accel_record_block_work_handler(struct k_work *work)
 	int ret = 0;
 
 	atomic_set(&block->state, ACCEL_RECORD_BLOCK_WRITING);
-	written = fs_write(&accel_record_file, block->data, block->write_length);
-	if (written != (ssize_t)block->write_length) {
-		ret = (written < 0) ? (int)written : -EIO;
-	} else if (block->sync_after_write) {
-		ret = fs_sync(&accel_record_file);
+	if (accel_record_file_retired) {
+		ret = -EIO;
+	} else {
+		written = fs_write(&accel_record_file, block->data, block->write_length);
+		if (written != (ssize_t)block->write_length) {
+			ret = (written < 0) ? (int)written : -EIO;
+			accel_record_file_retired = true;
+			accel_record_retired_handle_live = true;
+			accel_record_file_open = false;
+		} else if (block->sync_after_write) {
+			ret = fs_sync(&accel_record_file);
+		}
 	}
 
 	if (ret != 0) {
@@ -603,6 +632,9 @@ int accel_recorder_start(uint64_t session_id)
 	    accel_record_next_prepared) {
 		return -EALREADY;
 	}
+	if (accel_record_file_retired) {
+		return -EIO;
+	}
 
 	atomic_clear(&accel_record_failed);
 	atomic_clear(&accel_record_rotating);
@@ -768,6 +800,9 @@ int accel_recorder_stop(void)
 		}
 		return ret;
 	}
+	if (accel_record_file_retired) {
+		return -EIO;
+	}
 	if (!accel_record_file_open && !accel_record_next_prepared) {
 		return 0;
 	}
@@ -784,7 +819,8 @@ int accel_recorder_stop(void)
 			accel_record_report_fault(ret);
 			return ret;
 		}
-		block->sync_after_write = true;
+		/* The terminal short ACB1 block is sealed by trailer write + close. */
+		block->sync_after_write = false;
 		ret = accel_record_queue_current_chunk_block(block);
 		if (ret != 0) {
 			accel_record_report_fault(ret);
@@ -828,4 +864,20 @@ int accel_recorder_abort(void)
 	accel_record_release_pending_blocks();
 	cleanup_ret = accel_record_submit_control(ACCEL_RECORD_CONTROL_ABORT);
 	return ret != 0 ? ret : cleanup_ret;
+}
+
+void accel_recorder_filesystem_unmounted(void)
+{
+	if (!accel_record_file_retired) {
+		return;
+	}
+	if (accel_record_retired_handle_live) {
+		/* FatFs is unmounted, so this releases its FIL slab without flushing data. */
+		(void)fs_close(&accel_record_file);
+	}
+	fs_file_t_init(&accel_record_file);
+	accel_record_file_retired = false;
+	accel_record_retired_handle_live = false;
+	accel_record_file_open = false;
+	accel_record_next_prepared = false;
 }

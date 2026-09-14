@@ -6,14 +6,11 @@
 #include <zephyr/fs/fs.h>
 #include <nrfx_qspi.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/random/random.h>
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
-
-
-#include <stdlib.h>
 #include "BLEService.h"
+#include "accelRecorder.h"
 #include "msense_git_metadata.h"
 #include "msense_uuid_file.h"
 #include "zephyrfilesystem.h"
@@ -32,6 +29,12 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 
 #if CONFIG_FAT_FILESYSTEM_ELM
 #include <ff.h>
+#if FF_FS_TINY != 0
+#error "Raw NAND recording requires one FatFs sector buffer per open FIL"
+#endif
+#if FF_MAX_SS != 4096
+#error "Raw NAND recording requires 4096-byte FatFs sectors"
+#endif
 #define STORAGE_PARTITION_ID FIXED_PARTITION_ID(PM_LITTLEFS_STORAGE_NAME)
 #endif
 
@@ -52,22 +55,17 @@ bool panic_single_thread;
 #define MAX_BUFFER_SIZE 9000
 #define UUID_CONTENTS_MAX_SIZE 640U
 #define STORAGE_SLOW_WRITE_LOG_THRESHOLD_MS 50
+#define TEST_FILE_WRITE_BYTES (4096U * 2U)
+#define TEST_FILE_PREALLOCATED_BYTES RECORDING_FILE_BYTES
+#define TEST_FILE_WRITES_PER_PREALLOCATION \
+	(TEST_FILE_PREALLOCATED_BYTES / TEST_FILE_WRITE_BYTES)
 
 //#undef GET_FATTIME
 //#define GET_FATTIME() (DWORD)get_current_unix_time()
 
 
 
-// Might need to put this and the timer in a seperate file.
-
 struct k_work_q my_work_q;
-
-memory_container ecg_work_item;
-
-memory_container log_work_item;
-
-//data limit per file in bytes
-const int data_limit = MAX_BUFFER_SIZE;
 
 
 
@@ -85,41 +83,16 @@ uint64_t set_date_time = 0;
 
 int patient_num = 0;
 
-int packet_number = 0;
-
-int last_packet_number_processed = 0;
-
-
-const int max_writes = 512;
-
-
-
 typedef struct data_upload_buffer {
 	char data_upload_buffer[MAX_BUFFER_SIZE];
 	size_t current_size;
 } data_upload_buffer;
 
-
-// settings
-bool use_random_files = false;
-bool direct_write_file = true; 
-
-
-
-
 // internally linked globals
 static struct fs_mount_t fs_mnt;
 static bool filesystem_mounted;
-static int close_all_files(void);
-static bool collection_id_valid;
-static uint64_t active_collection_id;
 static uint8_t filesystem_scratch[FILESYSTEM_SCRATCH_BYTES] __aligned(4);
-//counter to serve as a amount for when the file fills up.
-static int data_counter;
-char file_name[50] = "";
-static bool first_write = false;
-static struct fs_file_t file;
-static int64_t file_system_timer;
+static int64_t logger_write_timer;
 static struct k_work logger_control_work;
 static struct k_work logger_prepare_work;
 static struct k_sem logger_control_done;
@@ -130,6 +103,12 @@ static bool logger_prepare_requested;
 static int logger_control_result;
 static char logger_next_path[96];
 static uint32_t logger_dropped_buffers;
+static size_t logger_logical_bytes;
+static bool logger_file_open;
+static bool logger_file_retired;
+static bool logger_retired_handle_live;
+static bool logger_write_work_initialized;
+static void logger_write_work_handler(struct k_work *item);
 
 enum logger_control_operation {
 	LOGGER_CONTROL_START,
@@ -145,84 +124,32 @@ static void filesystem_latch_fault(void)
 
 
 
-typedef struct MotionSenseFile {
-	int write_size;
-	int max_writes;
+typedef struct LoggerFile {
+	size_t write_size;
 	int current_writes;
-	uint32_t chunk_index;
-	int data_counter;
-	uint64_t start_time;
-	bool first_sample_init;
-	const char sensor_string[5];
 	char file_name[96];
-	const char sensor_format[90];
 	struct fs_file_t self_file;
 	bool switch_buffer;
 	data_upload_buffer buffer1;
 	data_upload_buffer buffer2;
-	
-} 	MotionSenseFile;
+} LoggerFile;
 
+typedef struct logger_write_work {
+	const void *address;
+	size_t size;
+	int packet_num;
+	bool in_use;
+	struct k_work work;
+} logger_write_work;
 
-
-//File Objects
-//static MotionSenseFile current_file;
-
-/* ECG pages are written by ecgRecorder.c; this legacy buffer remains for logs. */
-MotionSenseFile ecg_file = {
-	.write_size = 8196,
-	/*
-	 * 512 8,196-byte writes would extend a 4 MiB preallocated file by
-	 * 2 KiB.  Keep the file's allocated logical size fixed instead.
-	 */
-	.max_writes = RECORDING_FILE_BYTES / 8196,
-	.sensor_string = "ecg",
-	.sensor_format = "ECB2 4096-byte MAX30001 ECG blocks with CRC-32"
-};
-
-MotionSenseFile log_file = {
+static LoggerFile log_file = {
 	.write_size = 8192,
-	.max_writes = 512,
-	.sensor_string = "log",
-	.sensor_format = "logging"
 };
+static logger_write_work logger_work_item;
+static int logger_packet_number;
+static int logger_last_packet_number_processed;
 
-// TODO: Still work in progress . We do have a hacky way to make the device read only (see nand_disk.c) 
-// but no way to make it show up as read only on windows yet.
-void enable_read_only(bool enable){
-	struct fs_mount_t* mp = &fs_mnt;
-	if (mp->type == FS_FATFS){
-		#if CONFIG_FAT_FILESYSTEM_ELM
-		if (enable){
-			//f_chmod(mp->mnt_point, AM_RDO, AM_RDO);
-		}
-		else{
-			//f_chmod(mp->mnt_point, 0, AM_RDO);
-		}
-		#endif
-	}
-}
-
-const char* sensor_enum_to_string(enum sensor_type sensor) {
-    switch (sensor) {
-        case ecg: return "ecg";
-        case customlog: return "log";
-        default:           return "undefined";
-    }
-}
-
-void filesystem_set_collection_id(uint64_t collection_id)
-{
-	active_collection_id = collection_id;
-	collection_id_valid = true;
-	ecg_file.chunk_index = 0U;
-}
-
-void filesystem_clear_collection_id(void)
-{
-	active_collection_id = 0U;
-	collection_id_valid = false;
-}
+#define ECG_FILE_FORMAT "ECB2 4096-byte MAX30001 ECG blocks with CRC-32"
 
 int filesystem_make_recording_path(char *path, size_t path_size,
 				   const char *stream_prefix,
@@ -274,7 +201,7 @@ int total_log_files = 0;
 
 
 // Test files
-char test_file_arr[4096*2] = "hello world, this is a story about a man who liked to run. "
+char test_file_arr[TEST_FILE_WRITE_BYTES] = "hello world, this is a story about a man who liked to run. "
     "every day for miles. he wandered and wandered for miles. "
     "as the seasons changed, he kept moving, tracing the edges of towns "
     "and forests, learning the quiet language of the wind. "
@@ -328,7 +255,7 @@ int create_test_file(int writes)
 		return ret;
 	}
 
-	expand_ret = f_expand((FIL *)test_file.filep, 4096 * max_writes * 2, 1);
+	expand_ret = f_expand((FIL *)test_file.filep, TEST_FILE_PREALLOCATED_BYTES, 1);
 	if (expand_ret != FR_OK) {
 		LOG_WRN("Failed to expand test file: %d", expand_ret);
 		ret = -EIO;
@@ -381,7 +308,7 @@ int create_test_files(int number_of_files)
 	LOG_INF("creating test files...");
 	for (int x = 0; x < number_of_files; x++) {
 		LOG_INF("file %d of %d", x, number_of_files);
-		ret = create_test_file(512);
+		ret = create_test_file(TEST_FILE_WRITES_PER_PREALLOCATION);
 		if (ret != 0) {
 			return ret;
 		}
@@ -441,7 +368,7 @@ int filesystem_gate_and_drain(void)
 	return 0;
 }
 
-static int sync_and_close_file(struct fs_file_t *file_to_close)
+static int logger_sync_and_close_file(struct fs_file_t *file_to_close)
 {
 	int sync_ret;
 	int close_ret;
@@ -459,22 +386,46 @@ static int sync_and_close_file(struct fs_file_t *file_to_close)
 	return close_ret;
 }
 
-static int reset_sensor_file(MotionSenseFile *msense_file)
+static int logger_reset_file(void)
 {
 	int ret;
 
-	ret = sync_and_close_file(&msense_file->self_file);
+	if (logger_file_retired) {
+		log_file.buffer1.current_size = 0U;
+		log_file.buffer2.current_size = 0U;
+		log_file.switch_buffer = false;
+		return -EIO;
+	}
+	ret = logger_sync_and_close_file(&log_file.self_file);
 	if (ret != 0) {
 		return ret;
 	}
 
-	fs_file_t_init(&msense_file->self_file);
-	msense_file->buffer1.current_size = 0;
-	msense_file->buffer2.current_size = 0;
-	msense_file->switch_buffer = false;
-	msense_file->current_writes = 0;
-	msense_file->first_sample_init = false;
+	fs_file_t_init(&log_file.self_file);
+	log_file.buffer1.current_size = 0U;
+	log_file.buffer2.current_size = 0U;
+	log_file.switch_buffer = false;
+	log_file.current_writes = 0;
 	return 0;
+}
+
+static void logger_release_retired_file(void)
+{
+	if (!logger_file_retired) {
+		return;
+	}
+	if (logger_retired_handle_live) {
+		/* FatFs is unmounted, so this releases its FIL slab without flushing data. */
+		(void)fs_close(&log_file.self_file);
+	}
+	fs_file_t_init(&log_file.self_file);
+	logger_file_retired = false;
+	logger_retired_handle_live = false;
+	logger_file_open = false;
+	logger_logical_bytes = 0U;
+	logger_next_prepared = false;
+	logger_prepare_requested = false;
+	logger_started = false;
 }
 
 
@@ -490,10 +441,12 @@ int shutdown_filesystem(void)
 		return 0;
 	}
 
-	close_ret = close_all_files();
+	close_ret = logger_reset_file();
 	unmount_ret = fs_unmount(&fs_mnt);
 	if (unmount_ret == 0) {
 		filesystem_mounted = false;
+		logger_release_retired_file();
+		accel_recorder_filesystem_unmounted();
 	} else {
 		LOG_ERR("Failed to unmount filesystem: %d", unmount_ret);
 	}
@@ -505,14 +458,13 @@ int shutdown_filesystem(void)
 	return unmount_ret;
 }
 
-static int sensor_write_failure(enum sensor_type sensor, const char *operation,
-				int error)
+static int logger_write_failure(const char *operation, int error)
 {
 	int ret = error < 0 ? error : -EIO;
 
 	file_system_malfunction = true;
 	status_reg_ble_notification();
-	LOG_WRN("%s failed for sensor %d: %d", operation, sensor, error);
+	LOG_WRN("Logger %s failed: %d", operation, error);
 	return ret;
 }
 
@@ -530,6 +482,8 @@ int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
 	FRESULT expand_ret;
 	ssize_t written;
 	bool write_attempted = false;
+	bool close_attempted = false;
+	int close_ret = 0;
 	int ret;
 
 	if (file == NULL || path == NULL || (header == NULL && header_bytes != 0U)) {
@@ -562,14 +516,21 @@ int filesystem_preallocate_file(struct fs_file_t *file, const char *path,
 	}
 	ret = fs_sync(file);
 	if (ret == 0 && !leave_open) {
-		ret = fs_close(file);
+		close_attempted = true;
+		close_ret = fs_close(file);
+		fs_file_t_init(file);
+		ret = close_ret;
 	}
 	if (ret == 0) {
 		return 0;
 	}
 
 fail:
-	(void)fs_close(file);
+	if (!close_attempted) {
+		close_attempted = true;
+		close_ret = fs_close(file);
+		fs_file_t_init(file);
+	}
 	/* A data-write attempt may already have programmed its NAND page. */
 	if (!write_attempted) {
 		(void)fs_unlink(path);
@@ -615,6 +576,41 @@ static int logger_expand_file(struct fs_file_t *file, const char *path,
 					   NULL, 0U, leave_open);
 }
 
+static void logger_retire_file(void)
+{
+	logger_file_retired = true;
+	logger_file_open = false;
+	logger_retired_handle_live = true;
+}
+
+static int logger_close_current_file(void)
+{
+	int ret;
+
+	if (logger_file_retired) {
+		return -EIO;
+	}
+	if (!logger_file_open) {
+		return 0;
+	}
+	ret = fs_truncate(&log_file.self_file, (off_t)logger_logical_bytes);
+	if (ret != 0) {
+		logger_retire_file();
+		return ret;
+	}
+	ret = fs_close(&log_file.self_file);
+	if (ret != 0) {
+		logger_file_retired = true;
+		logger_file_open = false;
+		logger_retired_handle_live = false;
+		fs_file_t_init(&log_file.self_file);
+		return ret;
+	}
+	fs_file_t_init(&log_file.self_file);
+	logger_file_open = false;
+	return 0;
+}
+
 static int logger_prepare_next_file(void)
 {
 	struct fs_file_t file;
@@ -638,7 +634,10 @@ static int logger_start_worker(void)
 	uint32_t index = (uint32_t)total_log_files + 1U;
 	int ret;
 
-	ret = reset_sensor_file(&log_file);
+	if (logger_file_retired) {
+		return -EIO;
+	}
+	ret = logger_reset_file();
 	if (ret != 0) {
 		return ret;
 	}
@@ -651,10 +650,13 @@ static int logger_start_worker(void)
 	if (ret != 0) {
 		return ret;
 	}
+	logger_logical_bytes = 0U;
+	logger_file_open = true;
 	total_log_files++;
 	ret = logger_prepare_next_file();
 	if (ret != 0) {
 		(void)fs_close(&log_file.self_file);
+		logger_file_open = false;
 		(void)fs_unlink(log_file.file_name);
 		return ret;
 	}
@@ -666,16 +668,23 @@ static int logger_activate_next_file(void)
 {
 	int ret;
 
+	if (logger_file_retired) {
+		return -EIO;
+	}
 	if (!logger_next_prepared) {
 		return -ENOSPC;
 	}
-	ret = filesystem_open_preallocated_file(&log_file.self_file,
-						logger_next_path, 0U);
+	/* Opening a preallocated file starts at offset zero; avoid a recoverable
+	 * seek path after a partial-capable stream has failed. */
+	fs_file_t_init(&log_file.self_file);
+	ret = fs_open(&log_file.self_file, logger_next_path, FS_O_WRITE);
 	if (ret != 0) {
 		return ret;
 	}
 	strcpy(log_file.file_name, logger_next_path);
 	log_file.current_writes = 0;
+	logger_logical_bytes = 0U;
+	logger_file_open = true;
 	logger_next_prepared = false;
 	logger_prepare_requested = true;
 	return 0;
@@ -686,7 +695,7 @@ static void logger_prepare_work_handler(struct k_work *work)
 	int ret;
 
 	ARG_UNUSED(work);
-	if (!logger_started || logger_next_prepared) {
+	if (!logger_started || logger_next_prepared || logger_file_retired) {
 		return;
 	}
 	ret = logger_prepare_next_file();
@@ -704,7 +713,7 @@ static void logger_control_work_handler(struct k_work *work)
 	if (operation == LOGGER_CONTROL_START) {
 		ret = logger_start_worker();
 	} else if (logger_started) {
-		ret = sync_and_close_file(&log_file.self_file);
+		ret = logger_close_current_file();
 		logger_started = false;
 		if (logger_next_prepared) {
 			int unlink_ret = fs_unlink(logger_next_path);
@@ -743,8 +752,17 @@ static int logger_submit_control(enum logger_control_operation operation)
 	return ret == 0 ? logger_control_result : ret;
 }
 
+static void logger_initialize_write_work(void)
+{
+	if (!logger_write_work_initialized) {
+		k_work_init(&logger_work_item.work, logger_write_work_handler);
+		logger_write_work_initialized = true;
+	}
+}
+
 int filesystem_logger_start(void)
 {
+	logger_initialize_write_work();
 	return logger_submit_control(LOGGER_CONTROL_START);
 }
 
@@ -753,280 +771,111 @@ int filesystem_logger_stop(void)
 	return logger_started ? logger_submit_control(LOGGER_CONTROL_STOP) : 0;
 }
 
-static int sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
-	struct fs_mount_t* mp = &fs_mnt;
-	MotionSenseFile* MSenseFile;
-	int close_ret;
-	int storage_ret;
-	int sync_ret;
-	ssize_t total_written;
-	FRESULT expand_ret;
+static int logger_rollover_file(void)
+{
+	int ret;
 
-	if (!file_system_ready || !filesystem_mounted) {
-		return sensor_write_failure(sensor, "Filesystem unavailable", -EACCES);
+	ret = logger_close_current_file();
+	if (ret != 0) {
+		return ret;
 	}
-	if (storage_percent_full >= 99){
-		return sensor_write_failure(sensor, "Storage full", -ENOSPC);
+	ret = get_storage_percent_full();
+	if (ret < 0) {
+		return ret;
 	}
+	if (storage_percent_full >= 99U) {
+		return -ENOSPC;
+	}
+	return logger_activate_next_file();
+}
 
-	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()){
-		return sensor_write_failure(sensor, "Raw disk is read-only", -EROFS);
-	}
-	if (sensor == ecg){
-		MSenseFile = &ecg_file;
-	}
-	else if (sensor == customlog){
-		MSenseFile = &log_file;
-	}
-	else {
-		return sensor_write_failure(sensor, "Invalid sensor type", -EINVAL);
-	}
+static int logger_write_bytes(const uint8_t *data, size_t size)
+{
+	size_t offset = 0U;
 
+	if (!logger_started || logger_file_retired || !logger_file_open) {
+		return -EIO;
+	}
+	while (offset < size) {
+		size_t remaining = RECORDING_FILE_BYTES - logger_logical_bytes;
+		size_t write_bytes = MIN(size - offset, remaining);
+		ssize_t written;
+		int ret;
 
-	if (MSenseFile->current_writes == 0 && MSenseFile->self_file.filep == NULL){
-		// Create a new file, with given sensor type, patient name, and date as file name
-		fs_file_t_init(&MSenseFile->self_file);
-
-		if ((sensor == ecg) && collection_id_valid) {
-			int path_ret = filesystem_make_recording_chunk_path(
-				MSenseFile->file_name, sizeof(MSenseFile->file_name),
-				MSenseFile->sensor_string, active_collection_id,
-				MSenseFile->chunk_index);
-
-			if (path_ret != 0) {
-				return sensor_write_failure(sensor, "ECG recording path construction",
-							    path_ret);
+		if (write_bytes == 0U) {
+			ret = logger_rollover_file();
+			if (ret != 0) {
+				return ret;
 			}
-		} else {
-			uint64_t ID = 0;
-			// max itoa can do is 33 with binary, but theoretically it will be < 9
-			char IDString[33];
-			char patient_id[33];
-			if (use_random_files){
-				ID = sys_rand32_get() % 900;
-			}
-			else {
-
-				uint64_t current_time = MSenseFile->start_time;
-
-				ID = current_time;
-				if (sensor == customlog){
-					// could also add it onto the time instead?
-					total_log_files++;
-					ID = total_log_files;
-				}
-
-			}
-			sprintf(IDString, "%llu", ID);
-
-
-			memset(MSenseFile->file_name, 0, sizeof(MSenseFile->file_name));
-			strcat(MSenseFile->file_name, mp->mnt_point);
-			strcat(MSenseFile->file_name, "/");
-			if (patient_num != 0){
-				snprintf(patient_id, sizeof(patient_id), "%d", patient_num);
-				strcat(MSenseFile->file_name, patient_id);
-			}
-			strcat(MSenseFile->file_name, MSenseFile->sensor_string);
-			strcat(MSenseFile->file_name, IDString);
-			if (sensor != customlog){
-				strcat(MSenseFile->file_name, ".bin");
-			}
-			else {
-				strcat(MSenseFile->file_name, ".txt");
+			continue;
+		}
+		written = fs_write(&log_file.self_file, &data[offset], write_bytes);
+		if (written != (ssize_t)write_bytes) {
+			logger_retire_file();
+			return written < 0 ? (int)written : -EIO;
+		}
+		logger_logical_bytes += write_bytes;
+		offset += write_bytes;
+		log_file.current_writes++;
+		if (logger_logical_bytes == RECORDING_FILE_BYTES) {
+			ret = logger_rollover_file();
+			if (ret != 0) {
+				return ret;
 			}
 		}
-
-		// Now that we created the file name, open it and write the data
-		if ((sensor == ecg) && collection_id_valid) {
-			struct fs_dirent entry;
-			int stat_ret = fs_stat(MSenseFile->file_name, &entry);
-
-			if (stat_ret == 0) {
-				return sensor_write_failure(sensor,
-							    "ECG recording chunk already exists", -EEXIST);
-			}
-			if (stat_ret != -ENOENT) {
-				return sensor_write_failure(sensor, "ECG recording chunk stat",
-							    stat_ret);
-			}
-		}
-		int file_create = fs_open(&MSenseFile->self_file, MSenseFile->file_name, FS_O_CREATE | FS_O_WRITE);
-		if (file_create != 0){
-			return sensor_write_failure(sensor, "File open", file_create);
-		}
-		if (MSenseFile->self_file.filep == NULL) {
-			close_ret = fs_close(&MSenseFile->self_file);
-			if (close_ret != 0) {
-				LOG_WRN("File close after invalid open state failed for sensor %d: %d",
-					sensor, close_ret);
-			}
-			return sensor_write_failure(sensor, "File open returned no file handle",
-						    -EIO);
-		}
-		// we write in sizes of 4096*2, so we include that in the formula
-		expand_ret = f_expand(MSenseFile->self_file.filep,
-					     RECORDING_FILE_BYTES, 1);
-		if (expand_ret != FR_OK){
-			close_ret = fs_close(&MSenseFile->self_file);
-			if (close_ret != 0) {
-				LOG_WRN("File close after expansion failure failed for sensor %d: %d",
-					sensor, close_ret);
-			}
-			return sensor_write_failure(sensor, "File expansion", -EIO);
-		}
 	}
-	else if (data_counter >= data_limit){
-		data_counter = 0;
-	}
-	
-	total_written = fs_write(&MSenseFile->self_file, data, size);
-	if (total_written == (ssize_t)size){
-		MSenseFile->current_writes++;
-		file_system_malfunction = false;
-		data_counter += total_written;
-	}
-	else if (total_written < 0){
-		return sensor_write_failure(sensor, "File write", (int)total_written);
-	}
-	else {
-		return sensor_write_failure(sensor, "Short file write", -EIO);
-	}
-
-	if (MSenseFile->current_writes >= MSenseFile->max_writes){
-		// if we don't want the leftover empty sectors caused by the buffer writes being smaller than 8192 size we can
-		// uncomment these lines or use f_truncate() with dhara
-		//FIL* fp = &MSenseFile->self_file.filep;
-		//fp->obj.objsize = fp->fptr;
-		//fp->flag |= 0x40; // = FA_MODIFIED
-		sync_ret = fs_sync(&MSenseFile->self_file);
-		close_ret = fs_close(&MSenseFile->self_file);
-		LOG_INF("closing file");
-		if (sync_ret != 0) {
-			return sensor_write_failure(sensor, "File rollover sync", sync_ret);
-		}
-		if (close_ret != 0){
-			return sensor_write_failure(sensor, "File rollover close", close_ret);
-		}
-		MSenseFile->current_writes = 0;
-		if ((sensor == ecg) && collection_id_valid) {
-			MSenseFile->chunk_index++;
-		} else if (sensor == customlog) {
-			int activate_ret = logger_activate_next_file();
-
-			if (activate_ret != 0) {
-				return sensor_write_failure(sensor,
-							    "Log rollover activate",
-							    activate_ret);
-			}
-		}
-		storage_ret = get_storage_percent_full();
-		if (storage_ret < 0) {
-			return sensor_write_failure(sensor, "Storage capacity query", storage_ret);
-		}
-	}
-
 	return 0;
 }
 
-// writes data to a single file named 'test.txt' future TODO: make an extra string parameter so that the file name is customizable
-int write_to_file(const void* data, size_t size){
-	struct fs_mount_t* mp = &fs_mnt;
+static int logger_write_to_file(const void *data, size_t size)
+{
+	int ret;
+
 	if (!file_system_ready || !filesystem_mounted) {
-		return -EACCES;
+		return logger_write_failure("filesystem unavailable", -EACCES);
 	}
-	if (!first_write ){
-		
-		fs_file_t_init(&file);
-		
-		
-		int ID = 0;
-		char IDString[5];
-		if (use_random_files){
-			
-		
-			ID = sys_rand32_get() % 900;
-			
-		}
-		else {
-			uint64_t current_time = get_current_unix_time();
-			ID = current_time;
-
-		}
-		sprintf(IDString, "%d", ID);
-
-		
-
-		strcat(file_name, mp->mnt_point);
-		strcat(file_name, "/");
-		strcat(file_name, IDString);
-		strcat(file_name, "test.txt");
-		//printk("file: %s \n", file_name); 
-		int file_create = fs_open(&file, file_name, FS_O_CREATE | FS_O_WRITE);
-		if (file_create != 0){
-			return file_create;
-		}
-		first_write = true;
-
+	if (storage_percent_full >= 99U) {
+		return logger_write_failure("storage full", -ENOSPC);
 	}
-	else if (data_counter >= data_limit){
-		//memset(file_name, 0, sizeof(file_name));
-		data_counter = 0;
+	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) && get_read_only()) {
+		return logger_write_failure("raw disk is read-only", -EROFS);
 	}
-	
-	int total_written = fs_write(&file, data, size);
-	//fs_write(&file, data, size);
-	if (total_written == size){
-		//printk("sucessfully wrote file, bytes written = %i ! \n", total_written);
-		data_counter += total_written;
-		return 0;
+	if (data == NULL) {
+		return logger_write_failure("invalid write", -EINVAL);
 	}
-	return -1;
 
+	ret = logger_write_bytes(data, size);
+	return ret == 0 ? 0 : logger_write_failure("file write", ret);
 }
 
-
-
-
-void work_write(struct k_work* item){
-	
-	memory_container* container =
-        CONTAINER_OF(item, memory_container, work);
+static void logger_write_work_handler(struct k_work *item)
+{
+	logger_write_work *work_item =
+		CONTAINER_OF(item, logger_write_work, work);
 	int write_ret;
 	int64_t time_value;
-	bool first_write;
+	bool first_write = log_file.current_writes == 0;
 
-	first_write = ((container->sensor == ecg) &&
-		       (ecg_file.current_writes == 0)) ||
-		      ((container->sensor == customlog) &&
-		       (log_file.current_writes == 0));
-	start_timer(&file_system_timer);
-	LOG_DBG("writing true for container %d", container->sensor);
-	container->in_use = true;
-	write_ret = sensor_write_to_file(container->address, container->size,
-					 container->sensor);
-	time_value = stop_timer(&file_system_timer);
+	start_timer(&logger_write_timer);
+	work_item->in_use = true;
+	write_ret = logger_write_to_file(work_item->address, work_item->size);
+	time_value = stop_timer(&logger_write_timer);
 	if (write_ret == 0) {
 		if (first_write) {
-			LOG_INF("storage: file started for sensor %d; first write %zu bytes in %lli ms",
-				container->sensor, container->size, time_value);
+			LOG_INF("storage: log file started; first write %zu bytes in %lli ms",
+				work_item->size, time_value);
 		} else if (time_value > STORAGE_SLOW_WRITE_LOG_THRESHOLD_MS) {
-			LOG_WRN("storage: slow write for sensor %d; packet %d, %zu bytes in %lli ms",
-				container->sensor, container->packet_num, container->size,
-				time_value);
+			LOG_WRN("storage: slow log write; packet %d, %zu bytes in %lli ms",
+				work_item->packet_num, work_item->size, time_value);
 		}
 	}
-	// packets should always be in FIFO order for the queue, for sake of the data order. This check makes sure this is always ensured.
-	if (container->packet_num <= last_packet_number_processed){
-		LOG_ERR("FIFO in k_work not met.");	
+	if (work_item->packet_num <= logger_last_packet_number_processed) {
+		LOG_ERR("Logger FIFO in k_work not met");
 	}
-	
-	last_packet_number_processed = container->packet_num;
-	LOG_DBG("writing false for container %d", container->sensor);
-	container->in_use = false;
+	logger_last_packet_number_processed = work_item->packet_num;
+	work_item->in_use = false;
 	if (write_ret != 0) {
-		LOG_ERR("Filesystem write failed for sensor %d: %d", container->sensor,
-			write_ret);
+		LOG_ERR("Logger filesystem write failed: %d", write_ret);
 		filesystem_latch_fault();
 	}
 	if (logger_prepare_requested) {
@@ -1035,194 +884,114 @@ void work_write(struct k_work* item){
 			filesystem_latch_fault();
 		}
 	}
-
 }
 
-int submit_write(const void* data, size_t size, enum sensor_type type){
-	
-	//memcpy(work_item.address, data, size);
-	memory_container* work_item;
+static int logger_submit_buffer(const void *data, size_t size)
+{
 	int ret;
+	int work_status;
 
 	if (!file_system_ready || !filesystem_mounted) {
 		return -EACCES;
 	}
-
-	if (type == ecg){
-		work_item = &ecg_work_item;
-	}
-	else if (type == customlog){
-		work_item = &log_work_item;
-	}
-	else {
-		LOG_WRN("invalid file type given");
-		return -EINVAL;
-	}
-	int work_status = k_work_busy_get(&work_item->work);
-	if (work_status != 0){
-		LOG_WRN("work state for %d not zero", type);
-		return -EBUSY;
-	}
-	LOG_DBG("state for sensor %d: %d", type, work_status);
-	
-	if (work_item->in_use){
-		LOG_ERR("work item attempted schedule while still running for type: %i", type);
+	work_status = k_work_busy_get(&logger_work_item.work);
+	if (work_status != 0 || logger_work_item.in_use) {
 		return -EBUSY;
 	}
 
-	work_item->address = data;
-	work_item->size = size;
-	work_item->sensor = type;
-	packet_number++;
-	work_item->packet_num = packet_number;
-	ret = k_work_submit_to_queue(&my_work_q, &work_item->work);
-	if (ret != 1){
-		upload_timeout_errors += 1;
-		LOG_ERR("bad ret value for sensor %i: %i, total_errors: %d", type, ret,
+	logger_work_item.address = data;
+	logger_work_item.size = size;
+	logger_work_item.packet_num = ++logger_packet_number;
+	ret = k_work_submit_to_queue(&my_work_q, &logger_work_item.work);
+	if (ret != 1) {
+		upload_timeout_errors++;
+		LOG_ERR("Logger work submit returned %d, total errors: %d", ret,
 			upload_timeout_errors);
-		return (ret < 0) ? ret : -EALREADY;
+		return ret < 0 ? ret : -EALREADY;
 	}
 	return 0;
 }
 
 
-int store_data(const void* data, size_t size, enum sensor_type sensor){
-	LOG_DBG("Store data called");
-	data_upload_buffer* current_buffer;
-	//int16_t arr[6];
-	MotionSenseFile* MSenseFile;
+int filesystem_logger_append(const void *data, size_t size)
+{
+	data_upload_buffer *current_buffer;
 	int ret;
-	if (sensor == ecg){
-		MSenseFile = &ecg_file;
-	}
-	else if (sensor == customlog){
-		MSenseFile = &log_file;
-	}
-	else{
-		LOG_WRN("sensor type unknown");
-		filesystem_latch_fault();
+
+	if (data == NULL && size != 0U) {
 		return -EINVAL;
 	}
-
-	if (MSenseFile->switch_buffer){
-		current_buffer = &MSenseFile->buffer2;
-	}
-	else {
-		current_buffer = &MSenseFile->buffer1;
-	}
-	if (current_buffer->current_size >= MSenseFile->write_size) {
-		if (sensor == customlog) {
-			logger_dropped_buffers++;
-			current_buffer->current_size = 0U;
-		} else {
-		LOG_ERR("Completed buffer for %d is still awaiting ownership", sensor);
-		filesystem_latch_fault();
-		return -EBUSY;
-		}
+	current_buffer = log_file.switch_buffer ? &log_file.buffer2 :
+		&log_file.buffer1;
+	if (current_buffer->current_size >= log_file.write_size) {
+		logger_dropped_buffers++;
+		current_buffer->current_size = 0U;
 	}
 	if (size > sizeof(current_buffer->data_upload_buffer) -
 		    current_buffer->current_size) {
-		LOG_ERR("Buffer capacity exceeded for %d", sensor);
+		LOG_ERR("Logger buffer capacity exceeded");
 		filesystem_latch_fault();
 		return -ENOSPC;
 	}
 
-	if (!MSenseFile->first_sample_init){
-		if (sensor == ecg && collection_id_valid) {
-			MSenseFile->start_time = active_collection_id;
-		} else {
-			MSenseFile->start_time = get_current_unix_time();
-		}
-		MSenseFile->first_sample_init = true;
+	if (size != 0U) {
+		memcpy(&current_buffer->data_upload_buffer[current_buffer->current_size],
+		       data, size);
 	}
-
-	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
-	memcpy(address_to_write, data, size);
 	current_buffer->current_size += size;
-	if (current_buffer->current_size >= MSenseFile->write_size){
-		if (current_buffer->current_size != MSenseFile->write_size){
-			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
-		}
-		if (panic_single_thread) {
-			LOG_ERR("Cannot verify a direct buffer write during panic mode");
-			filesystem_latch_fault();
-			return -ENOTSUP;
-		}
-		ret = submit_write(current_buffer->data_upload_buffer,
-					   current_buffer->current_size, sensor);
-		if (ret != 0) {
-			if (sensor == customlog) {
-				logger_dropped_buffers++;
-				current_buffer->current_size = 0U;
-				return 0;
-			}
-			LOG_ERR("Unable to submit completed buffer for %d: %d", sensor, ret);
-			filesystem_latch_fault();
-			return ret;
-		}
-		if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
-			MSenseFile->first_sample_init = false;
-		}
-		/* The worker now owns this buffer; only then may this stream switch. */
-		current_buffer->current_size = 0;
-		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
+	if (current_buffer->current_size < log_file.write_size) {
+		return 0;
 	}
-
+	if (current_buffer->current_size != log_file.write_size) {
+		LOG_WRN("Logger buffer is %zu bytes over the target",
+			current_buffer->current_size - log_file.write_size);
+	}
+	if (panic_single_thread) {
+		LOG_ERR("Cannot queue a logger buffer during panic mode");
+		filesystem_latch_fault();
+		return -ENOTSUP;
+	}
+	ret = logger_submit_buffer(current_buffer->data_upload_buffer,
+				  current_buffer->current_size);
+	if (ret != 0) {
+		logger_dropped_buffers++;
+		current_buffer->current_size = 0U;
+		return 0;
+	}
+	/* The worker owns this buffer before the producer changes buffers. */
+	current_buffer->current_size = 0U;
+	log_file.switch_buffer = !log_file.switch_buffer;
 	return 0;
 }
 
-int flush_data_buffer(enum sensor_type sensor){
-	
-	LOG_DBG("Flush data called");
-	data_upload_buffer* current_buffer;
-	//int16_t arr[6];
-	MotionSenseFile* MSenseFile;
-	if (sensor == ecg){
-		MSenseFile = &ecg_file;
-	}
-	else if (sensor == customlog){
-		MSenseFile = &log_file;
-	}
-	else{
-		LOG_WRN("sensor type unknown");
-		return -EINVAL;
-	}
+int filesystem_logger_flush(void)
+{
+	struct k_work_sync log_sync;
+	data_upload_buffer *current_buffer;
+	int ret;
 
-	if (MSenseFile->switch_buffer){
-		current_buffer = &MSenseFile->buffer2;
+	if (!logger_write_work_initialized) {
+		return 0;
 	}
-	else {
-		current_buffer = &MSenseFile->buffer1;
+	(void)k_work_flush(&logger_work_item.work, &log_sync);
+	current_buffer = log_file.switch_buffer ? &log_file.buffer2 :
+		&log_file.buffer1;
+	if (current_buffer->current_size == 0U) {
+		return 0;
 	}
-	if (current_buffer->current_size != 0){
-		if (current_buffer->current_size != MSenseFile->write_size){
-				LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
-			}
-			if ((MSenseFile->current_writes + 1) >= MSenseFile->max_writes){
-				MSenseFile->first_sample_init = false;
-			}
-			if (panic_single_thread){
-				LOG_ERR("Cannot verify a direct flush during panic mode");
-				return -ENOTSUP;
-			}
-			int ret = submit_write(current_buffer->data_upload_buffer,
-					       current_buffer->current_size, sensor);
-			if (ret != 0) {
-				if (sensor == customlog) {
-					logger_dropped_buffers++;
-					current_buffer->current_size = 0U;
-					return 0;
-				}
-				LOG_ERR("Unable to submit final buffer for %d: %d", sensor, ret);
-				return ret;
-			}
-			current_buffer->current_size = 0;
-			MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
+	if (panic_single_thread) {
+		LOG_ERR("Cannot flush a logger buffer during panic mode");
+		return -ENOTSUP;
 	}
-	else {
-		LOG_INF("empty buffers, no flushing required");
+	ret = logger_submit_buffer(current_buffer->data_upload_buffer,
+				  current_buffer->current_size);
+	if (ret != 0) {
+		logger_dropped_buffers++;
+		current_buffer->current_size = 0U;
+		return 0;
 	}
-
+	current_buffer->current_size = 0U;
+	log_file.switch_buffer = !log_file.switch_buffer;
 	return 0;
 }
 
@@ -1256,42 +1025,13 @@ int write_device_info_file(const char *device_name, const char *device_id_hex,
 			   "https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.\n",
 			   device_name, device_id_hex, dis_model,
 			   MSENSE_BUILD_DATE_UTC, MSENSE_GIT_COMMIT, MSENSE_GIT_TREE_STATE,
-			   ecg_file.sensor_format);
+			   ECG_FILE_FORMAT);
 	if (written < 0 || written >= sizeof(uuid_contents)) {
 		return -ENOSPC;
 	}
 
 	return msense_uuid_file_ensure(uuid_name, uuid_contents, (size_t)written);
 }
-
-static int close_all_files(void)
-{
-	int ret = 0;
-	int close_ret;
-
-	close_ret = reset_sensor_file(&ecg_file);
-	if (ret == 0 && close_ret != 0) {
-		ret = close_ret;
-	}
-
-	close_ret = reset_sensor_file(&log_file);
-	if (ret == 0 && close_ret != 0) {
-		ret = close_ret;
-	}
-
-	close_ret = sync_and_close_file(&file);
-	if (ret == 0 && close_ret != 0) {
-		ret = close_ret;
-	}
-	if (close_ret == 0) {
-		fs_file_t_init(&file);
-		first_write = false;
-		data_counter = 0;
-	}
-
-	return ret;
-}
-
 
 static int setup_flash(struct fs_mount_t *mnt)
 {

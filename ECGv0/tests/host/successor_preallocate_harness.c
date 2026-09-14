@@ -46,7 +46,10 @@ static ssize_t fs_write(struct fs_file_t *file, const void *data, size_t bytes)
 static int fs_sync(struct fs_file_t *file) { (void)file; return sync_result; }
 static int fs_close(struct fs_file_t *file)
 {
-    (void)file; closes++; return close_result;
+    assert(file->filep != NULL);
+    file->filep = NULL;
+    closes++;
+    return close_result;
 }
 static int fs_unlink(const char *path) { (void)path; unlinks++; return 0; }
 
@@ -69,6 +72,12 @@ int main(void)
     assert(filesystem_preallocate_file(&file, "/reserve", 65536U,
                                        NULL, 0U, false) == 0);
     assert(writes == 0 && closes == 1 && unlinks == 0);
+
+    reset();
+    close_result = -EIO;
+    assert(filesystem_preallocate_file(&file, "/reserve", 65536U,
+                                       NULL, 0U, false) == -EIO);
+    assert(writes == 0 && closes == 1 && unlinks == 1 && file.filep == NULL);
 
     reset();
     sync_result = -EIO;

@@ -16,7 +16,6 @@ static int write_uuid_contents(const char *uuid_name, const char *contents,
 	struct fs_file_t name_file;
 	int close_rc;
 	int rc;
-	int sync_rc = 0;
 	ssize_t bytes_written;
 
 	if (uuid_name == NULL || contents == NULL) {
@@ -31,24 +30,13 @@ static int write_uuid_contents(const char *uuid_name, const char *contents,
 
 	bytes_written = fs_write(&name_file, contents, contents_len);
 	if (bytes_written < 0) {
-		rc = (int)bytes_written;
+		/* Do not close/sync a handle after a possibly partial NAND write. */
+		return (int)bytes_written;
 	} else if (bytes_written != (ssize_t)contents_len) {
-		rc = -EIO;
-	} else {
-		rc = 0;
-	}
-	if (rc == 0) {
-		sync_rc = fs_sync(&name_file);
+		return -EIO;
 	}
 	close_rc = fs_close(&name_file);
-	if (rc == 0 && sync_rc != 0) {
-		rc = sync_rc;
-	}
-	if (rc == 0 && close_rc != 0) {
-		rc = close_rc;
-	}
-
-	return rc;
+	return close_rc;
 }
 
 int msense_uuid_file_ensure(const char *uuid_name, const char *contents,

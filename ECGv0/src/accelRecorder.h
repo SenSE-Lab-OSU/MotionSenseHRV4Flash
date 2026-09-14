@@ -11,6 +11,7 @@ int accel_recorder_consume_fifo(const uint8_t *fifo_data, size_t fifo_bytes,
 				void *context);
 int accel_recorder_stop(void);
 int accel_recorder_abort(void);
+void accel_recorder_filesystem_unmounted(void);
 void accel_recorder_set_fault_handler(accel_recorder_fault_handler_t handler,
 					  void *context);
 

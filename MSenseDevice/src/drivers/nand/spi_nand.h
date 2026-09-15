@@ -254,6 +254,8 @@ extern int current_erases;
 extern int ECC_corrections;
 extern int ECC_err;
 
+void print_ecc_status_info();
+
 void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 
 uint16_t dev_page_size(const struct device *dev);

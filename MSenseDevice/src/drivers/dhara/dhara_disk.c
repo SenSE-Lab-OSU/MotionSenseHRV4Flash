@@ -36,7 +36,7 @@
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(dhara_disk, 4);
+LOG_MODULE_REGISTER(dhara_disk, 3);
 
 /* Both disk drivers define the same device instance and the same disk_info, so only
  * one of them can be in a build.
@@ -101,6 +101,8 @@ bool get_read_only(void)
 {
 	return read_only;
 }
+
+
 
 int disk_nand_access_read(struct disk_info *disk, uint8_t *buf, uint32_t sector,
 			  uint32_t count)
@@ -286,7 +288,7 @@ static int disk_sdmmc_init(const struct device *dev)
 	if (status != 0){
 		LOG_WRN("disk_dhara_init failed %d", status);
 	}
-
+	print_ecc_status_info();
 	/* Binds the device to the dhara_nand context and fills in the geometry, so it
 	 * has to run before the map touches the chip. spi_init() has already restored
 	 * the bad block table by this point, which is what dhara_nand_is_bad() reads.

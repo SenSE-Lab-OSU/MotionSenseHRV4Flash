@@ -22,9 +22,12 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #include <zephyr/storage/flash_map.h>
 #endif
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+// both disk drivers expose the same nand_disk.h surface, and dhara_disk.c is built
+// on the same spi_nand/bad_page layer, so either one needs these declarations
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
+#include "drivers/nand/bad_page.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -778,7 +781,7 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
 	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) | IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) | 
-	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
+	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH) | IS_ENABLED(CONFIG_DISK_DRIVER_DHARA)) {
 		mnt->mnt_point = "/SD:";
 	}
 
@@ -932,7 +935,7 @@ void print_out_page(int page_num){
 	
 	// can also just change this to disk_read()
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
-	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	multi_nand_page_read(filesystem_device2, get_sector_offset(page_num), test_read_buf);
 	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
 	if (page_num > 1500){
 		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);

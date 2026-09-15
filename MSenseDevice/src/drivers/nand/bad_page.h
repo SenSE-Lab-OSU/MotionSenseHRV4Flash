@@ -27,13 +27,21 @@ int save_bad_sectors_arr();
 int load_bad_sectors_arr();
 int erase_bad_sectors_arr();
 int register_bad_sector(uint32_t sector_num);
+
+/* Unconditional form of register_bad_sector(), for callers that already know the
+ * block is bad and must not be gated on the first boot scan having run.
+ */
+int mark_bad_sector(uint32_t sector_num);
+
+/* True if the block holding this sector is recorded bad. */
+bool is_sector_bad(uint32_t sector_num);
 int get_sector_offset(int sector_num);
 void print_bad_sect_info();
 
 int spi_nand_bad_page_init(const struct device* dev);
-int spi_nand_page_read_badsim_wrapper(const struct device* dev, off_t page_addr, void* dest);
-int spi_nand_page_write_badsim_wrapper(const struct device* dev, off_t page_address, const void* src, size_t size);
-int add_bad_page(off_t page);
-int remove_bad_page(off_t page);
+int multi_nand_page_read_badsim_wrapper(const struct device* dev, uint32_t page_number, void* buffer);
+int multi_nand_page_write_badsim_wrapper(const struct device* dev, uint32_t page_number, const void* buffer, size_t size);
+int add_bad_page(uint32_t page);
+int remove_bad_page(uint32_t page);
 
 #endif /* BAD_PAGE_H */

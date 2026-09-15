@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a non-destructive 2--3 hour PPG streaming endurance campaign."""
+"""Format storage, then run a 2--3 hour PPG streaming endurance campaign."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -38,6 +39,18 @@ MSG_END = 0x83
 MSG_RESULT = 0x84
 STATUS_SUCCESS = 0
 STATUS_STOPPED = 8
+FATAL_PATTERN = re.compile(
+    r"\b(?:assert(?:ion)?(?: failed)?|fatal error|panic|hardfault|hard fault|bus fault|"
+    r"usage fault|memmanage fault|stack overflow|watchdog|kernel oops|protocol_error|"
+    r"buffer_overflow|storage_error|reset_(?:reconnect|disconnect)_timeout)\b|"
+    r"\bERROR (?:relay|NUS)\b",
+    re.IGNORECASE,
+)
+REVIEW_PATTERN = re.compile(
+    r"<err>|<wrn>|\b(?:fail(?:ed|ure)?|error|timeout|drop(?:out|ped)?|"
+    r"disconnect(?:ed)?|reset|reboot)\b",
+    re.IGNORECASE,
+)
 PEER_READY_COMPLETE_PATTERN = (
     r"PEER_READY nus=1 smp=\d+ legacy=\d+ "
     r"peer_name=(\S+) peer_addr=(\S+) peer_addr_type=(\d+)(?:\r?\n|$)"
@@ -103,11 +116,81 @@ def validate_ppg_records(sensor: bytes) -> dict[str, object]:
     deltas = [((b - a) & 0xFFFFFFFF) for a, b in zip(ticks, ticks[1:])]
     if any(delta >= 0x80000000 for delta in deltas):
         raise HilError("PPG global tick moved backward")
+    if any(delta > 4 for delta in deltas):
+        raise HilError("PPG global tick has a forward gap larger than four ticks")
+    histogram = {str(delta): deltas.count(delta) for delta in sorted(set(deltas))}
     return {
         "tick_first": ticks[0], "tick_last": ticks[-1],
         "tick_repeats": sum(delta == 0 for delta in deltas),
+        "tick_deviations_from_nominal": sum(delta != 2 for delta in deltas),
+        "tick_delta_histogram": histogram,
         "tick_max_forward_delta": max(deltas, default=0),
     }
+
+
+def validate_accel_records(sensor: bytes) -> dict[str, object]:
+    if not sensor or len(sensor) % 26:
+        raise HilError("accelerometer data is empty or not 26-byte record aligned")
+    ticks = [struct.unpack_from("<I", sensor, offset + 22)[0]
+             for offset in range(0, len(sensor), 26)]
+    deltas = [((b - a) & 0xFFFFFFFF) for a, b in zip(ticks, ticks[1:])]
+    if any(delta >= 0x80000000 for delta in deltas):
+        raise HilError("accelerometer global tick moved backward")
+    if any(delta not in (16, 32) for delta in deltas):
+        raise HilError("accelerometer global tick is not 16 or 32 ticks")
+    histogram = {str(delta): deltas.count(delta) for delta in sorted(set(deltas))}
+    return {
+        "tick_first": ticks[0], "tick_last": ticks[-1],
+        "tick_repeats": sum(delta == 0 for delta in deltas),
+        "tick_delta_histogram": histogram,
+        "missed_intervals": sum(delta // 16 - 1 for delta in deltas),
+        "tick_max_forward_delta": max(deltas, default=0),
+    }
+
+
+def validate_recording_file(path: Path) -> dict[str, object]:
+    if production.LOG_NAME.fullmatch(path.name):
+        return production.validate_recording_file(sys.modules[__name__], path)
+    if production.PPG_NAME.fullmatch(path.name):
+        record_bytes, kind = PPG_RECORD_BYTES, "ppg"
+    elif production.ACCEL_NAME.fullmatch(path.name):
+        record_bytes, kind = 26, "accel"
+    else:
+        raise HilError(f"unexpected recording filename: {path.name}")
+    raw = path.read_bytes()
+    if len(raw) != production.FILE_BYTES:
+        raise HilError(f"{path.name}: size {len(raw)}, expected {production.FILE_BYTES}")
+    prefix = production.file_prefix(raw, record_bytes, path.name)
+    if any(prefix[offset:offset + record_bytes] == b"\xff" * record_bytes
+           for offset in range(0, len(prefix), record_bytes)):
+        raise HilError(f"{path.name}: erased record appears inside data prefix")
+    result = {"file": str(path), "kind": kind, "valid_bytes": len(prefix),
+              "records": len(prefix) // record_bytes,
+              "termination": "full file" if len(prefix) == len(raw) else "0xFF suffix",
+              "sha256": production.sha256(path)}
+    result.update(validate_ppg_records(prefix) if kind == "ppg"
+                  else validate_accel_records(prefix))
+    return result
+
+
+def recording_numeric_key(name: str) -> tuple[int, int]:
+    if production.PPG_NAME.fullmatch(name):
+        match = re.search(r"ppg(\d+)\.bin$", name, re.IGNORECASE)
+    else:
+        match = re.search(r"ac(\d+)(?:_(\d{4}))?\.bin$", name, re.IGNORECASE)
+    if match is None:
+        raise HilError(f"cannot extract recording index from {name}")
+    return int(match.group(1)), int(match.group(2) or 0) if match.lastindex == 2 else 0
+
+
+def scan_irregularities(text: str) -> dict[str, object]:
+    lines = [line for line in text.splitlines() if line.strip()]
+    fatal = [line for line in lines if FATAL_PATTERN.search(line)]
+    if fatal:
+        raise HilError("fatal/assert/transport irregularity: " + " | ".join(fatal[:20]))
+    review = [line for line in lines if REVIEW_PATTERN.search(line)]
+    return {"result": "PASS", "review_count": len(review),
+            "review_lines": review[:200], "review_truncated": max(0, len(review) - 200)}
 
 
 class EventLog:
@@ -418,6 +501,20 @@ class Central:
             self.delay(0.25, "collection shutdown poll", status_interval=9999)
         raise HilError(f"PPG collection/storage shutdown was not confirmed: {last}")
 
+    def format_storage(self, peer: dict[str, str]) -> dict[str, object]:
+        mark = self.send("reset 68")
+        response = self.wait(
+            mark, "PPG format/reset 68 ready rediscovery",
+            reset_peer_ready_pattern(68, peer), self.args.format_timeout,
+            r"RESET_RECONNECT_TIMEOUT|RESET_DISCONNECT_TIMEOUT|ERR reset")
+        milestones = ("RESET_DISCONNECTED code=68", "RESET_ADVERTISING code=68",
+                      "RESET_RECONNECTED code=68", "RESET_REDISCOVERED code=68")
+        missing = [item for item in milestones if item not in response]
+        if missing:
+            raise HilError("PPG format omitted milestone(s): " + ", ".join(missing))
+        return {"result": "PASS", "code": 68, "peer": peer,
+                "milestones": list(milestones)}
+
     def start_segment(self, root: Path, session_id: int, infinity: bool) -> Segment:
         if self.segment is not None:
             raise HilError("a stream segment is already active")
@@ -575,11 +672,12 @@ class NativeCapture(threading.Thread):
             raise HilError("native UART capture thread did not stop")
         if self.error:
             raise HilError(f"native UART capture failed: {self.error}")
+        text = (self.args.output / "native-uart.txt").read_text(
+            encoding="utf-8", errors="replace")
         return {"result": "PASS", "raw_bytes": self.raw_bytes,
                 "reconnects": self.reconnects, "connected_at_end": self.connected_at_end,
-                "storage_scan": production.scan_storage_errors(
-                    (self.args.output / "native-uart.txt").read_text(
-                        encoding="utf-8", errors="replace"))}
+                "storage_scan": production.scan_storage_errors(text),
+                "irregularity_scan": scan_irregularities(text)}
 
 
 def wait_native_ready(capture: NativeCapture, timeout: float = 15) -> None:
@@ -595,6 +693,7 @@ def recording_checkpoint(args, case_root: Path, before, prior_hashes) -> tuple[d
     if kinds != {"ppg", "accel", "log"}:
         raise HilError(f"new recording set incomplete: {names}")
     preservation = production.require_preserved(args.drive, prior_hashes)
+    current_hashes = production.content_snapshot(args.drive)
     media = case_root / "media"
     media.mkdir(exist_ok=False)
     validation = []
@@ -602,9 +701,13 @@ def recording_checkpoint(args, case_root: Path, before, prior_hashes) -> tuple[d
     for name in names:
         target = media / name
         shutil.copy2(args.drive / name, target)
-        checked = production.validate_recording_file(sys.modules[__name__], target)
+        checked = validate_recording_file(target)
+        if checked["sha256"] != current_hashes[name]:
+            raise HilError(f"copied evidence does not match on-media file: {name}")
+        checked["source_metadata"] = after[name]
         if checked["kind"] == "log":
             production.scan_storage_errors(checked["text"])
+            checked["irregularity_scan"] = scan_irregularities(checked["text"])
             positions = [checked["text"].find(marker) for marker in production.SHUTDOWN_MARKERS]
             if all(position >= 0 for position in positions) and positions == sorted(positions):
                 graceful_logs += 1
@@ -613,11 +716,24 @@ def recording_checkpoint(args, case_root: Path, before, prior_hashes) -> tuple[d
         validation.append(checked)
     if graceful_logs == 0:
         raise HilError("case produced no gracefully closed log")
+    tick_transitions = []
+    for kind, cadence in (("ppg", (0, 1, 2, 3, 4)), ("accel", (16, 32))):
+        entries = sorted((item for item in validation if item["kind"] == kind),
+                         key=lambda item: recording_numeric_key(Path(item["file"]).name))
+        for previous, current in zip(entries, entries[1:]):
+            delta = (current["tick_first"] - previous["tick_last"]) & 0xFFFFFFFF
+            reset = delta >= 0x80000000
+            if reset or delta not in cadence:
+                raise HilError(f"{kind} tick discontinuity across rollover: {delta}")
+            tick_transitions.append({"kind": kind, "from": Path(previous["file"]).name,
+                                     "to": Path(current["file"]).name,
+                                     "delta": delta, "reset": reset})
     (case_root / "post-media.json").write_text(json.dumps(after, indent=2) + "\n",
                                                 encoding="utf-8")
     result = {"result": "PASS", "new_files": names, "validated": validation,
-              "graceful_logs": graceful_logs, "prior_files": preservation}
-    return after, production.content_snapshot(args.drive), result
+              "graceful_logs": graceful_logs, "tick_transitions": tick_transitions,
+              "prior_files": preservation}
+    return after, current_hashes, result
 
 
 def reset_central(args, events: EventLog, case_root: Path) -> dict[str, object]:
@@ -632,7 +748,44 @@ def reset_central(args, events: EventLog, case_root: Path) -> dict[str, object]:
         raise HilError(f"nrfutil Central RESET_SYSTEM failed ({completed.returncode})")
     events.add("central_reset_completed", returncode=completed.returncode)
     return {"result": "PASS", "returncode": completed.returncode,
-            "stdout": "central-reset.stdout.txt", "stderr": "central-reset.stderr.txt"}
+            "stdout": "central-reset.stdout.txt", "stderr": "central-reset.stderr.txt",
+            "storage_scan": production.scan_storage_errors(completed.stdout + completed.stderr),
+            "irregularity_scan": scan_irregularities(completed.stdout + completed.stderr)}
+
+
+def write_evidence_manifest(root: Path) -> dict[str, object]:
+    manifest_path = root / "evidence-manifest.json"
+    files = []
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if relative in ("summary.json", "evidence-manifest.json"):
+            continue
+        stat = path.stat()
+        files.append({"path": relative, "size": stat.st_size,
+                      "mtime_ns": stat.st_mtime_ns, "sha256": production.sha256(path)})
+    manifest_path.write_text(json.dumps({"files": files}, indent=2) + "\n", encoding="utf-8")
+    return {"path": manifest_path.name, "files": len(files),
+            "sha256": production.sha256(manifest_path)}
+
+
+def revalidate_evidence(paths: list[Path], summary_path: Path | None) -> int:
+    summary = {"test": "PPG extended HIL text-evidence rescan", "result": "PASS", "files": []}
+    for path in paths:
+        entry = {"file": str(path), "result": "FAIL"}
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            entry["storage_scan"] = production.scan_storage_errors(text)
+            entry["irregularity_scan"] = scan_irregularities(text)
+            entry["sha256"] = production.sha256(path)
+            entry["result"] = "PASS"
+        except Exception as error:
+            entry["error"] = str(error)
+            summary["result"] = "FAIL"
+        summary["files"].append(entry)
+    if summary_path:
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2))
+    return 0 if summary["result"] == "PASS" else 1
 
 
 class Campaign:
@@ -693,18 +846,32 @@ class Campaign:
         self.central.delay(HISTORY_SECONDS, "history fill", status_interval=9999)
 
     def run(self) -> None:
-        self.before = production.wait_for_snapshot(
+        pre_format = production.wait_for_snapshot(
             self.args.drive, self.args.remount_timeout, self.args.settle_seconds)
-        (self.args.output / "baseline-media.json").write_text(
-            json.dumps(self.before, indent=2) + "\n", encoding="utf-8")
-        self.prior_hashes = production.content_snapshot(self.args.drive)
-        self.summary["baseline_files"] = sorted(self.prior_hashes)
+        pre_hashes = production.content_snapshot(self.args.drive)
+        pre_inventory = {name: {**metadata, "sha256": pre_hashes[name]}
+                         for name, metadata in pre_format.items()}
+        (self.args.output / "pre-format-media.json").write_text(
+            json.dumps(pre_inventory, indent=2) + "\n", encoding="utf-8")
+        self.summary["pre_format_files"] = sorted(pre_inventory)
         self.native.start(); wait_native_ready(self.native)
         self.central.open(); self.central.identify()
         mark = self.central.send("disconnect")
         self.central.wait(mark, "initial idle", r"DISCONNECTED|ERR no active connection", 15)
         self.peer = self.central.connect_same()
         self.summary["peer"] = self.peer
+        self.summary["format"] = self.central.format_storage(self.peer)
+        self.before = production.wait_for_snapshot(
+            self.args.drive, self.args.remount_timeout, self.args.settle_seconds)
+        unexpected = sorted(name for name in self.before if name.lower() != "uuid.txt")
+        if unexpected:
+            raise HilError("reset-68 baseline contains unexpected files: " + ", ".join(unexpected))
+        self.prior_hashes = production.content_snapshot(self.args.drive)
+        post_inventory = {name: {**metadata, "sha256": self.prior_hashes[name]}
+                          for name, metadata in self.before.items()}
+        (self.args.output / "post-format-media.json").write_text(
+            json.dumps(post_inventory, indent=2) + "\n", encoding="utf-8")
+        self.summary["post_format_files"] = sorted(post_inventory)
 
         root, case = self.case("baseline")
         self.collect_start(); case["segments"].append(
@@ -871,6 +1038,39 @@ def self_test() -> None:
         "REMOTE_STATUS status=success length=8 hex=0101000000000000\n") is None
     assert collection_shutdown_status(
         "REMOTE_STATUS status=success length=8 hex=0100010000000000\n") is None
+    accel_record = lambda tick: bytes(22) + struct.pack("<I", tick)
+    accel = validate_accel_records(b"".join(accel_record(tick) for tick in (16, 32, 64)))
+    assert accel["tick_delta_histogram"] == {"16": 1, "32": 1}
+    assert accel["missed_intervals"] == 1
+    try:
+        validate_accel_records(accel_record(16) + accel_record(64))
+    except HilError:
+        pass
+    else:
+        raise AssertionError("48-tick accelerometer gap was accepted")
+    with tempfile.TemporaryDirectory(prefix="ppg-extended-hil-") as directory:
+        full = Path(directory) / "ppg123.bin"
+        full.write_bytes(record * (production.FILE_BYTES // PPG_RECORD_BYTES))
+        assert validate_recording_file(full)["termination"] == "full file"
+    assert recording_numeric_key("ppg99.bin") < recording_numeric_key("ppg100.bin")
+    tick_record = lambda tick: bytes(12) + struct.pack("<I", tick)
+    bounded = validate_ppg_records(b"".join(tick_record(tick)
+                                            for tick in (10, 10, 11, 13, 17)))
+    assert bounded["tick_delta_histogram"] == {"0": 1, "1": 1, "2": 1, "4": 1}
+    assert bounded["tick_deviations_from_nominal"] == 3
+    try:
+        validate_ppg_records(tick_record(10) + tick_record(15))
+    except HilError:
+        pass
+    else:
+        raise AssertionError("five-tick PPG gap was accepted")
+    assert scan_irregularities("NUS stream disconnected: reason 0x13")["review_count"] == 1
+    try:
+        scan_irregularities("ASSERTION FAIL at zephyr.c:10")
+    except HilError:
+        pass
+    else:
+        raise AssertionError("fatal assertion was accepted")
     print("run_extended_streaming_hil.py self-test: PASS (no hardware access)")
 
 
@@ -878,7 +1078,10 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("self-test", help="run parser checks without hardware")
-    run = sub.add_parser("run", help="run the non-destructive endurance campaign")
+    scan = sub.add_parser("scan-evidence", help="re-scan preserved text evidence")
+    scan.add_argument("--input", type=Path, nargs="+", required=True)
+    scan.add_argument("--summary", type=Path)
+    run = sub.add_parser("run", help="format and run the endurance campaign")
     run.add_argument("--command-port", required=True)
     run.add_argument("--relay-port", required=True)
     run.add_argument("--central-jlink-serial", required=True)
@@ -889,6 +1092,8 @@ def parse_args(argv=None):
     run.add_argument("--drive", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--session-id-base", type=int, required=True)
+    run.add_argument("--format-confirmation", required=True,
+                     choices=("FORMAT_PPG_FATFS_CODE_68",))
     run.add_argument("--campaign-minutes", type=float, default=150)
     run.add_argument("--baseline-seconds", type=float, default=900)
     run.add_argument("--fault-pre-seconds", type=float, default=300)
@@ -900,6 +1105,7 @@ def parse_args(argv=None):
     run.add_argument("--stream-timeout", type=float, default=300)
     run.add_argument("--central-restart-timeout", type=float, default=90)
     run.add_argument("--ppg-reset-timeout", type=float, default=330)
+    run.add_argument("--format-timeout", type=float, default=330)
     run.add_argument("--remount-timeout", type=float, default=90)
     run.add_argument("--settle-seconds", type=float, default=3)
     run.add_argument("--ppg-baud", type=int, default=115200)
@@ -909,7 +1115,7 @@ def parse_args(argv=None):
         durations = (args.baseline_seconds, args.fault_pre_seconds, args.dropout_seconds,
                      args.short_infinity_seconds, args.minimum_final_soak_seconds,
                      args.final_validation_seconds, args.stream_timeout,
-                     args.central_restart_timeout, args.ppg_reset_timeout,
+                     args.central_restart_timeout, args.ppg_reset_timeout, args.format_timeout,
                      args.remount_timeout, args.settle_seconds)
         if not 120 <= args.campaign_minutes <= 180:
             parser.error("--campaign-minutes must be from 120 through 180")
@@ -929,6 +1135,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     if args.command == "self-test":
         self_test(); return 0
+    if args.command == "scan-evidence":
+        return revalidate_evidence(args.input, args.summary)
     summary = {"test": "PPG extended streaming HIL", "result": "FAIL",
                "started_utc": stamp()}
     created = False
@@ -954,16 +1162,18 @@ def main(argv=None) -> int:
             except Exception as error:
                 summary["native_uart"] = {"result": "FAIL", "error": str(error)}
                 summary["result"] = "FAIL"; code = 1
-            try:
-                if campaign.central.text:
-                    production.scan_storage_errors(campaign.central.text)
-                summary["central_storage_scan"] = {"result": "PASS"}
-            except Exception as error:
-                summary["central_storage_scan"] = {"result": "FAIL", "error": str(error)}
-                summary["result"] = "FAIL"; code = 1
+            for key, scanner in (("central_storage_scan", production.scan_storage_errors),
+                                 ("central_irregularity_scan", scan_irregularities)):
+                try:
+                    summary[key] = (scanner(campaign.central.text) if campaign.central.text
+                                    else {"result": "NOT_CAPTURED"})
+                except Exception as error:
+                    summary[key] = {"result": "FAIL", "error": str(error)}
+                    summary["result"] = "FAIL"; code = 1
             campaign.central.close(); campaign.events.close()
         summary["ended_utc"] = stamp()
         if created:
+            summary["evidence_manifest"] = write_evidence_manifest(args.output)
             (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n",
                                                        encoding="utf-8")
     print(json.dumps(summary, indent=2))

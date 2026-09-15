@@ -2,9 +2,10 @@
 
 ## Extended streaming endurance HIL
 
-`run_extended_streaming_hil.py` runs the non-destructive 150-minute streaming
-campaign. It preserves existing media by content hash and never formats,
-flashes, performs DFU, or uses reset codes 68/132. It does intentionally issue
+`run_extended_streaming_hil.py` runs a destructive-at-start, production-image
+150-minute campaign (configurable from 120 through 180 minutes). It begins with
+the normal BLE `reset 68` full FatFS format. It does not build, flash, perform
+DFU, use reset 132, or alter firmware. It issues
 one Central `RESET_SYSTEM`, one PPG storage-aware reset (`reset 120`), BLE
 disconnects, and ordinary collection/stream commands. The reset case stops the
 stream, sends `collect off`, confirms remote status bytes 1 and 2 are zero,
@@ -31,21 +32,70 @@ python PPGv2/tests/hil/run_extended_streaming_hil.py run `
   --central-jlink-serial <Central-debugger-serial> --nrfutil <nrfutil.exe> `
   --ppg-port <PPG-native-COM> --ppg-usb-serial <PPG-USB-serial> `
   --peer-name <exact-MSense4PPG-name> --drive <PPG-MSC-root> `
+  --format-confirmation FORMAT_PPG_FATFS_CODE_68 `
   --session-id-base <unique-nonzero-id> --output <new-evidence-directory>
 ```
 
-The runner records continuous native UART and Central command/relay evidence,
-strictly checks MRLY sequence and NUS data offsets, validates each new on-media
-PPG/accelerometer/log set, and verifies all prior files after every case. A
-planned stream abort is classified expected only after a complete 128 KiB
-recovery stream passes. Checkpoints are append-only numbered JSON files; the
-final disposition is `summary.json`. On failure, the runner performs bounded
-best-effort stop, collection-off, and disconnect cleanup while retaining all
-partial evidence.
+Default timeline (elapsed time includes control and validation overhead):
 
-The exact advertised PPG name is mandatory because `connect ppg` is a
-first-match operation. Do not access the MSC volume with another process while
-collection owns storage.
+- 0--10 minutes: inventory and hash the pre-format root, start identity-checked
+  native UART capture, verify the exact BLE peer, issue reset 68, require all
+  disconnect/advertise/reconnect/rediscovery milestones, and prove the clean
+  root contains at most `uuid.txt`.
+- 10--25: 15-minute INFINITY baseline followed by a commanded record-boundary
+  stop and media validation.
+- 25--40: stream for 5 minutes, deliberately disconnect BLE for 3 minutes,
+  reconnect to the same address/name/type, then require a complete FINITE
+  128-KiB recovery stream.
+- 40--55: stream for 5 minutes, reset only the explicitly identified Central
+  debugger with `RESET_SYSTEM`, reopen both VCOMs, reconnect to the same PPG,
+  and require a complete recovery stream.
+- 55--70: stop a 5-minute BLE stream at a record boundary, send `collect off`,
+  confirm remote status bytes 1 and 2 are zero, validate and hash the closed
+  files, issue storage-safe reset 120, require exact-peer rediscovery, then run
+  a complete recovery and revalidate preservation.
+- 70--90: eight collection on/off cycles alternating complete FINITE streams
+  and 60-second INFINITY streams; disconnect/reconnect after every second cycle.
+- Remaining time through about 145 minutes: one INFINITY soak. The final five
+  minutes are reserved for stop, unmount/remount, copied-media validation,
+  hashes, idle-state confirmation, and cleanup.
+
+The runner continuously captures native UART across PPG resets and verifies it
+by USB serial (a changed COM number fails unless explicitly allowed). It keeps
+raw Central command and MRLY relay bytes, checks relay sequence, NUS framing and
+offset continuity, validates 16-byte PPG and 26-byte accelerometer records and
+their wrap-aware ticks, and validates every new exact-length log. All copied
+media must match its settled on-device SHA-256. Size, modification time, and
+SHA-256 for every captured evidence file (excluding the final summary and the
+manifest itself) are written to `evidence-manifest.json`.
+The long soak is expected to exercise PPG file rollover: a completely written
+4-MiB PPG file is valid only when every record passes, while every partial PPG
+or accelerometer file must retain a record-aligned erased `0xFF` suffix.
+
+Pass requires exact-peer reset-68/120 recovery, clean format, every planned
+stream and collection transition, a full FINITE recovery after each planned
+abort, confirmed collection/storage shutdown before and after reset 120,
+complete file sets, record/tick checks, byte-identical preservation of all
+files created after format, and no NAND/storage, assertion/fatal,
+protocol/relay, overflow, or reset-timeout finding. Expected disconnects and
+non-storage warnings are retained under `review_lines`; they do not mask hard
+failures. A failed recovery makes the preceding planned dropout a failure.
+Checkpoints are append-only numbered JSON files. On failure the runner performs
+bounded best-effort stop, collection-off, and disconnect cleanup while retaining
+partial evidence. Re-scan text evidence without hardware using:
+
+```powershell
+python PPGv2/tests/hil/run_extended_streaming_hil.py scan-evidence `
+  --input <native-uart.txt> <central-command.txt> --summary <rescan.json>
+```
+
+The literal format confirmation, exact advertised PPG name, USB serial, current
+Central debugger serial/VCOMs, and a new evidence directory are mandatory.
+`connect ppg` is a first-match operation, so a name mismatch is disconnected
+and never accepted. The format permanently destroys the selected PPG volume;
+do not access that MSC volume from another process while collection owns it.
+
+## Two-session format/DFU functional HIL
 
 This destructive, production-like campaign formats the PPG FatFS volume,
 installs the exact production PPG image through the Central's supported MDFU

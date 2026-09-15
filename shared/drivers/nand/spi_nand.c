@@ -501,11 +501,27 @@ static int spi_nand_wait_until_ready(const struct device *dev,
 		if ((*final_status & SPI_NOR_WIP_BIT) == 0U) {
 			return 0;
 		}
-		if (sys_timepoint_expired(deadline)) {
-			LOG_ERR("NAND ready timeout after %u us", timeout_us);
-			return -ETIMEDOUT;
+		if (!sys_timepoint_expired(deadline)) {
+			k_sleep(K_USEC(NAND_STATUS_POLL_INTERVAL_US));
+			continue;
 		}
-		k_sleep(K_USEC(NAND_STATUS_POLL_INTERVAL_US));
+
+		/* The busy value may have been sampled before the deadline and only
+		 * returned after it. Confirm with a new read initiated after expiry.
+		 */
+		uint8_t confirmation_status;
+
+		ret = get_status(dev, &confirmation_status);
+		if (ret != 0) {
+			return ret;
+		}
+		*final_status = confirmation_status;
+		if ((confirmation_status & SPI_NOR_WIP_BIT) == 0U) {
+			return 0;
+		}
+		LOG_ERR("NAND ready timeout after %u us: status=0x%02x",
+			timeout_us, confirmation_status);
+		return -ETIMEDOUT;
 	}
 }
 
@@ -779,6 +795,7 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	int disable_ret;
 	int ret;
 	uint8_t status = 0;
+	bool operation_busy_unknown = false;
 
 	current_writes++;
 	acquire_device(dev);
@@ -817,6 +834,8 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 		goto cleanup;
 	}
 
+	operation_busy_unknown = true;
+	status = SPI_NOR_WIP_BIT;
 	ret = spi_nand_access(dev, &pe_cinstr_cfg);
 	if (ret != 0) {
 		int settle_ret;
@@ -824,6 +843,8 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 		LOG_WRN("program execute failed: %d", ret);
 		settle_ret = spi_nand_wait_until_ready(dev,
 					 NAND_PAGE_PROGRAM_TIMEOUT_US, &status);
+		operation_busy_unknown = (settle_ret != 0) &&
+					 ((status & SPI_NOR_WIP_BIT) != 0U);
 		if (settle_ret != 0) {
 			LOG_WRN("program settle failed: %d", settle_ret);
 		}
@@ -832,6 +853,8 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 
 	ret = spi_nand_wait_until_ready(dev, NAND_PAGE_PROGRAM_TIMEOUT_US,
 					&status);
+	operation_busy_unknown = (ret != 0) &&
+				 ((status & SPI_NOR_WIP_BIT) != 0U);
 	if ((ret == 0) && ((status & NAND_STATUS_PROGRAM_FAIL) != 0U)) {
 		LOG_ERR("program failed: status=0x%02x", status);
 		ret = -EIO;
@@ -840,7 +863,12 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	}
 
 cleanup:
-	disable_ret = write_disable(dev);
+	if (operation_busy_unknown) {
+		LOG_ERR("NAND busy or unknown; skipping program write disable");
+		disable_ret = 0;
+	} else {
+		disable_ret = write_disable(dev);
+	}
 	if (ret == 0) {
 		ret = disable_ret;
 	} else if (disable_ret != 0) {
@@ -861,6 +889,7 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 	int disable_ret;
 	int ret;
 	uint8_t status = 0;
+	bool operation_busy_unknown = false;
 
 	acquire_device(dev);
 	current_erases++;
@@ -882,6 +911,8 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 		goto cleanup;
 	}
 
+	operation_busy_unknown = true;
+	status = SPI_NOR_WIP_BIT;
 	ret = spi_nand_access(dev, &erase);
 	if (ret != 0) {
 		int settle_ret;
@@ -889,6 +920,8 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 		LOG_WRN("block erase command failed: %d", ret);
 		settle_ret = spi_nand_wait_until_ready(dev,
 					 NAND_BLOCK_ERASE_TIMEOUT_US, &status);
+		operation_busy_unknown = (settle_ret != 0) &&
+					 ((status & SPI_NOR_WIP_BIT) != 0U);
 		if (settle_ret != 0) {
 			LOG_WRN("block erase settle failed: %d", settle_ret);
 		}
@@ -897,6 +930,8 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 
 	ret = spi_nand_wait_until_ready(dev, NAND_BLOCK_ERASE_TIMEOUT_US,
 					&status);
+	operation_busy_unknown = (ret != 0) &&
+				 ((status & SPI_NOR_WIP_BIT) != 0U);
 	if ((ret == 0) && ((status & NAND_STATUS_ERASE_FAIL) != 0U)) {
 		LOG_ERR("block erase failed: status=0x%02x", status);
 		ret = -EIO;
@@ -905,7 +940,12 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 	}
 
 cleanup:
-	disable_ret = write_disable(dev);
+	if (operation_busy_unknown) {
+		LOG_ERR("NAND busy or unknown; skipping erase write disable");
+		disable_ret = 0;
+	} else {
+		disable_ret = write_disable(dev);
+	}
 	if (ret == 0) {
 		ret = disable_ret;
 	} else if (disable_ret != 0) {

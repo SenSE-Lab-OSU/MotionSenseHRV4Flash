@@ -103,6 +103,7 @@ static int set_die_error_call, set_die_error_ret, set_die_calls;
 static int unlock_error_call, unlock_error_ret, unlock_calls;
 static int selected_dies[8];
 static uint8_t status_values[16], default_status;
+static uint64_t get_advance_us[16];
 static size_t status_count, status_index;
 static uint64_t now_us;
 static uint64_t sleep_extra_us;
@@ -122,6 +123,7 @@ static void reset_fake(void)
     memset(events, 0, sizeof(events));
     memset(event_times, 0, sizeof(event_times));
     memset(status_values, 0, sizeof(status_values));
+    memset(get_advance_us, 0, sizeof(get_advance_us));
     memset(selected_dies, 0, sizeof(selected_dies));
     event_count = get_calls = sleeps = set_die_calls = unlock_calls = 0;
     wren_ret = load_ret = execute_ret = erase_ret = wrdi_ret = 0;
@@ -149,13 +151,19 @@ static int spi_nand_access(const struct device *dev, spi_send_request *request)
     (void)dev;
     switch (request->opcode) {
     case SPI_NAND_GF:
+    {
+        int call = get_calls++;
         record(EV_GET);
-        if (get_calls++ == get_error_call) {
+        if (call == get_error_call) {
             return get_error_ret;
         }
         *(uint8_t *)request->data = status_index < status_count
             ? status_values[status_index++] : default_status;
+        if (call < (int)(sizeof(get_advance_us) / sizeof(get_advance_us[0]))) {
+            now_us += get_advance_us[call];
+        }
         return 0;
+    }
     case SPI_NAND_PL:
         record(EV_LOAD);
         return load_ret;
@@ -282,16 +290,17 @@ static void test_wait_bounds(void)
     const uint8_t ready_before[] = { BIT(0), BIT(0), 0 };
     const uint8_t ready_after_final_sleep[] = { BIT(0), BIT(0), BIT(0), 0 };
     const uint8_t ready_after_delayed_wake[] = { BIT(0), 0 };
+    const uint8_t stale_busy_then_ready[] = { BIT(0), 0 };
 
     reset_fake();
     default_status = BIT(0);
     assert(spi_nand_wait_until_ready(&test_device, 250U, &status) == -ETIMEDOUT);
-    assert(get_calls == 4 && sleeps == 3 && now_us == 300U);
+    assert(status == BIT(0) && get_calls == 5 && sleeps == 3 && now_us == 300U);
 
     reset_fake();
     default_status = BIT(0);
     assert(spi_nand_wait_until_ready(&test_device, 200U, &status) == -ETIMEDOUT);
-    assert(get_calls == 3 && sleeps == 2 && now_us == 200U);
+    assert(get_calls == 4 && sleeps == 2 && now_us == 200U);
 
     reset_fake();
     set_statuses(ready_before, sizeof(ready_before));
@@ -308,6 +317,21 @@ static void test_wait_bounds(void)
     sleep_extra_us = 250U;
     assert(spi_nand_wait_until_ready(&test_device, 200U, &status) == 0);
     assert(status == 0 && get_calls == 2 && sleeps == 1 && now_us == 350U);
+
+    /* Busy was sampled before the deadline, but the SPI return was delayed. */
+    reset_fake();
+    set_statuses(stale_busy_then_ready, sizeof(stale_busy_then_ready));
+    get_advance_us[0] = 300U;
+    assert(spi_nand_wait_until_ready(&test_device, 250U, &status) == 0);
+    assert(status == 0 && get_calls == 2 && sleeps == 0 && now_us == 300U);
+
+    reset_fake();
+    set_statuses(stale_busy_then_ready, sizeof(stale_busy_then_ready));
+    get_advance_us[0] = 300U;
+    get_error_call = 1;
+    get_error_ret = -EBUSY;
+    assert(spi_nand_wait_until_ready(&test_device, 250U, &status) == -EBUSY);
+    assert(status == BIT(0) && get_calls == 2 && sleeps == 0);
 }
 
 static void test_operation_status_bits(void)
@@ -348,6 +372,7 @@ static void test_operation_status_bits(void)
 static void test_program_failures(void)
 {
     const uint8_t busy_ready[] = { BIT(0), 0 };
+    const uint8_t stale_busy_program_fail[] = { BIT(0), NAND_STATUS_PROGRAM_FAIL };
     uint8_t page[16] = { 0 };
 
     reset_fake();
@@ -376,7 +401,29 @@ static void test_program_failures(void)
     get_error_call = 0;
     get_error_ret = -EBUSY;
     assert(spi_nand_page_write(&test_device, 7, page, sizeof(page)) == -EBUSY);
-    assert(count_event(EV_EXECUTE) == 1 && count_event(EV_WRDI) == 1);
+    assert(count_event(EV_EXECUTE) == 1 && count_event(EV_WRDI) == 0);
+    assert_released_once();
+
+    reset_fake();
+    set_statuses(busy_ready, sizeof(busy_ready));
+    get_advance_us[0] = NAND_PAGE_PROGRAM_TIMEOUT_US + 1U;
+    get_error_call = 1;
+    get_error_ret = -EBUSY;
+    assert(spi_nand_page_write(&test_device, 7, page, sizeof(page)) == -EBUSY);
+    assert(count_event(EV_WRDI) == 0);
+    assert_released_once();
+
+    reset_fake();
+    set_statuses(stale_busy_program_fail, sizeof(stale_busy_program_fail));
+    get_advance_us[0] = NAND_PAGE_PROGRAM_TIMEOUT_US + 1U;
+    assert(spi_nand_page_write(&test_device, 7, page, sizeof(page)) == -EIO);
+    assert(count_event(EV_WRDI) == 1);
+    assert_released_once();
+
+    reset_fake();
+    default_status = BIT(0);
+    assert(spi_nand_page_write(&test_device, 7, page, sizeof(page)) == -ETIMEDOUT);
+    assert(count_event(EV_WRDI) == 0);
     assert_released_once();
 
     reset_fake();
@@ -413,8 +460,8 @@ static void test_erase_paths(void)
     reset_fake();
     default_status = BIT(0);
     assert(spi_nand_block_erase(&test_device, 64) == -ETIMEDOUT);
-    assert(get_calls <= 121 && count_event(EV_ERASE) == 1);
-    assert(count_event(EV_WRDI) == 1);
+    assert(get_calls <= 122 && count_event(EV_ERASE) == 1);
+    assert(count_event(EV_WRDI) == 0);
     assert_released_once();
 }
 

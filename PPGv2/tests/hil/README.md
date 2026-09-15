@@ -1,5 +1,43 @@
 # PPG production functional HIL
 
+## Extended streaming endurance HIL
+
+`run_extended_streaming_hil.py` runs the non-destructive 150-minute streaming
+campaign. It preserves existing media by content hash and never formats,
+flashes, performs DFU, or uses reset codes 68/132. It does intentionally issue
+one Central `RESET_SYSTEM`, one PPG normal reset (`reset 121`), BLE disconnects,
+and ordinary collection/stream commands.
+
+Run its hardware-free parser checks first:
+
+```powershell
+python PPGv2/tests/hil/run_extended_streaming_hil.py self-test
+```
+
+Use current, explicitly verified identities and a new output directory:
+
+```powershell
+python PPGv2/tests/hil/run_extended_streaming_hil.py run `
+  --command-port <Central-command-COM> --relay-port <Central-relay-COM> `
+  --central-jlink-serial <Central-debugger-serial> --nrfutil <nrfutil.exe> `
+  --ppg-port <PPG-native-COM> --ppg-usb-serial <PPG-USB-serial> `
+  --peer-name <exact-MSense4PPG-name> --drive <PPG-MSC-root> `
+  --session-id-base <unique-nonzero-id> --output <new-evidence-directory>
+```
+
+The runner records continuous native UART and Central command/relay evidence,
+strictly checks MRLY sequence and NUS data offsets, validates each new on-media
+PPG/accelerometer/log set, and verifies all prior files after every case. A
+planned stream abort is classified expected only after a complete 128 KiB
+recovery stream passes. Checkpoints are append-only numbered JSON files; the
+final disposition is `summary.json`. On failure, the runner performs bounded
+best-effort stop, collection-off, and disconnect cleanup while retaining all
+partial evidence.
+
+The exact advertised PPG name is mandatory because `connect ppg` is a
+first-match operation. Do not access the MSC volume with another process while
+collection owns storage.
+
 This destructive, production-like campaign formats the PPG FatFS volume,
 installs the exact production PPG image through the Central's supported MDFU
 path, and runs two collection sessions without an intervening format or reboot.

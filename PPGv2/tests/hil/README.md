@@ -5,8 +5,17 @@
 `run_extended_streaming_hil.py` runs the non-destructive 150-minute streaming
 campaign. It preserves existing media by content hash and never formats,
 flashes, performs DFU, or uses reset codes 68/132. It does intentionally issue
-one Central `RESET_SYSTEM`, one PPG normal reset (`reset 121`), BLE disconnects,
-and ordinary collection/stream commands.
+one Central `RESET_SYSTEM`, one PPG storage-aware reset (`reset 120`), BLE
+disconnects, and ordinary collection/stream commands. The reset case stops the
+stream, sends `collect off`, confirms remote status bytes 1 and 2 are zero,
+validates and hashes the closed files, and only then requests reset 120. It
+requires the expected disconnect, advertising return, exact-peer reconnect,
+service rediscovery, collection restart, post-reboot streaming, preservation of
+the pre-reboot hashes, and a newly validated PPG/accelerometer/log file set.
+
+`reset 121` remains available only for a separately labeled emergency or
+crash-consistency test. It is not part of this ordinary endurance campaign, and
+such a test must not require preservation of media interrupted by reset 121.
 
 Run its hardware-free parser checks first:
 

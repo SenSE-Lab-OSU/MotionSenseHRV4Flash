@@ -80,6 +80,15 @@ def reset_peer_ready_pattern(code: int, peer: dict[str, str]) -> str:
     return rf"RESET_REDISCOVERED code={code}[^\r\n]*[\s\S]*{identity}"
 
 
+def collection_shutdown_status(text: str) -> str | None:
+    matches = re.findall(
+        r"REMOTE_STATUS status=success length=8 hex=([0-9a-fA-F]{16})", text)
+    if not matches:
+        return None
+    status = bytes.fromhex(matches[-1])
+    return matches[-1] if status[1] == 0 and status[2] == 0 else None
+
+
 def validate_ppg_records(sensor: bytes) -> dict[str, object]:
     if not sensor or len(sensor) % PPG_RECORD_BYTES:
         raise HilError("PPG data is empty or not 16-byte record aligned")
@@ -360,7 +369,9 @@ class Central:
 
     def identify(self) -> None:
         mark = self.send("help")
-        self.wait(mark, "Central help", r"COMMANDS:", 8)
+        help_text = self.wait(mark, "Central help", r"COMMANDS:[^\r\n]*(?:\r?\n|$)", 8)
+        if "reset 68|120|121|132" not in help_text:
+            raise HilError("Central does not advertise reset 120 support")
 
     def connect_same(self, expected: dict[str, str] | None = None) -> dict[str, str]:
         for attempt in range(1, 13):
@@ -388,6 +399,24 @@ class Central:
         mark = self.send(f"collect {value}")
         pattern = rf"COLLECT_RESULT[^\r\n]*enabled={int(enabled)}[^\r\n]*status=success"
         self.wait(mark, f"collect {value}", pattern, 30, r"\bERR(?:OR)?\b")
+
+    def wait_collection_shutdown(self, timeout: float) -> str:
+        deadline = time.monotonic() + timeout
+        last = "no remote status response"
+        while time.monotonic() < deadline:
+            mark = self.send("remote status")
+            response = self.wait(
+                mark, "remote collection status", r"REMOTE_STATUS[^\r\n]*(?:\r?\n|$)",
+                min(8.0, max(0.1, deadline - time.monotonic())), r"\bERR(?:OR)?\b")
+            if "REMOTE_STATUS status=error" in response:
+                raise HilError(f"remote status read failed: {response[-1000:]}")
+            ready = collection_shutdown_status(response)
+            if ready is not None:
+                self.events.add("collection_storage_shutdown", remote_status=ready)
+                return ready
+            last = response[-1000:]
+            self.delay(0.25, "collection shutdown poll", status_interval=9999)
+        raise HilError(f"PPG collection/storage shutdown was not confirmed: {last}")
 
     def start_segment(self, root: Path, session_id: int, infinity: bool) -> Segment:
         if self.segment is not None:
@@ -707,20 +736,30 @@ class Campaign:
         case["segments"].extend((aborted, recovery))
         self.central.collect(False); self.complete(root, case)
 
-        root, case = self.case("ppg-reset-121")
+        root, case = self.case("ppg-safe-reset-120")
         self.collect_start(); case["segments"].append(
             self.infinity(root, "pre-reset", self.args.fault_pre_seconds))
-        mark = self.central.send("reset 121")
-        reset_text = self.central.wait(mark, "PPG reset 121 ready rediscovery",
-            reset_peer_ready_pattern(121, self.peer), self.args.ppg_reset_timeout,
+        self.central.collect(False)
+        case["pre_reboot_remote_status"] = self.central.wait_collection_shutdown(
+            self.args.remount_timeout)
+        pre_reboot = root / "pre-reboot"
+        pre_reboot.mkdir(exist_ok=False)
+        self.before, self.prior_hashes, case["pre_reboot_media"] = recording_checkpoint(
+            self.args, pre_reboot, self.before, self.prior_hashes)
+        mark = self.central.send("reset 120")
+        reset_text = self.central.wait(mark, "PPG reset 120 ready rediscovery",
+            reset_peer_ready_pattern(120, self.peer), self.args.ppg_reset_timeout,
             r"RESET_RECONNECT_TIMEOUT|RESET_DISCONNECT_TIMEOUT|ERR reset")
-        for milestone in ("RESET_DISCONNECTED code=121", "RESET_ADVERTISING code=121",
-                          "RESET_RECONNECTED code=121", "RESET_REDISCOVERED code=121"):
+        for milestone in ("RESET_DISCONNECTED code=120", "RESET_ADVERTISING code=120",
+                          "RESET_RECONNECTED code=120", "RESET_REDISCOVERED code=120"):
             if milestone not in reset_text:
                 raise HilError(f"PPG reset omitted milestone: {milestone}")
         self.collect_start(); recovery = self.finite(root, "recovery")
         case["segments"].append(recovery)
-        self.central.collect(False); self.complete(root, case)
+        self.central.collect(False)
+        case["post_reboot_remote_status"] = self.central.wait_collection_shutdown(
+            self.args.remount_timeout)
+        self.complete(root, case)
 
         for cycle in range(1, self.args.cycle_count + 1):
             root, case = self.case(f"cycle-{cycle:02d}")
@@ -822,10 +861,16 @@ def self_test() -> None:
     assert re.search(PEER_READY_COMPLETE_PATTERN, complete_ready.rstrip("\n"))
     assert re.search(PEER_READY_COMPLETE_PATTERN,
                      partial_ready + ":DD:EE:FF peer_addr_type=0")
-    reset_pattern = reset_peer_ready_pattern(121, peer)
-    assert not re.search(reset_pattern, "RESET_REDISCOVERED code=121\n" + partial_ready)
-    assert re.search(reset_pattern, "RESET_REDISCOVERED code=121\n" + complete_ready)
-    assert not re.search(reset_pattern, complete_ready + "RESET_REDISCOVERED code=121\n")
+    reset_pattern = reset_peer_ready_pattern(120, peer)
+    assert not re.search(reset_pattern, "RESET_REDISCOVERED code=120\n" + partial_ready)
+    assert re.search(reset_pattern, "RESET_REDISCOVERED code=120\n" + complete_ready)
+    assert not re.search(reset_pattern, complete_ready + "RESET_REDISCOVERED code=120\n")
+    assert collection_shutdown_status(
+        "REMOTE_STATUS status=success length=8 hex=0100000000000000\n")
+    assert collection_shutdown_status(
+        "REMOTE_STATUS status=success length=8 hex=0101000000000000\n") is None
+    assert collection_shutdown_status(
+        "REMOTE_STATUS status=success length=8 hex=0100010000000000\n") is None
     print("run_extended_streaming_hil.py self-test: PASS (no hardware access)")
 
 

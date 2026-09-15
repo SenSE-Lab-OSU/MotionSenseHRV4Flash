@@ -1238,10 +1238,16 @@ uint16_t offset, uint8_t flags){
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
   if (val == 68) {
+    LOG_WRN("Destructive storage erase reset requested (68)");
     ret = request_ppg_storage_reset(false);
+  } else if (val == 120) {
+    LOG_INF("Safe storage-aware reboot requested (120)");
+    ret = request_ppg_storage_reboot();
   } else if (val == 132) {
+    LOG_WRN("Destructive bad-block-state reset requested (132)");
     ret = request_ppg_storage_reset(true);
   } else if (val == 121) {
+    LOG_WRN("Emergency immediate reset requested (121)");
     NVIC_SystemReset();
     return len;
   } else {
@@ -1253,7 +1259,7 @@ uint16_t offset, uint8_t flags){
     return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
   }
 
-  LOG_INF("Queued reset through PPG storage transition owner");
+  LOG_INF("Queued reset code %u through PPG storage transition owner", val);
   (void)bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
   (void)bt_le_adv_stop();
   connectedFlag = false;

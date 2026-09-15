@@ -72,8 +72,11 @@ class LegacyMsenseControlTest(unittest.TestCase):
 
     def test_reset_command_is_restricted_and_reconnect_is_bounded(self):
         handler = function_body(self.central, "handle_command")
-        self.assertRegex(handler, r"value != 68U && value != 121U && value != 132U")
-        self.assertIn("ERR usage: reset 68|121|132", handler)
+        self.assertRegex(
+            handler,
+            r"\(value != 68U && value != 120U && value != 121U && value != 132U\)",
+        )
+        self.assertIn("ERR usage: reset 68|120|121|132", handler)
         self.assertIn('command_printf("RESET_SENT code=%u", value)', handler)
         reset = function_body(self.central, "issue_legacy_reset")
         self.assertIn("bt_gatt_write(connection, &reset_write_params)", reset)

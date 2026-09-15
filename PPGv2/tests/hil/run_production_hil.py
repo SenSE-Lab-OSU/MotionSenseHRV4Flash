@@ -277,7 +277,7 @@ def run_central_format(args) -> dict[str, object]:
 
         mark = send("help")
         wait_for(mark, "reset-68 capability",
-                 lambda text: "reset 68|121|132" in text, 8.0)
+                 lambda text: "reset 68|120|121|132" in text, 8.0)
         mark = send("disconnect")
         wait_for(mark, "initial disconnect",
                  lambda text: "DISCONNECTED" in text or "ERR no active connection" in text,

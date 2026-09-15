@@ -3262,7 +3262,7 @@ static void print_status(void)
 static void show_help(void)
 {
 	command_printf("COMMANDS: help | scan | connect ppg|ecg|any | collect on|off | status | "
-		       "remote status | reset 68|121|132 | "
+		       "remote status | reset 68|120|121|132 | "
 		       "start [infinity] [id] | "
 		       "stop [id] | cancel [id] | disconnect | dfu capabilities|status|list|begin|abort|erase|"
 		       "test|confirm|reset");
@@ -3400,8 +3400,8 @@ static void handle_command(struct command_line *line)
 		int err;
 
 		if (argument == NULL || extra != NULL || !parse_u32(argument, &value) ||
-		    (value != 68U && value != 121U && value != 132U)) {
-			command_printf("ERR usage: reset 68|121|132");
+		    (value != 68U && value != 120U && value != 121U && value != 132U)) {
+			command_printf("ERR usage: reset 68|120|121|132");
 			return;
 		}
 		err = issue_legacy_reset((uint8_t)value);

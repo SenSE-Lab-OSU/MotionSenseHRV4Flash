@@ -125,3 +125,69 @@ Leave the ECG awake and idle with MSC remounted. Confirm all runner, Python,
 `nrfutil`, and debugger-related processes started for the run have exited, and
 confirm the target is not halted. Preserve the exact ELF, UART captures,
 snapshots, copied files, and `summary.json` as evidence.
+
+## Extended 3-4 hour collection campaign
+
+`run_extended_collection_hil.py` reuses the capture, button, media-copy, and
+production file validators above. It is destructive only at its prerequisite:
+an operator must pristine-flash the reviewed ECG image, use the Central's BLE
+`reset 68` (`0x44`) full format, wake the ECG if necessary, and retain a
+complete native preflight log. The runner never flashes or formats. It refuses
+to start unless the exact destructive confirmation is supplied and the mounted
+volume contains only `uuid.txt`.
+
+The default 3.5-hour schedule is one 30-minute mixed case, three 10-minute
+normal stop/start collection cycles, and a roughly 145-minute collection-only
+soak; each case also includes 60 seconds of shutdown UART capture. During the
+mixed case it runs a complete finite stream, intentionally disconnects during
+an infinite stream, waits through a BLE dropout, reconnects and proves a finite
+recovery, resets only the Central with `RESET_SYSTEM` during another infinite
+stream, reconnects, and proves recovery again. Each later short collection
+cycle includes a finite stream. The soak is deliberately disconnected and
+long enough to exercise multiple natural ECG and accelerometer rollovers.
+
+There is intentionally no ECG reboot case. The production image does not expose
+the storage-aware reboot routine: its shell is disabled, BLE `121` is an abrupt
+emergency reset, and `68`/`132` are destructive. An ECG crash-consistency reset
+would be a separate, explicitly destructive campaign.
+
+Run hardware-free checks first:
+
+```powershell
+python ECGv0/tests/hil/run_cleanup_hil.py self-test
+python ECGv0/tests/hil/run_extended_collection_hil.py self-test
+python ECGv0/tests/hil/run_extended_collection_hil.py run --help
+```
+
+Then substitute current, independently verified identities (placeholders only):
+
+```powershell
+python ECGv0/tests/hil/run_extended_collection_hil.py run `
+  --tools-dir <directory-containing-capture_uart-short_button-validator> `
+  --probe <ECG-probe-serial> --elf <exact-ECG-zephyr.elf> `
+  --port <ECG-native-COM> --usb-serial <ECG-USB-serial> `
+  --drive <ECG-MSC-root> --output <new-evidence-directory> `
+  --command-port <Central-command-COM> --relay-port <Central-relay-COM> `
+  --central-jlink-serial <Central-J-Link-serial> --nrfutil <nrfutil.exe> `
+  --peer-name <exact-MSense4ECG-name> --preflight-log <complete-format-boot-log> `
+  --wake-first `
+  --destructive-confirmation I_FLASHED_PRISTINE_ECG_AND_FORMATTED_FATFS_0X44
+```
+
+Use `--already-awake` only if the post-format wake release was already performed
+and verified. Do not enable `--relay-rtscts` for the
+nRF54L15 DK; use it only when the Central firmware/board explicitly reports
+binary hardware flow control.
+
+The campaign fails on a peer name/address/type change, ambiguous identity,
+unexpected disconnect, Central protocol/relay error, native assertion/fatal/
+overflow/recorder or storage error, missing ordered shutdown, altered earlier
+media, copied/live hash mismatch, malformed or non-contiguous MRLY/NUS data,
+invalid fixed-size ECF2/ACF3 records, CRC/tag/trailer/erased-tail error, or
+within/across-file ECG tick/index and accelerometer sequence gaps. Evidence
+includes native UART raw/text/metadata, complete Central command raw/text,
+per-stream MRLY, reset stdout/stderr, pre/post snapshots, copied media and logs,
+per-case checkpoints, SHA-256/size/mtime manifest, and final `summary.json`.
+Stop on the first failure, leave the ECG awake/idle after the runner's normal
+stop cleanup, and verify no Python, `nrfutil`, serial, or debugger process from
+the campaign remains.

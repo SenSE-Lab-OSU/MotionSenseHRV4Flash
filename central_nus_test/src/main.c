@@ -242,6 +242,7 @@ struct tester_context {
 	bool start_infinity;
 	bool stop_after_start_ack;
 	bool reconnect_after_stream;
+	bool disconnect_stream_active;
 	bool collect_write_pending;
 	uint16_t collect_handle;
 	bool reset_write_pending;
@@ -1262,6 +1263,16 @@ static bool is_data_notification(const uint8_t *data, uint16_t length)
 	       data[NUS_HEADER_MESSAGE_TYPE_OFFSET] == MSENSE_SENSOR_STREAM_MESSAGE_DATA;
 }
 
+/* tester.lock must be held. */
+static bool take_disconnect_stream_active_locked(void)
+{
+	bool active = tester.disconnect_stream_active ||
+		      tester.state == TESTER_START_PENDING || tester.state == TESTER_RECEIVING;
+
+	tester.disconnect_stream_active = false;
+	return active;
+}
+
 static void handle_subscription_removed(struct bt_conn *conn)
 {
 	struct bt_conn *connection = NULL;
@@ -1269,6 +1280,8 @@ static void handle_subscription_removed(struct bt_conn *conn)
 
 	if (tester.conn == conn) {
 		tester.subscribed = false;
+		tester.disconnect_stream_active = tester.disconnect_stream_active ||
+			tester.state == TESTER_START_PENDING || tester.state == TESTER_RECEIVING;
 		finish_stream_locked(MSENSE_SENSOR_STREAM_STATUS_DISCONNECTED, false);
 		connection = bt_conn_ref(conn);
 	}
@@ -2338,8 +2351,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 	key = k_spin_lock(&tester.lock);
 	if (tester.conn == conn) {
-		stream_was_active = tester.state == TESTER_START_PENDING ||
-				    tester.state == TESTER_RECEIVING;
+		stream_was_active = take_disconnect_stream_active_locked();
 		held_conn = tester.conn;
 		tester.conn = NULL;
 		tester.subscribed = false;
@@ -2592,6 +2604,7 @@ static void device_found(const bt_addr_le_t *address, int8_t rssi, uint8_t type,
 
 	key = k_spin_lock(&tester.lock);
 	tester.conn = connection;
+	tester.disconnect_stream_active = false;
 	tester.att_mtu = 0U;
 	tester.peer_address = *address;
 	tester.peer_address_valid = true;

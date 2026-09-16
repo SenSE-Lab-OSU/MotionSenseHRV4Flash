@@ -386,19 +386,27 @@ def validate_files(validator, paths: list[Path]) -> dict[str, object]:
     }
 
 
-def run_session(args, index: int, before, prior_hashes, button, validator, output: Path):
+def run_session(args, index: int, before, prior_hashes, button, validator, output: Path,
+                during_acquisition=None):
     session_dir = output / f"session-{index}"
     session_dir.mkdir(parents=True, exist_ok=False)
     process = stdout = stderr = None
     buttons = []
+    collection_started = recovery_stop_required = False
     try:
         process, stdout, stderr = start_capture(args, session_dir)
         buttons.append(press_button(button, "start", args.probe, args.elf,
                                     args.nm, args.nrfutil))
+        collection_started = True
+        recovery_stop_required = True
         # Deliberately no probe/debug operation in this acquisition interval.
-        time.sleep(args.acquisition_seconds)
+        if during_acquisition:
+            during_acquisition()
+        else:
+            time.sleep(args.acquisition_seconds)
         buttons.append(press_button(button, "stop", args.probe, args.elf,
                                     args.nm, args.nrfutil))
+        recovery_stop_required = False
         capture = finish_capture(process, stdout, stderr, session_dir,
                                  args.capture_timeout + 5)
         process = stdout = stderr = None
@@ -412,6 +420,10 @@ def run_session(args, index: int, before, prior_hashes, button, validator, outpu
             json.dumps(after, indent=2) + "\n", encoding="utf-8")
         copied = copy_selected(args.drive, selected, session_dir / "new-files")
         validation = validate_files(validator, copied)
+        for path in copied:
+            relative = path.relative_to(session_dir / "new-files").as_posix()
+            if sha256(path) != current_hashes[relative]:
+                raise HilError(f"copied evidence does not match on-media file: {relative}")
         return after, current_hashes, {
             "session": index, "result": "PASS", "buttons": buttons,
             "uart": capture, "uart_storage_scan": uart_scan,
@@ -419,6 +431,16 @@ def run_session(args, index: int, before, prior_hashes, button, validator, outpu
             "validation": validation,
         }
     finally:
+        if collection_started and recovery_stop_required:
+            try:
+                recovery = press_button(button, "failure-stop", args.probe, args.elf,
+                                        args.nm, args.nrfutil)
+            except Exception as error:
+                recovery = {"action": "failure-stop", "result": "FAIL", "error": str(error)}
+            (session_dir / "failure-stop.json").write_text(
+                json.dumps(recovery, indent=2) + "\n", encoding="utf-8")
+            time.sleep(min(10, args.post_capture_seconds
+                           if hasattr(args, "post_capture_seconds") else 10))
         stop_capture(process, stdout, stderr)
 
 

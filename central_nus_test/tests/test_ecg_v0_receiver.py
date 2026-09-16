@@ -60,7 +60,9 @@ class EcgV0ReceiverHarnessTest(unittest.TestCase):
                 extract_function(self.source, "ecg_block_validate_work_handler", "void"),
                 extract_function(self.source, "handle_data", "void"),
                 extract_function(self.source, "stream_progress_work_handler", "void"),
+                extract_function(self.source, "take_disconnect_stream_active_locked", "bool"),
                 extract_function(self.source, "handle_subscription_removed", "void"),
+                extract_function(self.source, "disconnected", "void"),
                 extract_function(self.source, "nus_notification", "uint8_t"),
             ]
         )
@@ -86,6 +88,9 @@ class EcgV0ReceiverHarnessTest(unittest.TestCase):
 #define TESTER_COMPLETE 4
 #define TESTER_IDLE 5
 #define TESTER_READY 6
+#define TESTER_SCANNING 7
+#define SCAN_TARGET_RECONNECT 1
+#define LEGACY_RESET_RECONNECT_TIMEOUT 1
 #define MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES 8U
 #define MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE 4096U
 #define MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS 8U
@@ -128,8 +133,10 @@ typedef int k_spinlock_key_t;
 struct k_spinlock {{ int unused; }};
 struct k_work {{ int unused; }};
 struct bt_conn {{ int id; }};
+typedef int bt_addr_le_t;
 struct bt_gatt_subscribe_params {{ int unused; }};
 struct msense_ecg_block_info {{ int unused; }};
+struct ble_link_info {{ int unused; }};
 struct phase_statistics {{
     int64_t first_data_ms, last_data_ms;
     uint64_t raw_nus_bytes, sensor_bytes, data_notifications;
@@ -169,7 +176,9 @@ struct tester_context {{
     struct bt_conn *conn;
     struct stream_metadata metadata;
     struct stream_statistics statistics;
+    struct ble_link_info link;
     int state;
+    int scan_target;
     uint32_t capture_generation;
     uint32_t unsolicited_nus_ignored;
     uint8_t peer_device_type;
@@ -179,7 +188,23 @@ struct tester_context {{
     bool command_pending;
     bool stop_after_start_ack;
     bool reconnect_after_stream;
+    bool disconnect_stream_active;
+    bool collect_write_pending;
+    bool reset_write_pending;
+    bool reset_reconnect_pending;
+    bool reset_waiting_for_disconnect;
+    bool status_read_pending;
+    bool smp_ready;
+    bool smp_discovery_started;
+    bool peer_ready_reported;
+    bool reconnect_enabled;
+    bool peer_address_valid;
     uint16_t att_mtu;
+    uint16_t collect_handle;
+    uint16_t reset_handle;
+    uint16_t status_handle;
+    uint8_t reset_code;
+    bt_addr_le_t peer_address;
     uint8_t last_command_opcode;
     uint32_t last_command_session_id;
     uint16_t end_status;
@@ -198,6 +223,7 @@ static struct tester_context tester;
 static struct ecg_rx_block_slot ecg_rx_slots[ECG_RX_BLOCK_SLOT_COUNT];
 static struct end_completion_work end_completion;
 static struct k_work stream_progress_work;
+static struct k_work legacy_reset_reconnect_timeout;
 static atomic_t relay_close_after_notification;
 static atomic_t binary_port_mode;
 static int protocol_failures;
@@ -216,6 +242,8 @@ static int notification_calls;
 static int notification_order[2];
 static int notification_order_count;
 static int command_calls;
+static char last_event[256];
+static struct {{ struct bt_conn *conn; }} nus_client;
 
 static k_spinlock_key_t k_spin_lock(struct k_spinlock *lock) {{ (void)lock; return 0; }}
 static void k_spin_unlock(struct k_spinlock *lock, k_spinlock_key_t key) {{
@@ -250,7 +278,12 @@ static uint64_t sys_get_le64(const uint8_t *p) {{
     return value;
 }}
 static void mark_protocol_failure(const char *reason) {{ (void)reason; protocol_failures++; }}
-static void post_event(const char *format, ...) {{ (void)format; }}
+static void post_event(const char *format, ...) {{
+    va_list args;
+    va_start(args, format);
+    vsnprintf(last_event, sizeof(last_event), format, args);
+    va_end(args);
+}}
 static int issue_nus_command(uint8_t opcode, uint32_t session_id) {{
     assert(opcode == MSENSE_SENSOR_STREAM_OPCODE_STOP && session_id == 7U);
     command_calls++;
@@ -305,6 +338,9 @@ static void post_throughput_summary(uint32_t id, const struct phase_statistics *
 }}
 static const char *status_name(uint16_t status) {{ (void)status; return "status"; }}
 static void dfu_request_reconnect(void *context) {{ (void)context; }}
+static void msense_smp_central_disconnected(struct bt_conn *conn) {{ (void)conn; }}
+static void msense_dfu_engine_connection_lost(void) {{}}
+static void start_scan(void) {{}}
 static uint16_t sys_get_le16(const uint8_t *p) {{ return p[0] | (uint16_t)p[1] << 8; }}
 
 {functions}
@@ -334,6 +370,7 @@ static void reset_receiver(void) {{
     notification_is_ecg_data = false;
     relay_calls = notification_calls = notification_order_count = 0;
     command_calls = 0;
+    last_event[0] = 0;
     relay_close_after_notification = 0;
 }}
 
@@ -518,26 +555,34 @@ static void test_subscription_removal_and_relay_order(void) {{
     reset_receiver();
     assert(nus_notification(&old_connection, NULL, NULL, 0U) == BT_GATT_ITER_STOP);
     assert(tester.state == TESTER_FINISHING);
-    assert(tester.state == TESTER_FINISHING);
     assert(tester.end_status == MSENSE_SENSOR_STREAM_STATUS_DISCONNECTED);
     assert(submit_calls == 1);
     assert(!tester.subscribed && disconnected_connection == &old_connection);
+    assert(tester.disconnect_stream_active);
+    tester.state = TESTER_FAILED; /* async completion raced ahead of disconnected() */
+    disconnected(&old_connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    assert(strcmp(last_event, "DISCONNECTED reason=0x13 stream_aborted") == 0);
+    assert(!tester.disconnect_stream_active);
+    assert(tester.conn == NULL);
 
     reset_receiver();
     tester.state = TESTER_FINISHING;
     tester.end_status = 0U;
     assert(nus_notification(&old_connection, NULL, NULL, 0U) == BT_GATT_ITER_STOP);
     assert(tester.state == TESTER_FINISHING);
-    assert(tester.state == TESTER_FINISHING);
     assert(tester.end_status == 0U);
     assert(submit_calls == 1);
     assert(!tester.subscribed && disconnected_connection == &old_connection);
+    assert(!tester.disconnect_stream_active);
+    disconnected(&old_connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    assert(strcmp(last_event, "DISCONNECTED reason=0x13") == 0);
 
     reset_receiver();
     tester.state = TESTER_START_PENDING;
     assert(nus_notification(&old_connection, NULL, NULL, 0U) == BT_GATT_ITER_STOP);
     assert(tester.state == TESTER_FAILED);
     assert(!tester.subscribed && disconnected_connection == &old_connection);
+    assert(tester.disconnect_stream_active);
 
     reset_receiver();
     tester.state = TESTER_COMPLETE;

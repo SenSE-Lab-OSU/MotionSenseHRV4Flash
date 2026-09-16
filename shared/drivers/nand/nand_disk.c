@@ -34,6 +34,8 @@ int verify_fails = 0;
 int nor_fails = 0;
 
 #define FILE_TABLE_SECTOR_COUNT 180
+#define USB_READ_AHEAD_SECTORS 3
+#define NAND_SECTOR_SIZE 4096
 const int file_table_sector_num = FILE_TABLE_SECTOR_COUNT;
 
 /* CRC32 of the expected contents of each file table sector, updated on every write and
@@ -54,6 +56,17 @@ bool read_only = false;
  * thread (verify readback + duplicate-write check), and a recursive mutex allows
  * that while still blocking other threads. A binary semaphore would deadlock. */
 K_MUTEX_DEFINE(disk_access_mutex);
+
+struct read_ahead_slot {
+	uint32_t sector;
+	bool valid;
+	uint8_t data[NAND_SECTOR_SIZE] __aligned(4);
+};
+
+static struct read_ahead_slot read_ahead[USB_READ_AHEAD_SECTORS];
+static struct k_work read_ahead_work;
+static uint32_t read_ahead_next_sector;
+static uint32_t read_ahead_remaining;
 
 
 #define FILETABLE_PARTITION_DEVICE DEVICE_DT_GET(DT_ALIAS(storage_nor))
@@ -116,16 +129,27 @@ int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
 
 #endif
 
+static void read_ahead_invalidate_locked(void)
+{
+	read_ahead_remaining = 0;
+	for (int i = 0; i < USB_READ_AHEAD_SECTORS; i++) {
+		read_ahead[i].valid = false;
+	}
+}
+
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
 	int ret;
 
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
+	read_ahead_invalidate_locked();
 	// the stored crcs no longer describe the (now blank) sectors
 	memset(file_table_crc_valid, 0, sizeof(file_table_crc_valid));
 	storage_spi_bus_lock();
 	ret = flash_erase(soc_flash, FILETABLE_PARTITION_OFFSET,
 			  file_table_sector_num * 4096);
 	storage_spi_bus_unlock();
+	k_mutex_unlock(&disk_access_mutex);
 	return ret;
 }
 
@@ -226,41 +250,142 @@ static int disk_nand_access_status(struct disk_info *disk)
 
 }
 
+static int disk_nand_read_sector(struct disk_info *disk, uint8_t *buf,
+				 uint32_t sector)
+{
+	if (sector < (uint32_t)file_table_sector_num) {
+		return file_table_access(buf, sector, false);
+	}
+
+	return multi_nand_page_read(disk->dev, sector, buf);
+}
+
+static int read_ahead_find_locked(uint32_t sector)
+{
+	for (int i = 0; i < USB_READ_AHEAD_SECTORS; i++) {
+		if (read_ahead[i].valid && read_ahead[i].sector == sector) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static void read_ahead_schedule_locked(struct disk_info *disk, uint32_t sector)
+{
+	uint32_t sector_count = dev_total_sector_count(disk->dev);
+
+	read_ahead_invalidate_locked();
+	if (sector_count == 0U || sector >= sector_count - 1U) {
+		return;
+	}
+
+	read_ahead_next_sector = sector + 1U;
+	read_ahead_remaining = MIN(USB_READ_AHEAD_SECTORS,
+				   sector_count - read_ahead_next_sector);
+}
+
+static void read_ahead_handler(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	while (true) {
+		int slot;
+		int ret;
+
+		k_mutex_lock(&disk_access_mutex, K_FOREVER);
+		if (read_ahead_remaining == 0U) {
+			k_mutex_unlock(&disk_access_mutex);
+			return;
+		}
+
+		slot = read_ahead_find_locked(read_ahead_next_sector);
+		if (slot < 0) {
+			for (slot = 0; slot < USB_READ_AHEAD_SECTORS; slot++) {
+				if (!read_ahead[slot].valid) {
+					break;
+				}
+			}
+		}
+		__ASSERT_NO_MSG(slot < USB_READ_AHEAD_SECTORS);
+
+		ret = disk_nand_read_sector(&nand_disk, read_ahead[slot].data,
+					    read_ahead_next_sector);
+		if (ret == 0) {
+			read_ahead[slot].sector = read_ahead_next_sector++;
+			read_ahead[slot].valid = true;
+			read_ahead_remaining--;
+		} else {
+			LOG_WRN("USB read-ahead failed at sector %u: %d",
+				read_ahead_next_sector, ret);
+			read_ahead_remaining = 0;
+		}
+		k_mutex_unlock(&disk_access_mutex);
+
+		if (ret != 0) {
+			return;
+		}
+		k_yield();
+	}
+}
+
+void disk_nand_read_ahead_quiesce(void)
+{
+	k_mutex_lock(&disk_access_mutex, K_FOREVER);
+	read_ahead_invalidate_locked();
+	k_mutex_unlock(&disk_access_mutex);
+}
+
 int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count)
 {
-	
+	const char *thread_name = k_thread_name_get(k_current_get());
+	bool usb_read_ahead = count == 1U && thread_name != NULL &&
+			      strcmp(thread_name, "usb_mass") == 0;
+	bool queue_read_ahead = false;
+	int cache_slot = -1;
+
 	k_mutex_lock(&disk_access_mutex, K_FOREVER);
 	// count is the number of sectors that are being written
 	LOG_DBG("performing disk read at sector %i for %i counts", sector, count);
-	const struct device *dev = disk->dev;
-
 	if ((update_counter % 500) == 0){
 		print_flash_status_info();
 	}
 	update_counter++;
-	off_t addr;
 	int ret = 0;
 
-	for (int x = 0; x < count; x++) {
-		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
-		if (sector+x < file_table_sector_num)
-		{
-			ret = file_table_access(&buf[x*4096], sector+x, false);
+	if (usb_read_ahead) {
+		cache_slot = read_ahead_find_locked(sector);
+		if (cache_slot >= 0) {
+			memcpy(buf, read_ahead[cache_slot].data, NAND_SECTOR_SIZE);
+			read_ahead[cache_slot].valid = false;
+			goto out;
 		}
-		else {
-			ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
-		}
+		read_ahead_schedule_locked(disk, sector);
+		queue_read_ahead = read_ahead_remaining != 0U;
+	} else {
+		read_ahead_invalidate_locked();
+	}
+
+	for (uint32_t x = 0; x < count; x++) {
+		ret = disk_nand_read_sector(disk, &buf[x * NAND_SECTOR_SIZE],
+					    sector + x);
 		if (ret != 0) {
 			break;
 		}
 	}
-	
+
 	//lol
 	if (ret != 0){
 		LOG_ERR("ret: %d", ret);
+		read_ahead_invalidate_locked();
+		queue_read_ahead = false;
 	}
+out:
 	k_mutex_unlock(&disk_access_mutex);
+	if (queue_read_ahead) {
+		(void)k_work_submit(&read_ahead_work);
+	}
 	return ret;
 }
 
@@ -269,6 +394,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 								  uint32_t sector, uint32_t count)
 {
 	k_mutex_lock(&disk_access_mutex, K_FOREVER);
+	read_ahead_invalidate_locked();
 	int result;
 	const char *name = k_thread_name_get(k_current_get());
 	//LOG_DBG("thread: %s", name);
@@ -517,6 +643,8 @@ static int nand_disk_device_init(const struct device *dev)
 {
 	int ret;
 
+	k_work_init(&read_ahead_work, read_ahead_handler);
+	read_ahead_invalidate_locked();
 	nand_disk.dev = dev;
 	nand_disk.name = "SD";
 	ret = spi_init(dev);

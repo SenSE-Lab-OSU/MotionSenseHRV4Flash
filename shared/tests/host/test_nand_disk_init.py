@@ -35,9 +35,19 @@ struct disk_info {
     const struct device *dev;
     const char *name;
 };
+struct k_work { int unused; };
 
 static struct disk_info nand_disk;
+static struct k_work read_ahead_work;
 static int init_ret, register_ret, init_calls, register_calls;
+
+static void read_ahead_handler(struct k_work *work) { (void)work; }
+static void read_ahead_invalidate_locked(void) { }
+static void k_work_init(struct k_work *work, void (*handler)(struct k_work *))
+{
+    (void)work;
+    (void)handler;
+}
 
 static int spi_init(const struct device *dev)
 {

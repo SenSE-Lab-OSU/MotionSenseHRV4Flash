@@ -17,4 +17,7 @@ void print_flash_status_info();
 int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 				 uint32_t sector, uint32_t count);
 
+/* Wait for any active USB read-ahead and discard queued/cached sectors. */
+void disk_nand_read_ahead_quiesce(void);
+
 extern const int file_table_sector_num;

@@ -37,6 +37,7 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 #define NAND_BLOCK_ERASE_TIMEOUT_US 12000U
 #define NAND_RESET_NO_COMMAND_US 1500U
 #define NAND_RESET_POLL_TIMEOUT_US 1000U
+#define NAND_DIE_UNKNOWN (-1)
 
 #define NAND_STATUS_ERASE_FAIL BIT(2)
 #define NAND_STATUS_PROGRAM_FAIL BIT(3)
@@ -107,8 +108,8 @@ int ECC_err = 0;
 #define NAND_FLASH_COUNT DT_INST_PROP(0, num_flashchips)
 BUILD_ASSERT(NAND_FLASH_COUNT > 0, "NAND needs at least one package");
 
-// die select for each flash
-int current_die[NAND_FLASH_COUNT] = {0};
+// die select for each flash; initialized before the packages are configured
+int current_die[NAND_FLASH_COUNT];
 
 
 // parameter for multiple flashes.
@@ -388,6 +389,10 @@ static int set_die(const struct device* dev, int die_select){
 	    (die_select < 0) || (die_select >= cfg->dies_per_flash)) {
 		return -EINVAL;
 	}
+	if (current_die[current_flash] == die_select) {
+		return 0;
+	}
+	current_die[current_flash] = NAND_DIE_UNKNOWN;
 
 	uint8_t feature = 0x0;
 	if (die_select == 1) {
@@ -1076,6 +1081,7 @@ static int flash_reset_and_unlock(const struct device *dev)
 	* that powers up with block protect enabled.
 	*/
 	acquire_device(dev);
+	current_die[current_flash] = NAND_DIE_UNKNOWN;
 	ret = spi_nand_reset(dev);
 	/* A RESET transfer error is ambiguous, so keep the bus quiet regardless. */
 	k_sleep(K_USEC(NAND_RESET_NO_COMMAND_US));
@@ -1224,14 +1230,17 @@ static int spi_nor_pm_control(const struct device *dev, enum pm_device_action ac
 int spi_init(const struct device *dev)
 {
 	int ret;
+	const struct spi_flash_config* cfg = dev->config;
+
+	for (int i = 0; i < cfg->num_flashes; i++) {
+		current_die[i] = NAND_DIE_UNKNOWN;
+	}
 	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
 		struct spi_nor_data* const driver_data = dev->data;
 
 		k_sem_init(&driver_data->sem, 1, K_SEM_MAX_LIMIT);
 		k_sem_init(&driver_data->sem_inner, 1, K_SEM_MAX_LIMIT);
 	}
-	const struct spi_flash_config* cfg = dev->config;
-	
 	ret = spi_configure(dev, cfg);
 	if (ret != 0)
 		return ret;

@@ -37,6 +37,7 @@ def main():
             "spi_nand_page_write",
             "spi_nand_block_erase",
             "spi_nand_reset",
+            "set_die",
             "flash_reset_and_unlock",
         )
     )
@@ -58,6 +59,8 @@ def main():
 #define SPI_NAND_RESET 0xff
 #define SPI_NOR_CMD_BE 0xd8
 #define REGISTER_STATUS 0xc0
+#define REGISTER_DIESELECT 0xd0
+#define NAND_DIE_UNKNOWN (-1)
 #define K_USEC(value) (value)
 #define LOG_DBG(...) do { } while (0)
 #define LOG_ERR(...) do { } while (0)
@@ -65,7 +68,7 @@ def main():
 
 /* PRODUCTION_DEFINES */
 
-struct spi_flash_config { int dies_per_flash; };
+struct spi_flash_config { int num_flashes; int dies_per_flash; };
 struct device { const void *config; };
 typedef uint64_t k_timepoint_t;
 typedef struct {
@@ -91,7 +94,10 @@ enum event {
     EV_UNLOCK,
 };
 
-static const struct spi_flash_config test_config = { .dies_per_flash = 2 };
+static const struct spi_flash_config test_config = {
+    .num_flashes = 2,
+    .dies_per_flash = 2,
+};
 static const struct device test_device = { .config = &test_config };
 static enum event events[256];
 static uint64_t event_times[256];
@@ -109,7 +115,7 @@ static uint64_t now_us;
 static uint64_t sleep_extra_us;
 static int current_writes, current_erases;
 static int current_flash;
-static int current_die[1];
+static int current_die[2];
 
 static void record(enum event event)
 {
@@ -136,6 +142,8 @@ static void reset_fake(void)
     default_status = 0U;
     now_us = 0U;
     sleep_extra_us = 0U;
+    current_flash = 0;
+    current_die[0] = current_die[1] = NAND_DIE_UNKNOWN;
 }
 
 static void set_statuses(const uint8_t *values, size_t count)
@@ -233,15 +241,15 @@ static int spi_cmd(const struct device *dev, uint8_t opcode, void *dest,
     return reset_ret;
 }
 
-static int set_die(const struct device *dev, int die)
+static int set_features(const struct device *dev, uint8_t reg, uint8_t value)
 {
     (void)dev;
+    assert(reg == REGISTER_DIESELECT);
     record(EV_SET_DIE);
-    selected_dies[set_die_calls] = die;
+    selected_dies[set_die_calls] = value == 0x40 ? 1 : 0;
     if (set_die_calls++ == set_die_error_call) {
         return set_die_error_ret;
     }
-    current_die[current_flash] = die;
     return 0;
 }
 
@@ -475,44 +483,82 @@ static void test_reset_sequence(void)
     assert(events[0] == EV_LOCK && events[1] == EV_RESET);
     assert(count_event(EV_RESET) == 1 && count_event(EV_GET) == 2);
     assert(event_times[2] == NAND_RESET_NO_COMMAND_US);
-    assert(events[4] == EV_SET_DIE && events[5] == EV_UNLOCK_MEMORY);
-    assert(events[6] == EV_SET_DIE && events[7] == EV_UNLOCK_MEMORY);
-    assert(events[8] == EV_SET_DIE);
-    assert(selected_dies[0] == 0 && selected_dies[1] == 1);
-    assert(selected_dies[2] == 0 && set_die_calls == 3);
+    assert(events[4] == EV_UNLOCK_MEMORY);
+    assert(events[5] == EV_SET_DIE && events[6] == EV_UNLOCK_MEMORY);
+    assert(events[7] == EV_SET_DIE);
+    assert(selected_dies[0] == 1 && selected_dies[1] == 0);
+    assert(set_die_calls == 2);
     assert(unlock_calls == 2 && current_die[0] == 0);
     assert_released_once();
 
     reset_fake();
+    current_die[0] = 1;
     reset_ret = -EIO;
     assert(flash_reset_and_unlock(&test_device) == -EIO);
     assert(now_us == NAND_RESET_NO_COMMAND_US);
     assert(count_event(EV_GET) == 0 && count_event(EV_SET_DIE) == 0);
     assert(count_event(EV_UNLOCK_MEMORY) == 0);
+    assert(current_die[0] == NAND_DIE_UNKNOWN);
     assert_released_once();
 
     reset_fake();
+    current_die[0] = 1;
     default_status = BIT(0);
     assert(flash_reset_and_unlock(&test_device) == -ETIMEDOUT);
     assert(now_us == NAND_RESET_NO_COMMAND_US + NAND_RESET_POLL_TIMEOUT_US);
     assert(count_event(EV_SET_DIE) == 0 && count_event(EV_UNLOCK_MEMORY) == 0);
+    assert(current_die[0] == NAND_DIE_UNKNOWN);
     assert_released_once();
 
     reset_fake();
     unlock_error_call = 1;
     unlock_error_ret = -EBUSY;
-    set_die_error_call = 2;
+    set_die_error_call = 1;
     set_die_error_ret = -ENOSPC;
     assert(flash_reset_and_unlock(&test_device) == -EBUSY);
-    assert(set_die_calls == 3 && selected_dies[2] == 0);
+    assert(set_die_calls == 2 && selected_dies[1] == 0);
     assert_released_once();
 
     reset_fake();
-    set_die_error_call = 2;
+    set_die_error_call = 1;
     set_die_error_ret = -ENOSPC;
     assert(flash_reset_and_unlock(&test_device) == -ENOSPC);
-    assert(set_die_calls == 3 && unlock_calls == 2);
+    assert(set_die_calls == 2 && unlock_calls == 2);
     assert_released_once();
+}
+
+static void test_die_selection_cache(void)
+{
+    reset_fake();
+    assert(set_die(&test_device, 0) == 0);
+    assert(set_die(&test_device, 0) == 0);
+    assert(set_die_calls == 1 && selected_dies[0] == 0);
+
+    assert(set_die(&test_device, 1) == 0);
+    assert(set_die(&test_device, 1) == 0);
+    assert(set_die_calls == 2 && selected_dies[1] == 1);
+
+    current_flash = 1;
+    assert(set_die(&test_device, 1) == 0);
+    assert(set_die_calls == 3 && selected_dies[2] == 1);
+    current_flash = 0;
+    assert(set_die(&test_device, 1) == 0);
+    assert(set_die_calls == 3);
+
+    current_die[0] = 1;
+    set_die_error_call = set_die_calls;
+    set_die_error_ret = -EIO;
+    assert(set_die(&test_device, 0) == -EIO);
+    assert(current_die[0] == NAND_DIE_UNKNOWN);
+    set_die_error_call = -1;
+    assert(set_die(&test_device, 0) == 0);
+    assert(set_die_calls == 5 && current_die[0] == 0);
+
+    assert(set_die(&test_device, -1) == -EINVAL);
+    assert(set_die(&test_device, 2) == -EINVAL);
+    current_flash = 2;
+    assert(set_die(&test_device, 0) == -EINVAL);
+    assert(set_die_calls == 5);
 }
 
 int main(void)
@@ -523,6 +569,7 @@ int main(void)
     test_program_failures();
     test_erase_paths();
     test_reset_sequence();
+    test_die_selection_cache();
     puts("SPI NAND operation checks passed");
     return 0;
 }

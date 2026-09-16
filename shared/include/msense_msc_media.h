@@ -13,7 +13,8 @@ int msense_msc_media_initialize_absent(void);
 /**
  * Exclude the host from the MSC medium before firmware mounts or writes it.
  *
- * This function must be called from thread context.
+ * This function must be called from thread context. It also waits for project
+ * storage read-ahead to become idle before returning.
  */
 int msense_msc_media_claim_for_firmware(void);
 

@@ -165,7 +165,7 @@ struct spi_flash_config {
 
 
 	/* Size of device in bytes, from size property */
-	uint32_t flash_size;
+	uint64_t flash_size;
 
 
 	uint8_t num_flashes;

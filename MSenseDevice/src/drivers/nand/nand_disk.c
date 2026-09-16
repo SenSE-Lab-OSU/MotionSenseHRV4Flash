@@ -290,7 +290,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 		for (int x = 0; x < count; x++)
 		{
 			int sector_num = get_sector_offset(x + sector);
-			LOG_DBG("performing disk write at sector %i", sector_num);
+			LOG_INF("performing disk write at sector %i", sector_num);
 			if (sector_num < file_table_sector_num)
 			{
 
@@ -443,7 +443,7 @@ static const struct spi_flash_config spi_flash_config_0 =
 	/* Note: even though variables use dashes (-) in .yaml and devicetree, DT_INST_PROP requires them in underscores! (_)
 	 So, num-flashchips is num_flashchips.
 	*/
-	.flash_size = DT_INST_PROP(0, individual_size)*DT_INST_PROP(0, num_flashchips),
+	.flash_size = DT_INST_PROP(0, individual_size)*(uint64_t)DT_INST_PROP(0, num_flashchips),
 	.num_flashes = DT_INST_PROP(0, num_flashchips),
 	.jedec_id = DT_INST_PROP(0, jedec_id),
 

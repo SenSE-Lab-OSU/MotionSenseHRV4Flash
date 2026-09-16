@@ -381,9 +381,10 @@ int erase_bad_sectors_arr()
 void print_bad_sect_info()
 {
 	LOG_INF("Load Bad Sect count: %d", total_bad_sectors);
+	LOG_INF("Current bad sectors:");
 	for (int x = 0; x < total_bad_sectors; x++)
 	{
-		LOG_WRN("sect %lu", bad_sectors[x]);
+		LOG_INF("sect %lu", bad_sectors[x]);
 	}
 }
 

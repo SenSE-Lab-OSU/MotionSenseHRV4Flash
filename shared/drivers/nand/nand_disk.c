@@ -34,7 +34,7 @@ int verify_fails = 0;
 int nor_fails = 0;
 
 #define FILE_TABLE_SECTOR_COUNT 180
-#define USB_READ_AHEAD_SECTORS 3
+#define USB_READ_AHEAD_SECTORS 2
 #define NAND_SECTOR_SIZE 4096
 const int file_table_sector_num = FILE_TABLE_SECTOR_COUNT;
 
@@ -285,6 +285,20 @@ static void read_ahead_schedule_locked(struct disk_info *disk, uint32_t sector)
 				   sector_count - read_ahead_next_sector);
 }
 
+static bool read_ahead_replenish_locked(struct disk_info *disk)
+{
+	uint32_t sector_count = dev_total_sector_count(disk->dev);
+
+	if (read_ahead_remaining >= USB_READ_AHEAD_SECTORS ||
+	    read_ahead_next_sector >= sector_count ||
+	    read_ahead_remaining >= sector_count - read_ahead_next_sector) {
+		return false;
+	}
+
+	read_ahead_remaining++;
+	return true;
+}
+
 static void read_ahead_handler(struct k_work *work)
 {
 	ARG_UNUSED(work);
@@ -359,6 +373,7 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 		if (cache_slot >= 0) {
 			memcpy(buf, read_ahead[cache_slot].data, NAND_SECTOR_SIZE);
 			read_ahead[cache_slot].valid = false;
+			queue_read_ahead = read_ahead_replenish_locked(disk);
 			goto out;
 		}
 		read_ahead_schedule_locked(disk, sector);

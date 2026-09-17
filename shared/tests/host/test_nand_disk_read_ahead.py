@@ -10,7 +10,7 @@ import tempfile
 
 def extract_function(source, name):
     match = re.search(
-        r"(?:static\s+)?(?:int|void)\s+" + name + r"\([^;]*?\)\s*\{", source
+        r"(?:static\s+)?(?:bool|int|void)\s+" + name + r"\([^;]*?\)\s*\{", source
     )
     if match is None:
         raise RuntimeError(f"production function not found: {name}")
@@ -31,6 +31,7 @@ def main():
             "disk_nand_read_sector",
             "read_ahead_find_locked",
             "read_ahead_schedule_locked",
+            "read_ahead_replenish_locked",
             "read_ahead_handler",
             "disk_nand_read_ahead_quiesce",
         )
@@ -53,7 +54,7 @@ def main():
 #include <stdio.h>
 #include <string.h>
 
-#define USB_READ_AHEAD_SECTORS 3
+#define USB_READ_AHEAD_SECTORS 2
 #define NAND_SECTOR_SIZE 4096
 #define K_FOREVER 0
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -90,6 +91,12 @@ static int physical_reads;
 static int fail_sector = -1;
 static bool defer_work;
 static bool work_queued;
+static bool read_on_yield;
+static uint32_t yield_sector;
+static uint8_t yield_buf[NAND_SECTOR_SIZE];
+
+int disk_nand_access_read(struct disk_info *disk, uint8_t *buf,
+                          uint32_t sector, uint32_t count);
 
 static void k_mutex_lock(struct k_mutex *mutex, int timeout)
 {
@@ -98,7 +105,15 @@ static void k_mutex_lock(struct k_mutex *mutex, int timeout)
 }
 
 static void k_mutex_unlock(struct k_mutex *mutex) { (void)mutex; }
-static void k_yield(void) { }
+static void k_yield(void)
+{
+    if (read_on_yield) {
+        read_on_yield = false;
+        defer_work = true;
+        assert(disk_nand_access_read(&nand_disk, yield_buf, yield_sector, 1) == 0);
+        defer_work = false;
+    }
+}
 static void *k_current_get(void) { return NULL; }
 static const char *k_thread_name_get(void *thread)
 {
@@ -115,6 +130,7 @@ static void fill_sector(uint8_t *buf, uint32_t sector)
 }
 static int physical_read(uint8_t *buf, uint32_t sector)
 {
+    assert(sector < test_device.sectors);
     physical_reads++;
     if ((int)sector == fail_sector) {
         fail_sector = -1;
@@ -162,27 +178,49 @@ int main(void)
 
     assert(disk_nand_access_read(&nand_disk, buf, 200, 1) == 0);
     expect_sector(buf, 200);
-    assert(physical_reads == 4);
+    assert(physical_reads == 3);
 
-    for (uint32_t sector = 201; sector <= 203; sector++) {
+    for (uint32_t sector = 201; sector <= 204; sector++) {
+        assert(read_ahead_find_locked(sector) >= 0);
+        int reads_before = physical_reads;
         assert(disk_nand_access_read(&nand_disk, buf, sector, 1) == 0);
         expect_sector(buf, sector);
+        assert(physical_reads == reads_before + 1);
+        assert(read_ahead_find_locked(sector + USB_READ_AHEAD_SECTORS) >= 0);
     }
-    assert(physical_reads == 4);
-
-    assert(disk_nand_access_read(&nand_disk, buf, 204, 1) == 0);
-    expect_sector(buf, 204);
-    assert(physical_reads == 8);
+    assert(physical_reads == 7);
 
     current_thread_name = "main";
     assert(disk_nand_access_read(&nand_disk, buf, 205, 1) == 0);
     expect_sector(buf, 205);
-    assert(physical_reads == 9);
+    assert(physical_reads == 8);
 
     current_thread_name = "usb_mass";
     fail_sector = 301;
     assert(disk_nand_access_read(&nand_disk, buf, 300, 1) == 0);
     expect_sector(buf, 300);
+    assert(read_ahead_remaining == 0);
+
+    disk_nand_read_ahead_quiesce();
+    int reads_before_interleave = physical_reads;
+    yield_sector = 998;
+    read_on_yield = true;
+    assert(disk_nand_access_read(&nand_disk, buf, 997, 1) == 0);
+    expect_sector(buf, 997);
+    expect_sector(yield_buf, 998);
+    assert(!read_on_yield);
+    assert(physical_reads == reads_before_interleave + 3);
+    assert(read_ahead_find_locked(999) >= 0);
+
+    disk_nand_read_ahead_quiesce();
+    int reads_before_end = physical_reads;
+    assert(disk_nand_access_read(&nand_disk, buf, 998, 1) == 0);
+    expect_sector(buf, 998);
+    assert(physical_reads == reads_before_end + 2);
+    assert(read_ahead_find_locked(999) >= 0);
+    assert(disk_nand_access_read(&nand_disk, buf, 999, 1) == 0);
+    expect_sector(buf, 999);
+    assert(physical_reads == reads_before_end + 2);
     assert(read_ahead_remaining == 0);
 
 	defer_work = true;

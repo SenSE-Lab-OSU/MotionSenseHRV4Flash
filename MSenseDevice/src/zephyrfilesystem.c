@@ -588,13 +588,18 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		first_init = true;
 	}
 
-	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
-	memcpy(address_to_write, data, size);
-	current_buffer->current_size += size;
-	if (current_buffer->current_size + size >= MSenseFile->write_size){
-		if (current_buffer->current_size + size != MSenseFile->write_size){
-			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
-		}
+	/* Fill the current buffer up to exactly write_size and carry whatever does not
+	 * fit over into the other buffer. Submitting a short write would leave the tail
+	 * of a NAND page unwritten, and the next write to that page is then a duplicate
+	 * program of an already used page.
+	 */
+	size_t room_left = (size_t)MSenseFile->write_size - current_buffer->current_size;
+	size_t first_chunk = (size < room_left) ? size : room_left;
+
+	memcpy(&current_buffer->data_upload_buffer[current_buffer->current_size], data, first_chunk);
+	current_buffer->current_size += first_chunk;
+
+	if (current_buffer->current_size >= (size_t)MSenseFile->write_size){
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
 		}
@@ -607,6 +612,21 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		}
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
+
+		// the remainder starts the buffer we just swapped to
+		size_t leftover = size - first_chunk;
+		if (leftover > 0){
+			data_upload_buffer* next_buffer = MSenseFile->switch_buffer ?
+				&MSenseFile->buffer2 : &MSenseFile->buffer1;
+			if (leftover > (size_t)MSenseFile->write_size){
+				LOG_ERR("sample of %u bytes is larger than the %d byte write size, truncating",
+					(unsigned int)size, MSenseFile->write_size);
+				leftover = (size_t)MSenseFile->write_size;
+			}
+			memcpy(&next_buffer->data_upload_buffer[next_buffer->current_size],
+			       (const char*)data + first_chunk, leftover);
+			next_buffer->current_size += leftover;
+		}
 	}
 }
 

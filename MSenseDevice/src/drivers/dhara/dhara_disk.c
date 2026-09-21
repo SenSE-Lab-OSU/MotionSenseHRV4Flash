@@ -31,7 +31,7 @@
 #include "error.h"
 #include "msense_dhara.h"
 #include "../nand/spi_nand.h"
-#include "../nand/bad_page.h"
+#include "../nand/bad_block.h"
 #include "../nand/nand_disk.h"
 
 #define DT_DRV_COMPAT senselab_nanddisk

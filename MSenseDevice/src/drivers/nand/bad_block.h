@@ -1,5 +1,5 @@
-#ifndef BAD_PAGE_H
-#define BAD_PAGE_H
+#ifndef BAD_BLOCK_H
+#define BAD_BLOCK_H
 
 
 #include <stddef.h>
@@ -14,34 +14,34 @@
  */
 extern bool bad_block_scan_done;
 
-/* Number of entries currently live in the bad sector table. */
-extern int total_bad_sectors;
+/* Number of entries currently live in the bad block table. */
+extern int total_bad_blocks;
 
-/* Brings up the settings subsystem, restores the bad sector table, and runs the
+/* Brings up the settings subsystem, restores the bad block table, and runs the
  * manufacturer bad-block scan if it has never been run on this device.
  * Call once from spi_init().
  */
-int bad_sector_storage_init(const struct device *dev);
+int bad_block_storage_init(const struct device *dev);
 
-int save_bad_sectors_arr();
-int load_bad_sectors_arr();
-int erase_bad_sectors_arr();
-int register_bad_sector(uint32_t sector_num);
+int save_bad_blocks_arr();
+int load_bad_blocks_arr();
+int erase_bad_blocks_arr();
+int register_bad_block(uint32_t sector_num);
 
-/* Unconditional form of register_bad_sector(), for callers that already know the
+/* Unconditional form of register_bad_block(), for callers that already know the
  * block is bad and must not be gated on the first boot scan having run.
  */
-int mark_bad_sector(uint32_t sector_num);
+int mark_bad_block(uint32_t sector_num);
 
 /* True if the block holding this sector is recorded bad. */
-bool is_sector_bad(uint32_t sector_num);
+bool is_block_bad(uint32_t sector_num);
 int get_sector_offset(int sector_num);
-void print_bad_sect_info();
+void print_bad_block_info();
 
-int spi_nand_bad_page_init(const struct device* dev);
+int bad_page_sim_init(const struct device* dev);
 int multi_nand_page_read_badsim_wrapper(const struct device* dev, uint32_t page_number, void* buffer);
 int multi_nand_page_write_badsim_wrapper(const struct device* dev, uint32_t page_number, const void* buffer, size_t size);
 int add_bad_page(uint32_t page);
 int remove_bad_page(uint32_t page);
 
-#endif /* BAD_PAGE_H */
+#endif /* BAD_BLOCK_H */

@@ -6,7 +6,7 @@
 #include "nand.h"
 #include "msense_dhara.h"
 #include "../nand/spi_nand.h"
-#include "../nand/bad_page.h"
+#include "../nand/bad_block.h"
 
 LOG_MODULE_REGISTER(dhara_nand, CONFIG_FLASH_LOG_LEVEL);
 
@@ -66,14 +66,14 @@ dhara_nand *msense_dhara_nand_init(const struct device *dev)
 
 int dhara_nand_is_bad(const dhara_nand* n, dhara_block_t b)
 {
-	return is_sector_bad(block_first_page(b)) ? 1 : 0;
+	return is_block_bad(block_first_page(b)) ? 1 : 0;
 }
 
 void dhara_nand_mark_bad(const dhara_nand* n, dhara_block_t b)
 {
 	// unconditional: dhara has decided this block is bad, so the first boot scan
-	// gate that register_bad_sector() applies must not suppress it
-	mark_bad_sector(block_first_page(b));
+	// gate that register_bad_block() applies must not suppress it
+	mark_bad_block(block_first_page(b));
 }
 
 int dhara_nand_erase(const dhara_nand* n, dhara_block_t b, dhara_error_t* err)

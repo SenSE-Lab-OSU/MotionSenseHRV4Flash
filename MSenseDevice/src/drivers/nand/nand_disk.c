@@ -16,7 +16,7 @@
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/sys/crc.h>
-#include "bad_page.h"
+#include "bad_block.h"
 #include "spi_nand.h"
 #include "nand_disk.h"
 
@@ -89,8 +89,8 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 
 	if (!multi_nand_page_is_erased(disk->dev, sector_num)){
 		LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-		#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-		register_bad_sector(sector_num);
+		#ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
+		register_bad_block(sector_num);
 		#endif
 		duplicate_sector_writes++;
 		return -1;
@@ -197,7 +197,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 
 static int disk_acess_init2(struct disk_info *disk){
 
-	// the bad sector table is loaded by bad_sector_storage_init() from spi_init()
+	// the bad block table is loaded by bad_block_storage_init() from spi_init()
 	return 0;
 }
 
@@ -310,7 +310,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				}
 
 				ret = multi_nand_page_write(dev, sector_num, &buf[x * 4096], 4096);
-				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
+				// perhaps a read back here, but we need to do something about a bad block that is fully erased fine, or a sector that returns a bad ret value.
 			}
 			if (VerifyWrites)
 			{
@@ -321,8 +321,8 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 				{
 					verify_fails++;
 					LOG_ERR("sect %d yield bad readback (%d), tot fails: %d", sector_num, equal, verify_fails);
-					#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-					register_bad_sector(sector_num);
+					#ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
+					register_bad_block(sector_num);
 					#endif
 				}
 			}

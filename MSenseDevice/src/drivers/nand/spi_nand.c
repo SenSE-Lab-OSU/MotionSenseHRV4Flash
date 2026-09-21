@@ -24,7 +24,7 @@
 #include "spi_nand.h"
 #include "jesd216.h"
 #include "flash_priv.h"
-#include "bad_page.h"
+#include "bad_block.h"
 
 int erase_file_table();
 
@@ -673,7 +673,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 				{
 					bad_blocks++;
 					uint32_t actual_sector = convert_address_to_sector(page_addr);
-					register_bad_sector(actual_sector);
+					register_bad_block(actual_sector);
 					LOG_WRN("bad block mark %02x at flash %d die %d block %d", dest, flash, die, x);
 				}
 			}
@@ -746,7 +746,7 @@ int dynamic_detect_bad_blocks(const struct device* dev){
 
 		if (block_bad){
 			bad_blocks++;
-			register_bad_sector(first_page);
+			register_bad_block(first_page);
 		}
 	}
 
@@ -776,13 +776,13 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
 	int ret;
 	if (current_reads % 5000 == 1000){
-		print_bad_sect_info();
+		print_bad_block_info();
 		print_ecc_status_info();
 	}
 	off_t addr = convert_page_to_address(dev, page_number);
 	ret = spi_nand_page_read(dev, addr, buffer);
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
-		register_bad_sector(page_number);
+		register_bad_block(page_number);
 	}
 	return ret;
 }
@@ -795,7 +795,7 @@ int multi_nand_page_write(const struct device* dev, uint32_t page_number, const 
 	int ret = spi_nand_page_write(dev, addr, buffer, size);
 	if (ret != 0){
 		LOG_ERR("program fail stat %d at sect %d", ret, page_number);
-		register_bad_sector(page_number);
+		register_bad_block(page_number);
 	}
 	return ret;
 }
@@ -808,7 +808,7 @@ int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
 	int ret = spi_nand_block_erase(dev, addr);
 	if (ret != 0){
 		LOG_WRN("erase fail stat %d at sect %d", ret, page_number);
-		register_bad_sector(page_number);
+		register_bad_block(page_number);
 	}
 	return ret;
 }
@@ -816,7 +816,7 @@ int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
 static uint8_t page_erased_buffer[4096];
 
 /* True if every byte of the page still reads as erased. Deliberately free of any
- * side effects: a written page is not a bad one, so recording bad sectors is left
+ * side effects: a written page is not a bad one, so recording bad blocks is left
  * to the caller. Used by the custom FTL's duplicate write guard and by
  * dhara_nand_is_free().
  */
@@ -1046,7 +1046,7 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 
 // resets the bad block storage.
 int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
-	int ret = erase_bad_sectors_arr();
+	int ret = erase_bad_blocks_arr();
 	if (ret != 0){
 		LOG_ERR("fail to erase bad sect");
 	}
@@ -1242,10 +1242,10 @@ int spi_init(const struct device *dev)
 		ret = spi_configure(dev, cfg);
 
 	}
-	// restores the bad sector table and runs the one-time manufacturer bad block
+	// restores the bad block table and runs the one-time manufacturer bad block
 	// scan; both are persisted through the settings subsystem
 	if (IS_ENABLED(CONFIG_SETTINGS)){
-	//bad_sector_storage_init(dev);
+	//bad_block_storage_init(dev);
 	
 	}
 

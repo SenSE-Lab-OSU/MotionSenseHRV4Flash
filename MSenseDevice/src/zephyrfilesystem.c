@@ -23,11 +23,11 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #endif
 
 // both disk drivers expose the same nand_disk.h surface, and dhara_disk.c is built
-// on the same spi_nand/bad_page layer, so either one needs these declarations
+// on the same spi_nand/bad_block layer, so either one needs these declarations
 #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
-#include "drivers/nand/bad_page.h"
+#include "drivers/nand/bad_block.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM

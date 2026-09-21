@@ -15,25 +15,25 @@ menuconfig DISK_DRIVER_RAW_NAND
     default n
 
 
-menuconfig RAW_NAND_BAD_SECTOR_SAVING
+menuconfig RAW_NAND_BAD_BLOCK_SAVING
     bool
-    prompt "Allows bad pages to be registered in a memory array that is persisted across reboots."
+    prompt "Allows bad blocks to be registered in a memory array that is persisted across reboots."
     default n
     help
        Not currently enabled since our Custom Sense FTL does not support block reallocation.
-       Pick where the table is kept with RAW_NAND_BAD_SECTOR_STORAGE below.
-       See bad_sector_detect_limit in bad_page.c for how large the table is.
+       Pick where the table is kept with RAW_NAND_BAD_BLOCK_STORAGE below.
+       See bad_block_detect_limit in bad_block.c for how large the table is.
 
-if RAW_NAND_BAD_SECTOR_SAVING
+if RAW_NAND_BAD_BLOCK_SAVING
 
-choice RAW_NAND_BAD_SECTOR_STORAGE
-    prompt "Where the bad sector table is persisted"
-    default RAW_NAND_BAD_SECTOR_STORAGE_NOR
+choice RAW_NAND_BAD_BLOCK_STORAGE
+    prompt "Where the bad block table is persisted"
+    default RAW_NAND_BAD_BLOCK_STORAGE_NOR
     help
        The two backends are not interchangeable on a device that already has a
        table stored: switching re-runs the one time manufacturer bad block scan.
 
-config RAW_NAND_BAD_SECTOR_STORAGE_NOR
+config RAW_NAND_BAD_BLOCK_STORAGE_NOR
     bool "External NOR flash, through the flash API"
     help
        Keeps the table in one sector of the external NOR just past the file table.
@@ -41,7 +41,7 @@ config RAW_NAND_BAD_SECTOR_STORAGE_NOR
        already in the field and they can still be updated over DFU. This is the
        original storage method.
 
-config RAW_NAND_BAD_SECTOR_STORAGE_SETTINGS
+config RAW_NAND_BAD_BLOCK_STORAGE_SETTINGS
     bool "Settings subsystem (NVS on internal flash)"
     select SETTINGS
     help
@@ -52,7 +52,7 @@ config RAW_NAND_BAD_SECTOR_STORAGE_SETTINGS
 
 endchoice
 
-endif # RAW_NAND_BAD_SECTOR_SAVING
+endif # RAW_NAND_BAD_BLOCK_SAVING
 
 config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
 	bool "allows the file system to be set as read only during runtime (via set_read_only)"
@@ -62,15 +62,15 @@ config RAW_NAND_ALLOW_RUNTIME_READONLY_FS
 	    Note that this is a system that will only work at the internal software level: the drive is not actually readonly
 		on windows, to do this, the drive must instead be mounted as readonly vs fs_mount. 
 
-config BAD_SECTOR_SAVING_RUNTIME
+config BAD_BLOCK_SAVING_RUNTIME
     bool 
-    prompt "Allows bad pages to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
+    prompt "Allows bad blocks to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
     default n
 
 menuconfig DISK_DRIVER_DHARA
     bool
     prompt "Disk Driver using dhara as the flash translation layer, instead of the SENSE lab custom nor solution."
-    select BAD_SECTOR_SAVING_RUNTIME
+    select BAD_BLOCK_SAVING_RUNTIME
     help
         uses Dhara's virtual addressing to handle bad blocks, wear leveling, and sector erasing
         for the current nand driver.

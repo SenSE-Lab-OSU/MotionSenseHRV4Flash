@@ -18,6 +18,8 @@
  */
 extern bool bad_block_scan_done;
 
+extern bool static_scan_in_progress;
+
 /* Number of entries currently live in the bad block table. */
 extern int total_bad_blocks;
 
@@ -47,10 +49,16 @@ bool is_block_bad(uint32_t sector_num);
 int get_sector_offset(int sector_num);
 void print_bad_block_info();
 
-int spi_nand_bad_page_init(const struct device* dev);
-int spi_nand_page_read_badsim_wrapper(const struct device* dev, off_t page_addr, void* dest);
-int spi_nand_page_write_badsim_wrapper(const struct device* dev, off_t page_address, const void* src, size_t size);
-int add_bad_page(off_t page);
-int remove_bad_page(off_t page);
+/* True if this page is in the simulation list. */
+bool is_simulated_bad_page(uint32_t page_number);
+
+/* Drop-in stand-in for spi_nand_page_read() on a page being simulated bad. Same
+ * signature, so the caller just swaps which one it calls: fills the buffer with
+ * 0xFF and returns the uncorrectable ECC error, exactly as a real failed read does.
+ */
+int spi_nand_page_read_bad_sim(const struct device* dev, off_t page_addr, void* dest);
+
+int add_bad_page(uint32_t page);
+int remove_bad_page(uint32_t page);
 
 #endif /* BAD_BLOCK_H */

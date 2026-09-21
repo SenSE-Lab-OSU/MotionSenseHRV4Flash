@@ -63,7 +63,7 @@ uint32_t bad_blocks[bad_block_detect_limit] = {0};
  * the whole table back to NVS on each hit would rewrite the same value hundreds
  * of times, so the scan defers the write and saves once when it finishes.
  */
-static bool static_scan_in_progress = false;
+bool static_scan_in_progress = false;
 
 
 #ifdef CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_NOR
@@ -218,6 +218,9 @@ int bad_block_storage_init(const struct device *dev)
 	if (bad_block_scan_done || !IS_ENABLED(CONFIG_BAD_BLOCK_SCAN_AT_START)) {
 		if (bad_block_scan_done){
 			LOG_INF("manufacturer bad block scan already done, skipping");
+		}
+		else {
+			LOG_WRN("bad block scan not yet done, recommend doing via bluetooth command.");
 		}
 		print_bad_block_info();
 		return 0;
@@ -541,54 +544,57 @@ int get_sector_offset(int sector_num){return sector_num;}
 #define MAX_BAD_PAGES 100
 #define PAGE_SIZE 4096
 
-static off_t bad_pages[MAX_BAD_PAGES] = {}; // Global array of bad pages, initialize to 0 (invalid)
-
-
-
-
-
-
-
-/**
- * Wrapper for spi_nand_page_read that simulates bad pages.
- * For pages in the bad_pages array, fills dest with 0xFF (bad output).
- * Otherwise, calls the original spi_nand_page_read.
+/* Simulated bad pages, as physical page numbers across all 4 flashes. 0 marks an
+ * empty slot, so page 0 itself cannot be simulated bad.
+ *
+ * Seeded with a spread that exercises the interesting paths: several different
+ * flash and die combinations, so the chip select and die select in
+ * convert_page_to_address() get covered, plus two pages inside one erase block so
+ * the duplicate check in register_bad_block() gets covered too. Edit freely, or
+ * adjust at runtime with add_bad_page() and remove_bad_page().
  */
-int spi_nand_page_read_badsim_wrapper(const struct device* dev, off_t page_addr, void* dest) {
+static uint32_t simulated_bad_pages[MAX_BAD_PAGES] = {
+    4096,     // flash 0, die 0, block 64
+    12400,    // flash 0, die 0, block 193
+    12410,    // flash 0, die 0, block 193 again: both floor to the same entry
+    200000,   // flash 0, die 1, block 3125
+    300000,   // flash 1, die 0, block 4687
+    700000,   // flash 2, die 1, block 10937
+    1000000,  // flash 3, die 1, block 15625
+};
+
+bool is_simulated_bad_page(uint32_t page_number) {
     for (int i = 0; i < MAX_BAD_PAGES; i++) {
-        if (bad_pages[i] == page_addr && bad_pages[i] != 0) {
-            // Bad page: fill with 0xFF
-            memset(dest, 0xFF, PAGE_SIZE);
-            return 0; // Success, but with bad data
+        if (simulated_bad_pages[i] == page_number && simulated_bad_pages[i] != 0) {
+            return true;
         }
     }
-    // Not bad: call original
-    return spi_nand_page_read(dev, page_addr, dest);
+    return false;
 }
 
 /**
- * Wrapper for spi_nand_page_write that simulates bad pages.
- * For pages in the bad_pages array, returns an error without writing.
- * Otherwise, calls the original spi_nand_page_write.
+ * Stands in for spi_nand_page_read() when a page is being simulated bad. Behaves
+ * the way a real read does when ECC cannot correct the data: the caller gets a
+ * buffer of 0xFF and the uncorrectable error code. multi_nand_page_read() calls
+ * this instead of the real read when CONFIG_RAW_NAND_BAD_BLOCK_SIMULATION is on,
+ * so its existing error handling registers the block exactly as it would for a
+ * genuine failure.
  */
-int spi_nand_page_write_badsim_wrapper(const struct device* dev, off_t page_address, const void* src, size_t size) {
-    for (int i = 0; i < MAX_BAD_PAGES; i++) {
-        if (bad_pages[i] == page_address && bad_pages[i] != 0) {
-            return 0; //  Fail Silently
-        }
-    }
-    // Not bad: call original
-    return spi_nand_page_write(dev, page_address, src, size);
+int spi_nand_page_read_bad_sim(const struct device* dev, off_t page_addr, void* dest) {
+    ARG_UNUSED(dev);
+    LOG_WRN("simulated uncorrectable ECC error at addr %ld", (long)page_addr);
+    memset(dest, 0xFF, PAGE_SIZE);
+    return FLASH_TOO_MANY_ECC_ERROR;
 }
 
 /**
  * Function to add a bad page to the global array.
  * Returns 0 on success, -1 if array is full.
  */
-int add_bad_page(off_t page) {
+int add_bad_page(uint32_t page) {
     for (int i = 0; i < MAX_BAD_PAGES; i++) {
-        if (bad_pages[i] == 0) {
-            bad_pages[i] = page;
+        if (simulated_bad_pages[i] == 0) {
+            simulated_bad_pages[i] = page;
             return 0;
         }
     }
@@ -599,20 +605,12 @@ int add_bad_page(off_t page) {
  * Function to remove a bad page from the global array.
  * Returns 0 on success, -1 if not found.
  */
-int remove_bad_page(off_t page) {
+int remove_bad_page(uint32_t page) {
     for (int i = 0; i < MAX_BAD_PAGES; i++) {
-        if (bad_pages[i] == page) {
-            bad_pages[i] = 0;
+        if (simulated_bad_pages[i] == page) {
+            simulated_bad_pages[i] = 0;
             return 0;
         }
     }
     return -1; // Not found
-}
-
-
-int spi_nand_bad_page_init(const struct device* dev) {
-    
-    add_bad_page(126);
-    add_bad_page(10895);
-    return 0;
 }

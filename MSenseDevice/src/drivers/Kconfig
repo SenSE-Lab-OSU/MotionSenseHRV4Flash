@@ -67,6 +67,14 @@ config BAD_BLOCK_SAVING_RUNTIME
     prompt "Allows bad blocks to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
     default n
 
+config RAW_NAND_BAD_BLOCK_SIMULATION
+    bool "Simulate bad blocks at the pages registered with add_bad_page()"
+    default n
+    help
+       Makes multi_nand_page_read() stand in a simulated uncorrectable ECC error
+       for any page in the simulation list, so the bad block handling above it can
+       be exercised on a healthy chip. Test builds only.
+
 menuconfig DISK_DRIVER_DHARA
     bool
     prompt "Disk Driver using dhara as the flash translation layer, instead of the SENSE lab custom nor solution."

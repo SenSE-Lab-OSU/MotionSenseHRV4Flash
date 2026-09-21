@@ -780,7 +780,14 @@ int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* b
 		print_ecc_status_info();
 	}
 	off_t addr = convert_page_to_address(dev, page_number);
-	ret = spi_nand_page_read(dev, addr, buffer);
+	// folds away entirely when the simulation Kconfig is off
+	if (IS_ENABLED(CONFIG_RAW_NAND_BAD_BLOCK_SIMULATION) &&
+	    is_simulated_bad_page(page_number)){
+		ret = spi_nand_page_read_bad_sim(dev, addr, buffer);
+	}
+	else {
+		ret = spi_nand_page_read(dev, addr, buffer);
+	}
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
 		register_bad_block(page_number);
 	}

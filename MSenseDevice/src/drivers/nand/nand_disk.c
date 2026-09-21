@@ -32,8 +32,10 @@ enum sd_status {
 
 
 // File System Controls
-// on write, checks whether the a certain page is already written to. 
-bool CheckDuplicateAccess = false;
+// on write, checks whether the a certain page is already written to.
+// Costs a full page read before every NAND write, so this is a diagnostic aid
+// rather than something to ship enabled.
+bool CheckDuplicateAccess = true;
 bool VerifyWrites = false;
 
 int duplicate_sector_writes = 0;

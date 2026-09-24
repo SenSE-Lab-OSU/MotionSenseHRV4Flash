@@ -970,6 +970,12 @@ static int reset_ecg_storage_and_reboot(bool reset_bad_blocks)
 		goto erase_failed;
 	}
 	LOG_INF("Storage erase complete; resetting while MSC remains absent");
+	ret = msense_storage_log_drain();
+	if (ret != 0) {
+		LOG_WRN("Storage log drain timed out before reset: %d", ret);
+	}
+	/* CDC ACM poll_out queues bytes for USB work after the logger drains. */
+	k_sleep(K_MSEC(250));
 	msense_normal_reset();
 	ret = -EIO;
 

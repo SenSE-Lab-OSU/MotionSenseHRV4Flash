@@ -35,6 +35,7 @@ def main():
             "get_status",
             "spi_nand_wait_until_ready",
             "spi_nand_page_write",
+            "spi_nand_block_erase_internal",
             "spi_nand_block_erase",
             "spi_nand_reset",
             "set_die",

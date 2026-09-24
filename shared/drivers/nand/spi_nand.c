@@ -41,6 +41,8 @@ LOG_MODULE_REGISTER(spi_nand, CONFIG_FLASH_LOG_LEVEL);
 
 #define NAND_STATUS_ERASE_FAIL BIT(2)
 #define NAND_STATUS_PROGRAM_FAIL BIT(3)
+/* Micron parameter page: at most 40 bad blocks per logical unit (die). */
+#define NAND_FORMAT_MAX_SKIPPED_BLOCKS_PER_DIE 40U
 
 K_MUTEX_DEFINE(storage_spi_bus_mutex);
 
@@ -890,11 +892,17 @@ cleanup:
 
 
 // addr is the first page of the block
-int spi_nand_block_erase(const struct device* dev, off_t addr){
+static int spi_nand_block_erase_internal(const struct device* dev, off_t addr,
+					uint8_t *completed_fail_status){
 	int disable_ret;
 	int ret;
 	uint8_t status = 0;
 	bool operation_busy_unknown = false;
+	bool completed_erase_fail = false;
+
+	if (completed_fail_status != NULL) {
+		*completed_fail_status = 0;
+	}
 
 	acquire_device(dev);
 	current_erases++;
@@ -939,6 +947,7 @@ int spi_nand_block_erase(const struct device* dev, off_t addr){
 				 ((status & SPI_NOR_WIP_BIT) != 0U);
 	if ((ret == 0) && ((status & NAND_STATUS_ERASE_FAIL) != 0U)) {
 		LOG_ERR("block erase failed: status=0x%02x", status);
+		completed_erase_fail = true;
 		ret = -EIO;
 	} else if (ret == 0) {
 		LOG_DBG("block erase status=0x%02x", status);
@@ -956,56 +965,75 @@ cleanup:
 	} else if (disable_ret != 0) {
 		LOG_WRN("erase write disable failed: %d", disable_ret);
 	}
+	if (completed_fail_status != NULL && completed_erase_fail && disable_ret == 0) {
+		*completed_fail_status = status;
+	}
 	release_device(dev);
 	LOG_DBG("erase completed with result %d", ret);
 	return ret;
 }
 
-
-int spi_nand_chip_erase(const struct device* device) {
-	
-
-	//set_die(device, 0);
-	// Get the total size in bytes of the flash, and divide by 2 because there are 2 die
-	size_t size = dev_die_size(device);
-	off_t block_address;
-	int status = -1;
-	int page_size = dev_page_size(device);
-	//Divide by page size to get the total pages, then by pages per block to get block size
-	int block_count = (size / page_size);
-	block_count /= NAND_PAGES_PER_ERASE_BLOCK;
-	//block_count = 4096;
-	LOG_INF("chip erase start %i bl", block_count);
-	for (int current_block = 0; current_block < block_count; current_block++){
-		block_address = convert_block_to_singledie_address(current_block);
-		status = spi_nand_block_erase(device, block_address);
-		if (status != 0){
-			LOG_WRN("err block erase %d: %i", current_block, status);
-			return status;
-		}
-	}
-	LOG_INF("chip erase done, stat, %i", status); 
-	return status;
+int spi_nand_block_erase(const struct device* dev, off_t addr){
+	return spi_nand_block_erase_internal(dev, addr, NULL);
 }
 
 
-int spi_nand_whole_chip_erase(const struct device* dev){
-	int ret = set_die(dev, 0);
-	if (ret != 0) {
-		return ret;
-	}
+static int spi_nand_die_erase_for_format(const struct device *dev, int package,
+					int die, unsigned int *skipped_total)
+{
+	int block_count = (dev_die_size(dev) / dev_page_size(dev)) /
+			  NAND_PAGES_PER_ERASE_BLOCK;
+	unsigned int skipped_die = 0;
 
-	ret = spi_nand_chip_erase(dev);
-	if (ret != 0) {
-		return ret;
-	}
+	LOG_INF("NAND format package=%d die=%d blocks=%d", package, die,
+		block_count);
+	for (int block = 0; block < block_count; block++) {
+		off_t page = convert_block_to_singledie_address(block);
+		uint8_t fail_status;
+		int ret = spi_nand_block_erase_internal(dev, page, &fail_status);
 
-	ret = set_die(dev, 1);
-	if (ret != 0) {
-		return ret;
+		if (fail_status != 0U) {
+			LOG_ERR("NAND_FORMAT_ERASE_FAIL package=%d die=%d block=%d page=%ld status=0x%02x",
+				package, die, block, (long)page, fail_status);
+			if (skipped_die >= NAND_FORMAT_MAX_SKIPPED_BLOCKS_PER_DIE) {
+				LOG_ERR("NAND format stopped: over %u failed blocks on package=%d die=%d",
+					NAND_FORMAT_MAX_SKIPPED_BLOCKS_PER_DIE,
+					package, die);
+				return -EIO;
+			}
+			skipped_die++;
+			(*skipped_total)++;
+			continue;
+		}
+		if (ret != 0) {
+			LOG_ERR("NAND format stopped: package=%d die=%d block=%d error=%d",
+				package, die, block, ret);
+			return ret;
+		}
 	}
+	if (skipped_die != 0U) {
+		LOG_WRN("NAND format package=%d die=%d skipped_blocks=%u",
+			package, die, skipped_die);
+	}
+	return 0;
+}
 
-	ret = spi_nand_chip_erase(dev);
+static int spi_nand_whole_chip_erase(const struct device *dev, int package,
+				     unsigned int *skipped_total)
+{
+	const struct spi_flash_config *cfg = dev->config;
+	int ret = 0;
+
+	for (int die = 0; die < cfg->dies_per_flash; die++) {
+		ret = set_die(dev, die);
+		if (ret != 0) {
+			break;
+		}
+		ret = spi_nand_die_erase_for_format(dev, package, die, skipped_total);
+		if (ret != 0) {
+			break;
+		}
+	}
 	int restore_ret = set_die(dev, 0);
 	return ret != 0 ? ret : restore_ret;
 }
@@ -1022,13 +1050,14 @@ int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
 
 int spi_nand_multi_chip_erase(const struct device* dev){
 	const struct spi_flash_config* cfg = dev->config;
+	unsigned int skipped_total = 0;
 	int ret = 0;
 	for (int i = 0; i < cfg->num_flashes; i++) {
 		ret = set_flash(dev, i);
 		if (ret != 0) {
 			break;
 		}
-		ret = spi_nand_whole_chip_erase(dev);
+		ret = spi_nand_whole_chip_erase(dev, i, &skipped_total);
 		if (ret != 0) {
 			break;
 		}
@@ -1048,7 +1077,10 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 		LOG_ERR("failed to erase file table");
 		return ret;
 	}
-	LOG_INF("all erase complete!");
+	if (skipped_total != 0U) {
+		LOG_WRN("NAND_FORMAT_RESULT skipped_blocks=%u", skipped_total);
+	}
+	LOG_INF("format erase complete");
 	return 0;
 }
 

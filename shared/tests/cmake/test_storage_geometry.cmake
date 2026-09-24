@@ -192,7 +192,7 @@ endif()
 string(SUBSTRING "${multi_erase_source}" ${file_table_erase_pos} -1 file_table_erase_source)
 string(FIND "${file_table_erase_source}" "LOG_ERR(\"failed to erase file table\")" file_table_error_pos)
 string(FIND "${file_table_erase_source}" "return ret;" file_table_return_pos)
-string(FIND "${file_table_erase_source}" "LOG_INF(\"all erase complete!\")" all_complete_pos)
+string(FIND "${file_table_erase_source}" "LOG_INF(\"format erase complete\")" all_complete_pos)
 if((file_table_error_pos EQUAL -1) OR (file_table_return_pos EQUAL -1) OR
    (all_complete_pos EQUAL -1) OR NOT (file_table_error_pos LESS file_table_return_pos) OR
    NOT (file_table_return_pos LESS all_complete_pos))

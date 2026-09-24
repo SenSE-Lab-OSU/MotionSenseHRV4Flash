@@ -290,10 +290,6 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 int spi_nand_block_erase(const struct device * dev, off_t block_addr);
 
 
-int spi_nand_chip_erase(const struct device* device);
-
-int spi_nand_whole_chip_erase(const struct device* dev);
-
 int spi_nand_multi_chip_erase(const struct device* dev);
 
 int spi_nand_multi_chip_reset_bad_block(const struct device* dev);

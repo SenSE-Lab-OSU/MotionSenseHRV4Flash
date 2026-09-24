@@ -62,6 +62,7 @@ class EcgV0ReceiverHarnessTest(unittest.TestCase):
                 extract_function(self.source, "stream_progress_work_handler", "void"),
                 extract_function(self.source, "take_disconnect_stream_active_locked", "bool"),
                 extract_function(self.source, "handle_subscription_removed", "void"),
+                extract_function(self.source, "legacy_reset_timeout_seconds", "uint32_t"),
                 extract_function(self.source, "disconnected", "void"),
                 extract_function(self.source, "nus_notification", "uint8_t"),
             ]
@@ -90,7 +91,9 @@ class EcgV0ReceiverHarnessTest(unittest.TestCase):
 #define TESTER_READY 6
 #define TESTER_SCANNING 7
 #define SCAN_TARGET_RECONNECT 1
-#define LEGACY_RESET_RECONNECT_TIMEOUT 1
+#define LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS 300U
+#define LEGACY_RESET_SCAN_TIMEOUT_SECONDS 1200U
+#define K_SECONDS(seconds) (seconds)
 #define MSENSE_SENSOR_STREAM_DATA_PREFIX_BYTES 8U
 #define MSENSE_SENSOR_STREAM_ECG_RECORD_SIZE 4096U
 #define MSENSE_SENSOR_STREAM_ECG_HISTORY_RECORDS 8U

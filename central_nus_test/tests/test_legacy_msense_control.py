@@ -61,6 +61,18 @@ class LegacyMsenseControlTest(unittest.TestCase):
         self.assertIn("start_collection_control_discovery(conn)", post_nus)
         self.assertIn("MSENSE_SENSOR_STREAM_DEVICE_PPG", post_nus)
 
+    def test_modern_name_prefixes_and_buffer_match_peripherals(self):
+        classify = function_body(self.central, "device_type_for_name")
+        match = function_body(self.central, "name_matches_target")
+        self.assertIn("char value[17];", self.central)
+        for product, directory in (("PPG", "PPGv2"), ("ECG", "ECGv0")):
+            prefix = f'MSense4{product}-'
+            self.assertIn(f'strncmp(name, "{prefix}", 11U) == 0', classify)
+            self.assertIn(f'strncmp(name, "{prefix}", 11U) == 0', match)
+            config = (ROOT / directory / "prj.conf").read_text()
+            self.assertIn(f'CONFIG_BT_DEVICE_NAME="{prefix}"', config)
+            self.assertIn("CONFIG_BT_DEVICE_NAME_MAX=16", config)
+
     def test_control_discovery_includes_reset_and_chains_status(self):
         complete = function_body(self.central, "collection_control_discovery_complete")
         self.assertIn("collection_enable_uuid", complete)
@@ -74,15 +86,18 @@ class LegacyMsenseControlTest(unittest.TestCase):
         handler = function_body(self.central, "handle_command")
         self.assertRegex(
             handler,
-            r"\(value != 68U && value != 120U && value != 121U && value != 132U\)",
+            r"value != 68U && value != 120U && value != 121U && value != 132U &&\s*value != 200U && value != 201U",
         )
-        self.assertIn("ERR usage: reset 68|120|121|132", handler)
+        self.assertIn("ERR usage: reset 68|120|121|132|200|201", handler)
         self.assertIn('command_printf("RESET_SENT code=%u", value)', handler)
         reset = function_body(self.central, "issue_legacy_reset")
         self.assertIn("bt_gatt_write(connection, &reset_write_params)", reset)
         self.assertIn("legacy_reset_reconnect_timeout", reset)
         timeout = function_body(self.central, "legacy_reset_reconnect_timeout_handler")
         self.assertIn("RESET_RECONNECT_TIMEOUT", timeout)
+        select_timeout = function_body(self.central, "legacy_reset_timeout_seconds")
+        self.assertIn("code == 132U || code == 200U || code == 201U", select_timeout)
+        self.assertIn("LEGACY_RESET_SCAN_TIMEOUT_SECONDS", select_timeout)
 
     def test_machine_readable_reset_phases_are_present(self):
         for event in (
@@ -100,8 +115,8 @@ class LegacyMsenseControlTest(unittest.TestCase):
 
         disconnected = function_body(self.central, "disconnected")
         reset_path = disconnected[disconnected.index("if (reset_reconnect)"):]
-        self.assertIn("LEGACY_RESET_RECONNECT_TIMEOUT", reset_path)
-        self.assertLess(reset_path.index("LEGACY_RESET_RECONNECT_TIMEOUT"),
+        self.assertIn("legacy_reset_timeout_seconds(reset_code)", reset_path)
+        self.assertLess(reset_path.index("legacy_reset_timeout_seconds(reset_code)"),
                         reset_path.index("start_scan()"))
 
     def test_unsolicited_nus_is_ignored_before_stream_ownership(self):

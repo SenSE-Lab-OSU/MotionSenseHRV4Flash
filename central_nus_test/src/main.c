@@ -57,7 +57,7 @@
 #define MSENSE_NAME_PREFIX "MSense"
 #define MSENSE_BLINKY_NAME "MSenseBlinky"
 #define LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS 300U
-#define LEGACY_RESET_RECONNECT_TIMEOUT K_SECONDS(LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS)
+#define LEGACY_RESET_SCAN_TIMEOUT_SECONDS 1200U
 #define LEGACY_RESET_DISCONNECT_GRACE_SECONDS 2U
 #define LEGACY_RESET_DISCONNECT_GRACE K_SECONDS(LEGACY_RESET_DISCONNECT_GRACE_SECONDS)
 
@@ -345,6 +345,12 @@ static void stream_progress_stop(void);
 static void complete_pending_end(uint32_t session_id, uint32_t capture_generation);
 static void ecg_block_validate_work_handler(struct k_work *work);
 static void end_complete_work_handler(struct k_work *work);
+
+static uint32_t legacy_reset_timeout_seconds(uint8_t code)
+{
+	return code == 132U || code == 200U || code == 201U ? LEGACY_RESET_SCAN_TIMEOUT_SECONDS :
+		LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS;
+}
 
 static const char *tester_state_name(enum tester_state state)
 {
@@ -2406,7 +2412,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 			}
 			post_event("RESET_DISCONNECTED code=%u reason=0x%02x", reset_code, reason);
 			(void)k_work_reschedule(&legacy_reset_reconnect_timeout,
-						LEGACY_RESET_RECONNECT_TIMEOUT);
+						K_SECONDS(legacy_reset_timeout_seconds(reset_code)));
 			start_scan();
 		} else if (reconnect) {
 			dfu_request_reconnect(NULL);
@@ -2945,7 +2951,7 @@ static int issue_legacy_reset(uint8_t code)
 		return err;
 	}
 	(void)k_work_reschedule(&legacy_reset_reconnect_timeout,
-				LEGACY_RESET_RECONNECT_TIMEOUT);
+				K_SECONDS(legacy_reset_timeout_seconds(code)));
 	post_event("RESET_ATT code=%u status=queued handle=0x%04x", code, handle);
 	return 0;
 }
@@ -3046,7 +3052,7 @@ static void legacy_reset_reconnect_timeout_handler(struct k_work *work)
 			   LEGACY_RESET_DISCONNECT_GRACE_SECONDS);
 	} else {
 		post_event("RESET_RECONNECT_TIMEOUT code=%u timeout_s=%u", code,
-			   LEGACY_RESET_RECONNECT_TIMEOUT_SECONDS);
+			   legacy_reset_timeout_seconds(code));
 	}
 }
 
@@ -3275,7 +3281,7 @@ static void print_status(void)
 static void show_help(void)
 {
 	command_printf("COMMANDS: help | scan | connect ppg|ecg|any | collect on|off | status | "
-		       "remote status | reset 68|120|121|132 | "
+		       "remote status | reset 68|120|121|132|200|201 | "
 		       "start [infinity] [id] | "
 		       "stop [id] | cancel [id] | disconnect | dfu capabilities|status|list|begin|abort|erase|"
 		       "test|confirm|reset");
@@ -3413,8 +3419,9 @@ static void handle_command(struct command_line *line)
 		int err;
 
 		if (argument == NULL || extra != NULL || !parse_u32(argument, &value) ||
-		    (value != 68U && value != 120U && value != 121U && value != 132U)) {
-			command_printf("ERR usage: reset 68|120|121|132");
+		    (value != 68U && value != 120U && value != 121U && value != 132U &&
+		     value != 200U && value != 201U)) {
+			command_printf("ERR usage: reset 68|120|121|132|200|201");
 			return;
 		}
 		err = issue_legacy_reset((uint8_t)value);

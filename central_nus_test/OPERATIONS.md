@@ -133,8 +133,8 @@ Send one case-sensitive ASCII command terminated by CR, LF, or CRLF:
 | `connect any` | Scan and connect to any `MSense` name, including `MSenseBlinky`. |
 | `collect on` / `collect off` | For a connected PPG or ECG peer, write its normal collection-enable characteristic with response. Use `on` before streaming and `off` only when intentionally ending acquisition. |
 | `status` | Print stream state, NUS/SMP readiness, MTU, relay state, live throughput, link information, and machine-parseable `peer_name`, `peer_addr`, and `peer_addr_type`. |
-| `remote status` | Read the connected legacy MSenseDevice eight-byte status register. |
-| `reset 68` / `reset 120` / `reset 121` / `reset 132` | For a connected ECG or PPG, send an acknowledged legacy reset write. Code 68 formats storage and reboots, 120 is a non-destructive storage-aware PPG reboot, 121 is an emergency immediate reset, and 132 clears the bad-block table before reset. Before PPG reset 120, stop streaming, send `collect off`, and confirm remote status bytes 1 and 2 are zero. The Central scans for the same address for at most five minutes. |
+| `remote status` | Read the connected PPG or ECG eight-byte status register. |
+| `reset 68` / `reset 120` / `reset 121` / `reset 132` / `reset 200` / `reset 201` | Send a one-byte legacy reset write. On this branch, PPG and ECG handle 68 (destructive storage reset), 121 (immediate reset), and 132 (destructive bad-block-state reset); only PPG handles 120 (storage-aware reboot). The Central also accepts 200/201 for compatible firmware, but current PPG and ECG reject them. Before PPG reset 120, stop streaming, send `collect off`, and confirm remote status bytes 1 and 2 are zero. The Central scans for the same address for up to 20 minutes for codes 132/200/201 and five minutes for other codes. |
 | `start [infinity] [id]` | Request a PPG or ECG v0 stream. Both support `infinity`; `id` is an optional nonzero decimal or `0x` uint32. |
 | `stop [id]` | Stop a v0 stream at its submitted record boundary (PPG 16 bytes, ECG 4096); without `id`, uses the active session. It is valid once the START write has completed. |
 | `cancel [id]` | Alias for `stop`; retained as a command alias; both products use STOP semantics. |
@@ -156,7 +156,7 @@ Important NUS/control events are:
 | `REMOTE_STATUS_SENT`, `REMOTE_STATUS` | Status-read submission and ATT result, including the eight-byte value as hex. |
 | `RESET_SENT`, `RESET_ATT` | Reset command submission and the separate ATT queued/accepted/error result. |
 | `RESET_DISCONNECTED`, `RESET_ADVERTISING`, `RESET_RECONNECTED`, `RESET_REDISCOVERED` | Observable reset/reconnect phases. |
-| `RESET_RECONNECT_TIMEOUT` | The peer did not reconnect and finish handle discovery within five minutes. |
+| `RESET_RECONNECT_TIMEOUT` | The peer did not reconnect and finish handle discovery within the code-specific limit: 20 minutes for 132/200/201, five minutes otherwise. |
 | `RESET_DISCONNECT_TIMEOUT` | An ATT error was reported for a reset write and no expected reboot disconnect followed within two seconds. |
 | `START_SENT`, `START_ACK`, `START_RESULT` | Stream request state. |
 | `STOP_SENT`, `STOP_RESULT` | Shared v0 stop state. |

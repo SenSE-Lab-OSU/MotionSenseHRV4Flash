@@ -595,13 +595,17 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 	 */
 	size_t room_left = (size_t)MSenseFile->write_size - current_buffer->current_size;
 	size_t first_chunk = (size < room_left) ? size : room_left;
-
 	memcpy(&current_buffer->data_upload_buffer[current_buffer->current_size], data, first_chunk);
 	current_buffer->current_size += first_chunk;
 
 	if (current_buffer->current_size >= (size_t)MSenseFile->write_size){
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
+			// undo the last write operation if it's cropped, since we don't want the data to flow into the next file
+			if (first_chunk < size){
+			current_buffer->current_size -= first_chunk;
+			first_chunk = 0;
+			}
 		}
 		if (!panic_single_thread){
 		LOG_DBG("Submitting Write!");

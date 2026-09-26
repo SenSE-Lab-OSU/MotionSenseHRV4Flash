@@ -245,7 +245,7 @@ struct spi_nor_data {
 
 };
 
-/* bad_block_scan_done and the rest of the bad block state now live in bad_page.h */
+/* bad_block_scan_done and the rest of the bad block state now live in bad_block.h */
 
 extern int current_writes;
 extern int current_reads;
@@ -253,6 +253,8 @@ extern int current_erases;
 
 extern int ECC_corrections;
 extern int ECC_err;
+
+void print_ecc_status_info();
 
 void print_page_hex(uint8_t* data_buf, int size, bool shorten);
 
@@ -300,6 +302,12 @@ int dynamic_detect_bad_blocks(const struct device* dev);
 int spi_nand_parameter_page_read(const struct device* dev, void* dest);
 
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer);
+
+int multi_nand_page_write(const struct device* dev, uint32_t page_number, const void* buffer, size_t size);
+
+int multi_nand_block_erase(const struct device* dev, uint32_t page_number);
+
+bool multi_nand_page_is_erased(const struct device* dev, uint32_t page_number);
 
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest);
 

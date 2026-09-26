@@ -22,9 +22,12 @@ LOG_MODULE_REGISTER(zephyrfilesystem, 3);
 #include <zephyr/storage/flash_map.h>
 #endif
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+// both disk drivers expose the same nand_disk.h surface, and dhara_disk.c is built
+// on the same spi_nand/bad_block layer, so either one needs these declarations
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
+#include "drivers/nand/bad_block.h"
 #endif
 
 #if CONFIG_FAT_FILESYSTEM_ELM
@@ -585,15 +588,24 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		first_init = true;
 	}
 
-	void* address_to_write = &current_buffer->data_upload_buffer[current_buffer->current_size];
-	memcpy(address_to_write, data, size);
-	current_buffer->current_size += size;
-	if (current_buffer->current_size + size >= MSenseFile->write_size){
-		if (current_buffer->current_size + size != MSenseFile->write_size){
-			LOG_WRN("Wrn: tot size is %d short. this is ok but will cause few 0xff at EOF.", MSenseFile->write_size - current_buffer->current_size);
-		}
+	/* Fill the current buffer up to exactly write_size and carry whatever does not
+	 * fit over into the other buffer. Submitting a short write would leave the tail
+	 * of a NAND page unwritten, and the next write to that page is then a duplicate
+	 * program of an already used page.
+	 */
+	size_t room_left = (size_t)MSenseFile->write_size - current_buffer->current_size;
+	size_t first_chunk = (size < room_left) ? size : room_left;
+	memcpy(&current_buffer->data_upload_buffer[current_buffer->current_size], data, first_chunk);
+	current_buffer->current_size += first_chunk;
+
+	if (current_buffer->current_size >= (size_t)MSenseFile->write_size){
 		if ((MSenseFile->current_writes + 1) >= max_writes){
 			MSenseFile->first_sample_init = false;
+			// undo the last write operation if it's cropped, since we don't want the data to flow into the next file
+			if (first_chunk < size){
+			current_buffer->current_size -= first_chunk;
+			first_chunk = 0;
+			}
 		}
 		if (!panic_single_thread){
 		LOG_DBG("Submitting Write!");
@@ -604,6 +616,21 @@ void store_data(const void* data, size_t size, enum sensor_type sensor){
 		}
 		current_buffer->current_size = 0;
 		MSenseFile->switch_buffer = !MSenseFile->switch_buffer;
+
+		// the remainder starts the buffer we just swapped to
+		size_t leftover = size - first_chunk;
+		if (leftover > 0){
+			data_upload_buffer* next_buffer = MSenseFile->switch_buffer ?
+				&MSenseFile->buffer2 : &MSenseFile->buffer1;
+			if (leftover > (size_t)MSenseFile->write_size){
+				LOG_ERR("sample of %u bytes is larger than the %d byte write size, truncating",
+					(unsigned int)size, MSenseFile->write_size);
+				leftover = (size_t)MSenseFile->write_size;
+			}
+			memcpy(&next_buffer->data_upload_buffer[next_buffer->current_size],
+			       (const char*)data + first_chunk, leftover);
+			next_buffer->current_size += leftover;
+		}
 	}
 }
 
@@ -778,7 +805,7 @@ static int mount_app_fs(struct fs_mount_t *mnt)
 	if (IS_ENABLED(CONFIG_DISK_DRIVER_RAM)) {
 		mnt->mnt_point = "/RAM:";
 	} else if (IS_ENABLED(CONFIG_DISK_DRIVER_SDMMC) | IS_ENABLED(CONFIG_DISK_DRIVER_RAW_NAND) | 
-	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH)) {
+	IS_ENABLED(CONFIG_DISK_DRIVER_FLASH) | IS_ENABLED(CONFIG_DISK_DRIVER_DHARA)) {
 		mnt->mnt_point = "/SD:";
 	}
 
@@ -932,7 +959,7 @@ void print_out_page(int page_num){
 	
 	// can also just change this to disk_read()
 	const struct device* filesystem_device2 = sdmmc_disk.dev;
-	multi_nand_page_read(filesystem_device2, page_num, test_read_buf);
+	multi_nand_page_read(filesystem_device2, get_sector_offset(page_num), test_read_buf);
 	//disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num, 1);
 	if (page_num > 1500){
 		disk_nand_access_read(&sdmmc_disk, test_read_buf, page_num + 1, 1);

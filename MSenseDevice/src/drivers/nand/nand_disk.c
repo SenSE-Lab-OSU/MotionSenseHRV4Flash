@@ -16,13 +16,13 @@
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/sys/crc.h>
-#include "bad_page.h"
+#include "bad_block.h"
 #include "spi_nand.h"
 #include "nand_disk.h"
 
 #define DT_DRV_COMPAT senselab_nanddisk
 
-LOG_MODULE_REGISTER(nand_disk, 3);
+LOG_MODULE_REGISTER(nand_disk, 2);
 
 enum sd_status {
 	SD_UNINIT,
@@ -85,56 +85,20 @@ K_MUTEX_DEFINE(disk_access_mutex);
 
 /* We will need to make this all be enabled by a KConfig. */
 
-uint8_t check_buffer[4096];
 static int check_duplicate_sector_write(const struct disk_info* disk, int sector_num){
 
-	disk_access_read(disk->name, check_buffer, sector_num, 1);
-	for (int x = 0; x < 4096; x++){
-		if (check_buffer[x] != 0xff){
-			LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-			#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-			register_bad_sector(sector_num);
-			#endif
-			duplicate_sector_writes++;
-			//print_page_hex(check_buffer, 4096, false);
-			return -1;
-			
-		}
-	}
-	return 0;
-}
-
-/* handle a duplicate write by rewritting the entire block. Configurable because it will use up a lot of erase write cycles. */
-#ifdef CONFIG_RAW_NAND_ALLOW_PAGE_REWRITE
-int duplicate_writes = 0;
-int duplicate_write_max = 50;
-char sector_buffer[NAND_PAGES_PER_ERASE_BLOCK][4096];
-int rewrite_page(struct disk_info* disk, void* buffer, int sector_num){
-	if (duplicate_writes < duplicate_write_max){
-	// Get the addresses for the starting page of the block and the page relative to the block number
-	int current_page_in_block = sector_num % NAND_PAGES_PER_ERASE_BLOCK;
-	int block_num = sector_num / NAND_PAGES_PER_ERASE_BLOCK;
-	int starting_page_number = sector_num - current_page_in_block;
-	// read in the block the page is located in to the buffer
-	disk_access_read(disk, sector_buffer, starting_page_number,
-			 NAND_PAGES_PER_ERASE_BLOCK);
-	spi_nand_block_erase(disk->dev, sector_num);
-
-	// modify the desired buffer with the updated page contents
-	memcpy(sector_buffer[current_page_in_block], buffer, 4096);
-
-	// fill the block back up with the buffer
-	for (int x = starting_page_number;
-	     x < starting_page_number + NAND_PAGES_PER_ERASE_BLOCK; x++){
-		spi_nand_page_write(disk->dev, x, sector_buffer[x], 4096);
-	}
-	duplicate_writes++;
+	if (!multi_nand_page_is_erased(disk->dev, sector_num)){
+		LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
+		#ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
+		register_bad_block(sector_num);
+		#endif
+		duplicate_sector_writes++;
+		return -1;
 	}
 	return 0;
 }
 
 
-#endif
 
 int erase_file_table() {
 	const struct device* soc_flash = FILETABLE_PARTITION_DEVICE;
@@ -233,7 +197,7 @@ static int disk_nand_access_init(struct disk_info *disk)
 
 static int disk_acess_init2(struct disk_info *disk){
 
-	// the bad sector table is loaded by bad_sector_storage_init() from spi_init()
+	// the bad block table is loaded by bad_block_storage_init() from spi_init()
 	return 0;
 }
 
@@ -283,13 +247,14 @@ int disk_nand_access_read(struct disk_info* disk, uint8_t *buf,
 	int ret = 0;
 
 	for (int x = 0; x < count; x++) {
+		int sector_num = get_sector_offset(sector+x);
 		// if we're in the file table portion of the memory, read from the nor flash (where it's stored). if it's a data read (outside of the file table), read the nand.
-		if (sector+x < file_table_sector_num)
+		if (sector_num < file_table_sector_num)
 		{
-			ret = file_table_access(&buf[x*4096], sector+x, false);
+			ret = file_table_access(&buf[x*4096], sector_num, false);
 		}
 		else {
-			ret = multi_nand_page_read(dev, sector+x, &buf[x*4096]);
+			ret = multi_nand_page_read(dev, sector_num, &buf[x*4096]);
 		}
 	}
 	
@@ -321,7 +286,6 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 
 		const struct device *dev = disk->dev;
 		int ret = 0;
-		off_t addr;
 
 		for (int x = 0; x < count; x++)
 		{
@@ -345,21 +309,20 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 					
 				}
 
-				addr = convert_page_to_address(dev, sector_num);
-				ret = spi_nand_page_write(dev, addr, &buf[x * 4096], 4096);
-				// perhaps a read back here, but we need to do something about a bad sector that is fully erased fine, or a sector that returns a bad ret value.
+				ret = multi_nand_page_write(dev, sector_num, &buf[x * 4096], 4096);
+				// perhaps a read back here, but we need to do something about a bad block that is fully erased fine, or a sector that returns a bad ret value.
 			}
 			if (VerifyWrites)
 			{
 				//ret = spi_nand_page_read(dev, addr, read_back_buffer);
-				disk_nand_access_read(disk, read_back_buffer, sector_num, 1);
+				multi_nand_page_read(disk->dev, sector_num, read_back_buffer);
 				int equal = memcmp(&buf[x * 4096], read_back_buffer, 4096);
 				if (equal != 0)
 				{
 					verify_fails++;
 					LOG_ERR("sect %d yield bad readback (%d), tot fails: %d", sector_num, equal, verify_fails);
-					#ifdef CONFIG_RAW_NAND_BAD_SECTOR_SAVING
-					register_bad_sector(sector_num);
+					#ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
+					register_bad_block(sector_num);
 					#endif
 				}
 			}
@@ -530,4 +493,3 @@ static int disk_sdmmc_init(const struct device *dev)
 			80,				
 			NULL);
 
-//DT_INST_FOREACH_STATUS_OKAY(DISK_ACCESS_SDMMC_INIT)

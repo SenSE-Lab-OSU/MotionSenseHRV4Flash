@@ -31,7 +31,7 @@
 
 
 
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
@@ -601,10 +601,11 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      battery_maintenance();
-      get_current_unix_time();
-      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
+      uint64_t current_time_value = get_current_unix_time();
+      LOG_INF("status update\n, time %llu", current_time_value);
       LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
+      battery_maintenance();
+      
     }
 
     if (!connectedFlag){

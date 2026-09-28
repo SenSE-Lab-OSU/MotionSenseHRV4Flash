@@ -602,7 +602,7 @@ int main(void)
 
     if (global_update % 5 == 0){
       uint64_t current_time_value = get_current_unix_time();
-      LOG_INF("status update\n, time %llu", current_time_value);
+      LOG_INF("status update, time %llu", current_time_value);
       LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
       battery_maintenance();
       

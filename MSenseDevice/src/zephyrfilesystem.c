@@ -420,6 +420,16 @@ void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor
 		//FIL* fp = &MSenseFile->self_file.filep;
 		//fp->obj.objsize = fp->fptr;
 		//fp->flag |= 0x40; // = FA_MODIFIED
+		/* Trim the file back to what was actually written. f_expand() set the size
+		 * to the whole reserved area up front, so without this the tail reads back
+		 * as 0xff. It cuts at the current file pointer and only ever releases whole
+		 * clusters past it, so the partly filled last sector stays with this file
+		 * and is never reprogrammed.
+		 */
+		FRESULT trunc_res = f_truncate((FIL *)MSenseFile->self_file.filep);
+		if (trunc_res != FR_OK){
+			LOG_WRN("failed to truncate file: %d", trunc_res);
+		}
 		int close_ret = fs_close(&MSenseFile->self_file);
 		LOG_INF("closing file\n");
 		if (close_ret < 0){

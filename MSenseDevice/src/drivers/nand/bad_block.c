@@ -63,7 +63,7 @@ uint32_t bad_blocks[bad_block_detect_limit] = {0};
  * the whole table back to NVS on each hit would rewrite the same value hundreds
  * of times, so the scan defers the write and saves once when it finishes.
  */
-static bool static_scan_in_progress;
+static bool static_scan_in_progress = false;
 
 
 #ifdef CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_NOR
@@ -433,7 +433,7 @@ int mark_bad_block(uint32_t sector_num){
 int register_bad_block(uint32_t sector_num){
 	// after the first boot scan the table is treated as the fixed factory bad
 	// block list, unless runtime registration is explicitly enabled
-	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_BLOCK_SAVING_RUNTIME)){
+	if (static_scan_in_progress || IS_ENABLED(CONFIG_BAD_BLOCK_SAVING_RUNTIME)){
 		LOG_INF("registering bad block sect %u", sector_num);
 		return mark_bad_block(sector_num);
 	}

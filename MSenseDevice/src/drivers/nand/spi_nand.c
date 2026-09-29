@@ -595,6 +595,7 @@ int spi_unlock_memory(const struct device* dev){
 
 // static bad block detection which attempts to figure out whether there were bad blocks set by the manufacturer via a bad block marking.
 int detect_manufacturer_bad_blocks(const struct device* dev){
+	static_scan_in_progress = true;
 	const struct spi_flash_config *cfg = dev->config;
 	int bad_blocks = 0;
 	// bad-block mark is the first spare-area byte (byte 4096) of the first page of each block
@@ -689,6 +690,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	{
 		LOG_WRN("bad block count > 0");
 	}
+	static_scan_in_progress = false;
 	return bad_blocks;
 }
 
@@ -702,6 +704,7 @@ static uint8_t dyn_bb_pattern[4096];
 static uint8_t dyn_bb_readback[4096];
 
 int dynamic_detect_bad_blocks(const struct device* dev){
+	static_scan_in_progress = true;
 	int bad_blocks = 0;
 	int total_blocks = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 
@@ -753,6 +756,7 @@ int dynamic_detect_bad_blocks(const struct device* dev){
 	set_die(dev, 0);
 	set_flash(dev, 0);
 	LOG_INF("dynamic bad block scan done, %d bad blocks", bad_blocks);
+	static_scan_in_progress = false;
 	return bad_blocks;
 }
 

@@ -617,6 +617,7 @@ uint16_t offset, uint8_t flags){
     // 200 rescans for the factory bad block marks, 201 runs the destructive scan.
     // Both rebuild the bad block table rather than clearing user data.
     if (val == 200 || val == 201){
+      
       run_bad_block_scan(val == 201);
       NVIC_SystemReset();
     }

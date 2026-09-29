@@ -14,6 +14,8 @@
  */
 extern bool bad_block_scan_done;
 
+extern bool static_scan_in_progress;
+
 /* Number of entries currently live in the bad block table. */
 extern int total_bad_blocks;
 

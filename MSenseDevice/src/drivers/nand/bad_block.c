@@ -63,7 +63,7 @@ uint32_t bad_blocks[bad_block_detect_limit] = {0};
  * the whole table back to NVS on each hit would rewrite the same value hundreds
  * of times, so the scan defers the write and saves once when it finishes.
  */
-static bool static_scan_in_progress = false;
+bool static_scan_in_progress = false;
 
 
 #ifdef CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_NOR

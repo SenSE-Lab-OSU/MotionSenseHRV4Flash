@@ -10,6 +10,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include "drivers/nand/nand_disk.h"
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
@@ -605,6 +606,7 @@ int main(void)
       LOG_INF("status update, time %llu", current_time_value);
       LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
       battery_maintenance();
+      print_flash_status_info();
       
     }
 

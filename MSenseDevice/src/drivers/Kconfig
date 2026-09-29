@@ -67,7 +67,7 @@ config BAD_BLOCK_SAVING_RUNTIME
     prompt "Allows bad blocks to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
     default n
 
-config RAW_NAND_BAD_BLOCK_SIMULATION
+menuconfig RAW_NAND_BAD_BLOCK_SIMULATION
     bool "Simulate bad blocks at the pages registered with add_bad_page()"
     default n
     help

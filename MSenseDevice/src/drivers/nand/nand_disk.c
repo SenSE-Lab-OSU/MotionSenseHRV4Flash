@@ -346,7 +346,7 @@ static int disk_nand_access_write(struct disk_info *disk, const uint8_t *buf,
 }
 
 void print_flash_status_info(){
-	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d, tot file table crc fails %d, tot nor fails %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err, file_table_crc_fails, nor_fails);
+	LOG_INF("tot duplicates %d, tot verify fails %d, tot ECC corrections %d, tot ECC errors %d, \n tot file table crc fails %d, tot nor fails %d", duplicate_sector_writes, verify_fails, ECC_corrections, ECC_err, file_table_crc_fails, nor_fails);
 }
 
 

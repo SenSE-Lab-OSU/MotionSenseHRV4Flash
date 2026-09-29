@@ -434,6 +434,7 @@ int register_bad_block(uint32_t sector_num){
 	// after the first boot scan the table is treated as the fixed factory bad
 	// block list, unless runtime registration is explicitly enabled
 	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_BLOCK_SAVING_RUNTIME)){
+		LOG_INF("registering bad block sect %u", sector_num);
 		return mark_bad_block(sector_num);
 	}
 	return total_bad_blocks;

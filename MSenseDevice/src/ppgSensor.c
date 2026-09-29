@@ -173,8 +173,8 @@ void read_ppg_chip_id(){
     tx_buffer[2] = 0x00;
     spiReadWritePPG(tx_buffer, txLen, rx_buffer, rxLen);
     LOG_INF("Chip ID from ppg sensor=%x,%x,%x\n", rx_buffer[0], rx_buffer[1], rx_buffer[2]);
-    if (rx_buffer[2] != 25){
-      LOG_ERR("invalid ppg sensor id");
+    if (rx_buffer[2] != 0x25){
+      LOG_ERR("invalid ppg sensor id: %x", rx_buffer[2]);
     }
 }
 

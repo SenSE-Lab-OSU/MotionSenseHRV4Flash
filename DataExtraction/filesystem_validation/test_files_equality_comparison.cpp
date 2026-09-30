@@ -46,14 +46,14 @@ int main(int argc, char* argv[]) {
     }
     else {
         std::cout << "No directory provided. Using default path. C:/samplecollection. \n";
-        directory = "C:/Users/Devan/Downloads/test_files/test"; // Change this to your folder path
+        directory = "C:/Users/Devan/Downloads/ecgteset"; // Change this to your folder path
     }
     if (!fs::exists(directory)) {
         std::cout << "Directory does not exist.\n";
         return 1;
     }
     std::vector<std::string> files = get_files(directory);
-
+	std::sort(files.begin(), files.end());
     if (files.empty()) {
         std::cout << "No files found in directory.\n";
         return 1;
@@ -62,13 +62,12 @@ int main(int argc, char* argv[]) {
     for (size_t i = 1; i < files.size(); ++i) {
         if (!compare_files(files[0], files[i])) {
             std::cout << "Files are not identical.\n";
-            std::cout << files[0];
-            std::cout << files[1] << "\n";
+            std::cout << files[i] << "\n";
 
             errors += 1;
         }
         else {
-            std::cout << "Files are identical.\n";
+            printf("files are identical: %s\n", files[i].c_str());
         }
 
     }

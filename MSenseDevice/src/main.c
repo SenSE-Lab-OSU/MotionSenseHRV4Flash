@@ -10,6 +10,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include "drivers/nand/nand_disk.h"
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
@@ -31,7 +32,7 @@
 
 
 
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
@@ -601,10 +602,12 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      battery_maintenance();
-      get_current_unix_time();
-      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
+      uint64_t current_time_value = get_current_unix_time();
+      LOG_INF("status update, time %llu", current_time_value);
       LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
+      battery_maintenance();
+      print_flash_status_info();
+      
     }
 
     if (!connectedFlag){

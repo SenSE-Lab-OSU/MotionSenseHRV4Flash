@@ -54,6 +54,7 @@ BUILD_ASSERT(IS_ENABLED(CONFIG_USB_MASS_STORAGE),
 
 /* 1000 msec = 1 sec */
 #define SLEEP_TIME_MS 6000
+#define BATTERY_MAINTENANCE_INTERVAL_MS 60000
 #define BATTERY_LOG_INTERVAL_MAINTENANCE_CYCLES 4U
 
 /* The devicetree node identifier for the "led0" alias. */
@@ -112,6 +113,7 @@ static atomic_t ecg_collection_transition_requested = ATOMIC_INIT(0);
 static atomic_t ecg_storage_action_requested = ATOMIC_INIT(ECG_STORAGE_ACTION_NONE);
 static atomic_t ship_mode = ATOMIC_INIT(SHIP_MODE_WAITING_FOR_BUTTON);
 static K_SEM_DEFINE(ship_mode_exit_sem, 0, 1);
+static K_SEM_DEFINE(battery_maintenance_start_sem, 0, 1);
 
 static void button0_work_handler(struct k_work *work);
 static void button0_pressed_handler(const struct device *port,
@@ -490,7 +492,7 @@ K_THREAD_STACK_DEFINE(my_stack_area, WORKQUEUE_STACK_SIZE);
 
 
 
-void battery_maintenance()
+static void battery_maintenance(void)
 {
   static uint8_t maintenance_cycles;
   const struct device *const dev = DEVICE_DT_GET(BATTERY_GAUGE_NODE);
@@ -532,6 +534,28 @@ void battery_maintenance()
 }
 
 
+
+static void battery_maintenance_thread(void *arg1, void *arg2, void *arg3)
+{
+  ARG_UNUSED(arg1);
+  ARG_UNUSED(arg2);
+  ARG_UNUSED(arg3);
+
+  k_sem_take(&battery_maintenance_start_sem, K_FOREVER);
+  int64_t next_check_ms = k_uptime_get();
+
+  while (true) {
+    battery_maintenance();
+    /* Keep the original deadline phase; skip missed periods rather than burst. */
+    do {
+      next_check_ms += BATTERY_MAINTENANCE_INTERVAL_MS;
+    } while (next_check_ms <= k_uptime_get());
+    k_sleep(K_TIMEOUT_ABS_MS(next_check_ms));
+  }
+}
+
+K_THREAD_DEFINE(battery_maintenance_thread_id, 2048,
+                battery_maintenance_thread, NULL, NULL, NULL, 7, 0, 0);
 
 void blink_led(gpio_pin_t pin){
   if (atomic_get(&ship_mode) != SHIP_MODE_ACTIVE) {
@@ -1689,12 +1713,13 @@ int main(void)
 
   //get_storage_percent_full();
   
-  // we set global update at 9 so that when we are entering the while loop, we will check the storage & battery.
+  /* Preserve the LED phase; battery maintenance has its own absolute schedule. */
   int global_update = 9;
   int update_time = SLEEP_TIME_MS;
   
   collecting_data = false;
   host_wants_collection = false;
+  k_sem_give(&battery_maintenance_start_sem);
 
   while (1)
   {
@@ -1704,11 +1729,6 @@ int main(void)
     global_update++;
     if (global_update >= 100){
       global_update = 0;
-    }
-
-    if (global_update % 5 == 0){
-      battery_maintenance();
-      //get_current_unix_time();
     }
 
     if (!connectedFlag){

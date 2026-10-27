@@ -10,6 +10,7 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/logging/log.h>
+#include <hal/nrf_usbreg.h>
 #include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h>
 #include "batterymonitordt.h"
 #include "BLEService.h"
@@ -30,6 +31,20 @@ enum battery_power_flow {
 
 static bool gauge_reset_warning_reported;
 static enum battery_power_flow last_power_flow = BATTERY_POWER_FLOW_UNKNOWN;
+static bool vbus_state_known;
+static bool last_vbus_present;
+
+static void log_vbus_status(void)
+{
+	bool present = (nrf_usbreg_status_get(NRF_USBREGULATOR) &
+		       NRF_USBREG_STATUS_VBUSDETECT_MASK) != 0U;
+
+	if (!vbus_state_known || present != last_vbus_present) {
+		LOG_INF("VBUS power input: %s", present ? "present" : "absent");
+		last_vbus_present = present;
+		vbus_state_known = true;
+	}
+}
 
 static const char *battery_power_flow_name(enum battery_power_flow flow)
 {
@@ -111,6 +126,9 @@ void dt_update_battery(const struct device *dev, bool log_summary)
 	struct sensor_value remaining_charge_capacity;
 	int status;
 
+	/* Poll independently of fuel-gauge success, including when I2C fails. */
+	log_vbus_status();
+
 	/*
 	 * sensor_sample_fetch_chan() retries bq274xx_gauge_configure() when the
 	 * driver's previous configuration attempt failed. Do this before testing
@@ -173,7 +191,9 @@ void dt_update_battery(const struct device *dev, bool log_summary)
 		current_power_flow = BATTERY_POWER_FLOW_IDLE;
 	}
 
-	if (current_power_flow != last_power_flow) {
+	/* Ignore idle samples and retain the last charging/discharging state. */
+	if (current_power_flow != BATTERY_POWER_FLOW_IDLE &&
+	    current_power_flow != last_power_flow) {
 		LOG_INF("Battery power flow: %s",
 			battery_power_flow_name(current_power_flow));
 		last_power_flow = current_power_flow;

@@ -943,7 +943,7 @@ int filesystem_logger_append(const void *data, size_t size)
 		return 0;
 	}
 	if (current_buffer->current_size != log_file.write_size) {
-		LOG_WRN("Logger buffer is %zu bytes over the target",
+		LOG_DBG("Logger buffer is %zu bytes over the target",
 			current_buffer->current_size - log_file.write_size);
 	}
 	if (panic_single_thread) {

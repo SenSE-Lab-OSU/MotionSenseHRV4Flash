@@ -1,6 +1,12 @@
-/* Reuse the ESB application's USB, LEDs, and always-on 5 V supply. */
+/* Reuse the ESB application's USB, LEDs, and 5 V supply wiring. */
 #include "../bridge/app_core/app.overlay"
 #include <common/nordic/nrf5340_shared_sram_partition.dtsi>
+
+/* Central powers the LED rail only during notification pulses. */
+&led_supply {
+	/delete-property/ regulator-boot-on;
+	/delete-property/ regulator-always-on;
+};
 
 /* Restore the SoC IPC endpoint removed by the base ESB board. */
 / {

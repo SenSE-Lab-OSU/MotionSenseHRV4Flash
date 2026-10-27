@@ -8,12 +8,17 @@ switching from the ESB application.
 
 Uses the same ``boards/senselab/bridge`` board as the ESB app. ``app.overlay``
 includes ``../bridge/app_core/app.overlay`` for USB CDC ACM, LEDs, and the
-always-on 5 V supply. Application-specific IPC overlays reserve the last
-64 KiB of CPUAPP SRAM for both cores; the base board and ESB app are unchanged.
+5 V supply wiring, overriding its boot-on/always-on flags so the rail starts
+off and is enabled only while an LED is requested. Application-specific IPC
+overlays reserve the last 64 KiB of CPUAPP SRAM for both cores; the base board
+and ESB app are unchanged.
 
 The shared board also provides UARTE0 TX on EEG_TRIG (P1.00), 9600 baud,
 8N1, without RX or hardware flow control, accessible as ``DT_ALIAS(eeg_uart)``.
-This application does not transmit on it yet; logging remains on USB CDC ACM.
+Each valid notification sends its decoded RTC value as unsigned decimal ASCII
+digits followed by one NUL byte (``0x00``), with no CR or LF. For example,
+512 ticks sends ``35 31 32 00`` in hexadecimal. Values are not padded.
+Logging remains on USB CDC ACM.
 
 Behavior
 --------
@@ -27,7 +32,9 @@ Behavior
   afresh on each connection. No collection-control or sensor-stream writes.
 * Each valid 8-byte update pulses one LED for 200 ms: violet, pink, cyan,
   repeating. The sequence starts with violet at Bridge boot and continues
-  across reconnections. LEDs are off between packets.
+  across reconnections. The 5 V rail is enabled just before each pulse and
+  disabled after the LED is turned off, including LED error cleanup.
+  LEDs and their rail are off between packets. Buttons remain disabled.
 * USB CDC ACM logs scan, connection, subscription, packet count, RTC ticks,
   LED color, and errors. Open the ``SenseLab Bridge Central`` serial port
   with DTR asserted (e.g. a normal serial terminal, 115200 baud). USB baud

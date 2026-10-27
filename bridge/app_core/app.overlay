@@ -1,0 +1,32 @@
+/ {
+	chosen {
+		zephyr,console = &cdc_acm_uart0;
+	};
+};
+
+&leds { status = "okay"; };
+
+&led_supply {
+	status = "okay";
+	/* This SDK's fixed driver lacks get_voltage; bounds make init fail.
+	 * The hardware fixes VLED at 5 V; software only controls its enable.
+	 */
+	/delete-property/ regulator-min-microvolt;
+	/delete-property/ regulator-max-microvolt;
+	regulator-boot-on;
+	regulator-always-on;
+};
+
+/* LED and supply drivers own P0.04/.05/.06/.14; keep MODE low. */
+&bridge_outputs_low {
+	gpios = <15 GPIO_ACTIVE_HIGH>;
+};
+
+zephyr_udc0: &usbd {
+	status = "okay";
+	cdc_acm_uart0: cdc-acm-uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&usbreg { status = "okay"; };

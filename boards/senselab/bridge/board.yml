@@ -1,0 +1,6 @@
+board:
+  name: bridge
+  full_name: SenseLab Bridge
+  vendor: others
+  socs:
+    - name: nrf5340

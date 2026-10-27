@@ -1,0 +1,8 @@
+description: Bridge ADXL343 I2C wiring; driver compatibility remains to be qualified
+compatible: "adi,adxl343"
+include: [sensor-device.yaml, i2c-device.yaml]
+properties:
+  int1-gpios:
+    type: phandle-array
+  int2-gpios:
+    type: phandle-array

@@ -1,0 +1,15 @@
+CONFIG_ARM_MPU=y
+CONFIG_HW_STACK_PROTECTION=y
+CONFIG_ARM_TRUSTZONE_M=y
+CONFIG_GPIO=y
+CONFIG_GPIO_HOGS=y
+
+# Y1 is the fitted 32.768 kHz, 9 pF crystal; U3 is DNP.
+CONFIG_SOC_ENABLE_LFXO=y
+CONFIG_CLOCK_CONTROL_NRF_K32SRC_XTAL=y
+CONFIG_SOC_LFXO_BYPASS=n
+CONFIG_SOC_LFXO_CAP_INT_9PF=y
+
+# Do not copy the bare-SoC ECG/PPG HFXO capacitor setting into NORA.
+# Confirm the module's HFXO requirements before hardware qualification.
+CONFIG_SOC_HFXO_CAP_DEFAULT=y

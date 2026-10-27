@@ -1,0 +1,5 @@
+list(APPEND BOARD_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+list(APPEND DTS_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+
+find_package(Sysbuild REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(sysbuild LANGUAGES)

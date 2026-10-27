@@ -1,0 +1,10 @@
+description: Bridge board control signals (no automatic initialization)
+compatible: "senselab,bridge-control"
+include: base.yaml
+properties:
+  power-mode-gpios:
+    type: phandle-array
+    description: TPS82693 MODE input, not a power enable
+  eeg-trigger-gpios:
+    type: phandle-array
+    description: Active-low trigger, physical high releases the EEG output

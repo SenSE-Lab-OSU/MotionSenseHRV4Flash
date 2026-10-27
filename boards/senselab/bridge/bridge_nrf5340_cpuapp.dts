@@ -1,0 +1,177 @@
+/dts-v1/;
+
+#include <nordic/nrf5340_cpuapp_qkaa.dtsi>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include "bridge_nrf5340-pinctrl.dtsi"
+
+/ {
+	model = "SenseLab Bridge nRF5340 application core";
+	compatible = "senselab,bridge-nrf5340-cpuapp";
+
+	chosen {
+		zephyr,flash = &flash0;
+		zephyr,sram = &sram0;
+	};
+
+	aliases {
+		led0 = &led_pink;
+		led1 = &led_violet;
+		led2 = &led_cyan;
+		sw0 = &button_a;
+		sw1 = &button_b;
+		accel = &adxl343;
+		battery-gauge = &bq27441;
+		storage-sd = &nanosd;
+		storage-fram = &fram;
+		fpga = &fpga;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		status = "disabled";
+		led_pink: led-pink { gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>; };
+		led_violet: led-violet { gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>; };
+		led_cyan: led-cyan { gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>; };
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		status = "disabled";
+		button_a: button-a { gpios = <&gpio1 11 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; };
+		button_b: button-b { gpios = <&gpio1 12 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; };
+	};
+
+	led_supply: led-supply {
+		compatible = "regulator-fixed";
+		regulator-name = "VLED";
+		enable-gpios = <&gpio0 14 GPIO_ACTIVE_HIGH>;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		status = "disabled";
+	};
+
+	board_control: board-control {
+		compatible = "senselab,bridge-control";
+		power-mode-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+		eeg-trigger-gpios = <&gpio1 0 GPIO_ACTIVE_LOW>;
+		status = "disabled";
+	};
+};
+
+/* Required by gpio_nrfx for both enabled GPIO ports, including output-only hogs. */
+&gpiote { status = "okay"; };
+
+&gpio0 {
+	status = "okay";
+	/* Physical levels, independent of the disabled consumer's polarity.
+	 * Remove corresponding hogs when a runtime driver takes ownership.
+	 */
+	bridge_outputs_low: outputs-low {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>, <5 GPIO_ACTIVE_HIGH>,
+			<6 GPIO_ACTIVE_HIGH>, <14 GPIO_ACTIVE_HIGH>, <15 GPIO_ACTIVE_HIGH>;
+		output-low;
+	};
+	bridge_cs_high: cs-high {
+		gpio-hog;
+		gpios = <12 GPIO_ACTIVE_HIGH>, <13 GPIO_ACTIVE_HIGH>, <22 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
+
+&gpio1 {
+	status = "okay";
+	bridge_eeg_released: eeg-released {
+		gpio-hog;
+		gpios = <0 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+};
+
+/* VDD and VDDH are externally supplied with 2.85 V. */
+&vregh { status = "disabled"; };
+
+&i2c1 {
+	compatible = "nordic,nrf-twim";
+	status = "disabled";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&sensors_i2c_default>;
+	pinctrl-1 = <&sensors_i2c_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	adxl343: accelerometer@53 {
+		compatible = "adi,adxl343";
+		reg = <0x53>;
+		int1-gpios = <&gpio0 17 GPIO_ACTIVE_HIGH>;
+		int2-gpios = <&gpio0 16 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+
+	bq27441: fuel-gauge@55 {
+		compatible = "ti,bq274xx";
+		reg = <0x55>;
+		int-gpios = <&gpio1 15 GPIO_ACTIVE_LOW>;
+		/* Supply Bridge battery parameters before enabling this driver. */
+		status = "disabled";
+	};
+};
+
+&spi4 {
+	compatible = "nordic,nrf-spim";
+	status = "disabled";
+	cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>, <&gpio0 13 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&storage_spi_default>;
+	pinctrl-1 = <&storage_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	sdhc: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;
+		spi-max-frequency = <400000>;
+		status = "disabled";
+		nanosd: mmc {
+			compatible = "zephyr,sdmmc-disk";
+			status = "disabled";
+		};
+	};
+
+	fram: fram@1 {
+		compatible = "infineon,fm25cl64b";
+		reg = <1>;
+		spi-max-frequency = <1000000>;
+		status = "disabled";
+	};
+};
+
+&spi3 {
+	compatible = "nordic,nrf-spim";
+	status = "disabled";
+	cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;
+	pinctrl-0 = <&fpga_spi_default>;
+	pinctrl-1 = <&fpga_spi_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	fpga: fpga@0 {
+		compatible = "senselab,bridge-fpga";
+		reg = <0>;
+		/* Provisional limit; SPI framing/mode awaits the FPGA protocol. */
+		spi-max-frequency = <1000000>;
+		irq-gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
+		program-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+		done-gpios = <&gpio1 10 GPIO_ACTIVE_HIGH>;
+		io-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>, <&gpio1 14 GPIO_ACTIVE_HIGH>;
+		tck-gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
+		tms-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+		tdi-gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;
+		tdo-gpios = <&gpio1 7 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+};
+
+&usbd { status = "disabled"; };
+&usbreg { status = "disabled"; };
+/* The SoC's default OpenAMP endpoint requires an as-yet unallocated SRAM window. */
+/delete-node/ &ipc0;
+&uart0 { status = "disabled"; };
+&qspi { status = "disabled"; };

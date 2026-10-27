@@ -1,0 +1,18 @@
+/dts-v1/;
+
+#include <nordic/nrf5340_cpunet_qkaa.dtsi>
+
+/ {
+	model = "SenseLab Bridge nRF5340 network core";
+	compatible = "senselab,bridge-nrf5340-cpunet";
+
+	chosen {
+		zephyr,flash = &flash1;
+		zephyr,sram = &sram1;
+	};
+};
+
+/* ESB uses the SoC radio directly. Board GPIOs belong to CPUAPP.
+ * No Bluetooth HCI, shared SRAM or bootloader layout is imposed yet.
+ */
+/delete-node/ &ipc0;

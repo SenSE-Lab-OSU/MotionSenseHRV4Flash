@@ -1,0 +1,45 @@
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+
+&pinctrl {
+	storage_spi_default: storage_spi_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+				<NRF_PSEL(SPIM_MISO, 0, 10)>;
+		};
+	};
+	storage_spi_sleep: storage_spi_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+				<NRF_PSEL(SPIM_MISO, 0, 10)>;
+			low-power-enable;
+		};
+	};
+	fpga_spi_default: fpga_spi_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 19)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 20)>,
+				<NRF_PSEL(SPIM_MISO, 0, 21)>;
+		};
+	};
+	fpga_spi_sleep: fpga_spi_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 0, 19)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 20)>,
+				<NRF_PSEL(SPIM_MISO, 0, 21)>;
+			low-power-enable;
+		};
+	};
+	sensors_i2c_default: sensors_i2c_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 1, 2)>, <NRF_PSEL(TWIM_SDA, 1, 3)>;
+		};
+	};
+	sensors_i2c_sleep: sensors_i2c_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SCL, 1, 2)>, <NRF_PSEL(TWIM_SDA, 1, 3)>;
+			low-power-enable;
+		};
+	};
+};

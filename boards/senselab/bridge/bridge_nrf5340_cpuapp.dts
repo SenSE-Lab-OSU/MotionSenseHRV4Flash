@@ -27,7 +27,7 @@
 		fpga = &fpga;
 	};
 
-	leds {
+	leds: leds {
 		compatible = "gpio-leds";
 		status = "disabled";
 		led_pink: led-pink { gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>; };

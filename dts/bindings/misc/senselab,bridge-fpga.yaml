@@ -1,0 +1,21 @@
+description: Bridge MachXO2 SPI endpoint and GPIO JTAG wiring; no driver yet
+compatible: "senselab,bridge-fpga"
+include: spi-device.yaml
+properties:
+  irq-gpios:
+    type: phandle-array
+  program-gpios:
+    type: phandle-array
+  done-gpios:
+    type: phandle-array
+  io-gpios:
+    type: phandle-array
+    description: Shared FPGA IO0 and IO1, keep as inputs until ownership is agreed
+  tck-gpios:
+    type: phandle-array
+  tms-gpios:
+    type: phandle-array
+  tdi-gpios:
+    type: phandle-array
+  tdo-gpios:
+    type: phandle-array

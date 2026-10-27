@@ -1,0 +1,3 @@
+description: FM25CL64B 8 KiB SPI FRAM wiring; no driver selected yet
+compatible: "infineon,fm25cl64b"
+include: spi-device.yaml

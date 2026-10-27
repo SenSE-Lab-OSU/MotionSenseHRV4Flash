@@ -1,0 +1,9 @@
+Name: MSense4ECG-0ATEJ
+Device ID: 7694F196A40791B5
+Version: 5.0.2 NAND
+Build Date (UTC): 2026-10-15
+Git Commit: a403c7bb74553eedebff043adad027a17f3074f4
+Git Tree: dirty
+accel format: ICM-20948 accel binary format v2
+ecg format: ECB2 4096-byte MAX30001 ECG blocks with CRC-32
+For a more complete description of how this device works, please visit https://github.com/SenSE-Lab-OSU/MotionSenseHRV4Flash for more info.

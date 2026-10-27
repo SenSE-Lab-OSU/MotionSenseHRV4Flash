@@ -1,0 +1,17 @@
+#include <common/nordic/nrf5340_shared_sram_partition.dtsi>
+
+/ {
+	chosen {
+		zephyr,bt-hci-ipc = &ipc0;
+	};
+	ipc {
+		ipc0: ipc0 {
+			compatible = "zephyr,ipc-openamp-static-vrings";
+			memory-region = <&sram0_shared>;
+			mboxes = <&mbox 0>, <&mbox 1>;
+			mbox-names = "rx", "tx";
+			role = "remote";
+			status = "okay";
+		};
+	};
+};

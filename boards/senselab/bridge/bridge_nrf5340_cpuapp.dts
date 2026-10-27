@@ -15,6 +15,7 @@
 	};
 
 	aliases {
+		eeg-uart = &uart0;
 		led0 = &led_pink;
 		led1 = &led_violet;
 		led2 = &led_cyan;
@@ -54,7 +55,6 @@
 	board_control: board-control {
 		compatible = "senselab,bridge-control";
 		power-mode-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
-		eeg-trigger-gpios = <&gpio1 0 GPIO_ACTIVE_LOW>;
 		status = "disabled";
 	};
 };
@@ -82,11 +82,6 @@
 
 &gpio1 {
 	status = "okay";
-	bridge_eeg_released: eeg-released {
-		gpio-hog;
-		gpios = <0 GPIO_ACTIVE_HIGH>;
-		output-high;
-	};
 };
 
 /* VDD and VDDH are externally supplied with 2.85 V. */
@@ -173,5 +168,16 @@
 &usbreg { status = "disabled"; };
 /* The SoC's default OpenAMP endpoint requires an as-yet unallocated SRAM window. */
 /delete-node/ &ipc0;
-&uart0 { status = "disabled"; };
+/* EEG_TRIG: TX-only UART. Idle high releases the external trigger circuit. */
+&uart0 {
+	status = "okay";
+	current-speed = <9600>;
+	parity = "none";
+	data-bits = <8>;
+	stop-bits = "1";
+	disable-rx;
+	pinctrl-0 = <&eeg_uart_default>;
+	pinctrl-1 = <&eeg_uart_sleep>;
+	pinctrl-names = "default", "sleep";
+};
 &qspi { status = "disabled"; };

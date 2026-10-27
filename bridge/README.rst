@@ -11,7 +11,7 @@ assigns GPIOs to the network core and powers off application RAM.
 Board and binding roots are set for both sysbuild and individual images.
 
 The receiver keeps the sample's radio settings and demonstration ACK payload.
-It logs through RTT; there is no DK LED library or UART pin assignment.
+It logs through RTT; there is no DK LED library.
 The radio protocol still needs to be matched to the transmitting devices.
 There is no inter-core packet transport yet.
 
@@ -24,13 +24,17 @@ The overlay omits voltage bounds for the fixed regulator because this SDK's
 driver lacks the voltage-read operation required by common initialization.
 The rail remains physically fixed at 5 V; firmware controls only its enable.
 
+The shared board routes UARTE0 TX to EEG_TRIG (P1.00), at 9600 baud, 8N1,
+with RX and hardware flow control disabled. Use ``DT_ALIAS(eeg_uart)`` to
+access it. UART idle high releases the trigger circuit; no application data
+is transmitted yet. USB CDC remains the console.
+
 Other board peripherals remain disabled. Application-core GPIO hogs
-hold regulator MODE low, chip selects high, and EEG_TRIG high/released.
+hold regulator MODE low and chip selects high.
 FPGA shared IO/JTAG/control pins otherwise retain
 their reset input state and existing external pulls. GPIO hogs apply during
 driver initialization, not during reset; hardware pulls still govern reset.
 Remove the corresponding hog entries when runtime drivers take ownership.
-Keep EEG released during that transition.
 
 Before enabling a peripheral, enable its bus and child nodes, configure its
 driver, and validate electrical/protocol assumptions. In particular:

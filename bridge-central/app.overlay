@@ -1,0 +1,13 @@
+/* Reuse the ESB application's USB, LEDs, and always-on 5 V supply. */
+#include "../bridge/app_core/app.overlay"
+#include <common/nordic/nrf5340_shared_sram_partition.dtsi>
+
+/* Restore the SoC IPC endpoint removed by the base ESB board. */
+/ {
+	ipc {
+#include <nordic/nrf5340_cpuapp_ipc.dtsi>
+	};
+	chosen {
+		zephyr,bt-hci = &bt_hci_ipc0;
+	};
+};

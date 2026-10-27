@@ -7,6 +7,8 @@
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/led.h>
+#include <zephyr/drivers/regulator.h>
+#include <zephyr/drivers/uart.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -14,6 +16,7 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/printk.h>
 
 LOG_MODULE_REGISTER(bridge_central, LOG_LEVEL_INF);
 
@@ -28,6 +31,8 @@ static struct bt_uuid_128 update_uuid = BT_UUID_INIT_128(
 	BT_UUID_128_ENCODE(0xda39c951, 0x1d81, 0x48e2, 0x9c68, 0xd0ae4bbd351f));
 
 static const struct device *const leds = DEVICE_DT_GET(DT_NODELABEL(leds));
+static const struct device *const led_supply = DEVICE_DT_GET(DT_NODELABEL(led_supply));
+static const struct device *const eeg_uart = DEVICE_DT_GET(DT_ALIAS(eeg_uart));
 static const uint32_t led_order[] = {
 	DT_NODE_CHILD_IDX(DT_ALIAS(led1)), /* Violet */
 	DT_NODE_CHILD_IDX(DT_ALIAS(led0)), /* Pink */
@@ -213,6 +218,18 @@ static int subscribe_updates(struct bt_conn *conn)
 	return subscribe_error ? -EIO : 0;
 }
 
+static void send_rtc(uint32_t ticks)
+{
+	/* Ten decimal digits followed by one NUL byte. */
+	char text[11];
+	int length = snprintk(text, sizeof(text), "%u", (unsigned int)ticks);
+
+	for (int i = 0; i < length; i++) {
+		uart_poll_out(eeg_uart, text[i]);
+	}
+	uart_poll_out(eeg_uart, '\0');
+}
+
 int main(void)
 {
 	unsigned int next_led = 0;
@@ -224,9 +241,12 @@ int main(void)
 		LOG_ERR("USB initialization failed: %d", err);
 		return 0;
 	}
-	if (!device_is_ready(leds) ||
-	    !device_is_ready(DEVICE_DT_GET(DT_NODELABEL(led_supply)))) {
+	if (!device_is_ready(leds) || !device_is_ready(led_supply)) {
 		LOG_ERR("LEDs or 5 V supply not ready");
+		return 0;
+	}
+	if (!device_is_ready(eeg_uart)) {
+		LOG_ERR("EEG UART not ready");
 		return 0;
 	}
 	err = bt_enable(NULL);
@@ -234,7 +254,7 @@ int main(void)
 		LOG_ERR("Bluetooth initialization failed: %d", err);
 		return 0;
 	}
-	LOG_INF("Bridge central ready; target %s; 5 V enabled", TARGET_NAME);
+	LOG_INF("Bridge central ready; target %s; 5 V enabled only for LED pulses", TARGET_NAME);
 
 	for (;;) {
 		struct bt_conn *conn = NULL;
@@ -289,13 +309,23 @@ int main(void)
 					}
 					LOG_INF("Packet %u: RTC=%u ticks (512 Hz), LED=%s",
 						++packet_count, ticks, led_names[next_led]);
+					send_rtc(ticks);
+					err = regulator_enable(led_supply);
+					if (err) {
+						LOG_ERR("LED supply enable failed: %d", err);
+						break;
+					}
 					err = led_on(leds, led_order[next_led]);
-					k_sleep(K_MSEC(200));
+					if (!err) {
+						k_sleep(K_MSEC(200));
+					}
 					int off_err = led_off(leds, led_order[next_led]);
+					int supply_err = regulator_disable(led_supply);
 
-					if (err || off_err) {
-						LOG_ERR("LED pulse failed: %d/%d", err, off_err);
-						err = err ? err : off_err;
+					if (err || off_err || supply_err) {
+						LOG_ERR("LED pulse failed: on=%d off=%d supply=%d",
+							err, off_err, supply_err);
+						err = err ? err : (off_err ? off_err : supply_err);
 					}
 					next_led = (next_led + 1) % ARRAY_SIZE(led_order);
 				}

@@ -1,237 +1,82 @@
-/*
- * Copyright (c) 2019 Intel Corporation
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
-/**
- * @file
- * @brief Sample echo app for CDC ACM class
- *
- * Sample app for USB CDC ACM class driver. The received data is echoed back
- * to the serial port.
- */
-
-#include <sample_usbd.h>
-
-#include <stdio.h>
-#include <string.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/ring_buffer.h>
-
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/shell/shell.h>
 #include <zephyr/usb/usb_device.h>
-#include <zephyr/usb/usbd.h>
-#include <zephyr/logging/log.h>
-LOG_MODULE_REGISTER(cdc_acm_echo, LOG_LEVEL_INF);
+#include <string.h>
+#include "fpga_gpio.h"
+#include "jtag.h"
+#include "vme_image.h"
 
-const struct device *const uart_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
-
-#define RING_BUF_SIZE 1024
-uint8_t ring_buffer[RING_BUF_SIZE];
-
-struct ring_buf ringbuf;
-
-static bool rx_throttled;
-
-static inline void print_baudrate(const struct device *dev)
+static const struct shell *active_shell;
+void fpga_message(const char *text)
 {
-	uint32_t baudrate;
-	int ret;
-
-	ret = uart_line_ctrl_get(dev, UART_LINE_CTRL_BAUD_RATE, &baudrate);
-	if (ret) {
-		LOG_WRN("Failed to get baudrate, ret code %d", ret);
-	} else {
-		LOG_INF("Baudrate %u", baudrate);
-	}
+	shell_fprintf(active_shell, SHELL_NORMAL, "%s", text);
 }
-
-#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
-static struct usbd_context *sample_usbd;
-K_SEM_DEFINE(dtr_sem, 0, 1);
-
-static void sample_msg_cb(struct usbd_context *const ctx, const struct usbd_msg *msg)
+static int identify(const struct shell *sh)
 {
-	LOG_INF("USBD message: %s", usbd_msg_type_string(msg->type));
-
-	if (usbd_can_detect_vbus(ctx)) {
-		if (msg->type == USBD_MSG_VBUS_READY) {
-			if (usbd_enable(ctx)) {
-				LOG_ERR("Failed to enable device support");
-			}
-		}
-
-		if (msg->type == USBD_MSG_VBUS_REMOVED) {
-			if (usbd_disable(ctx)) {
-				LOG_ERR("Failed to disable device support");
-			}
-		}
-	}
-
-	if (msg->type == USBD_MSG_CDC_ACM_CONTROL_LINE_STATE) {
-		uint32_t dtr = 0U;
-
-		uart_line_ctrl_get(msg->dev, UART_LINE_CTRL_DTR, &dtr);
-		if (dtr) {
-			k_sem_give(&dtr_sem);
-		}
-	}
-
-	if (msg->type == USBD_MSG_CDC_ACM_LINE_CODING) {
-		print_baudrate(msg->dev);
-	}
+	active_shell = sh;
+	int result = fpga_gpio_init();
+	uint32_t id = 0;
+	if (!result) result = jtag_identify(&fpga_io, &id);
+	shell_print(sh, "IDCODE=%08x expected=012b8043 chain-test=%s result=%d DONE=%d",
+		    id, result ? "FAIL" : "PASS", result, result ? -1 : fpga_done());
+	return result;
 }
-
-static int enable_usb_device_next(void)
+static int cmd_id(const struct shell *sh, size_t argc, char **argv)
 {
-	int err;
-
-	sample_usbd = sample_usbd_init_device(sample_msg_cb);
-	if (sample_usbd == NULL) {
-		LOG_ERR("Failed to initialize USB device");
-		return -ENODEV;
-	}
-
-	if (!usbd_can_detect_vbus(sample_usbd)) {
-		err = usbd_enable(sample_usbd);
-		if (err) {
-			LOG_ERR("Failed to enable device support");
-			return err;
-		}
-	}
-
-	LOG_INF("USB device support enabled");
-
+	return identify(sh);
+}
+static int cmd_info(const struct shell *sh, size_t argc, char **argv)
+{
+	shell_print(sh, "Full VME 12.1, %u bytes, SHA256=%s", (unsigned)sizeof(vme_image), VME_SHA256);
+	shell_print(sh, "CRC check=%d; Flash-write support=%s", vme_check(vme_image, sizeof(vme_image)),
+		    IS_ENABLED(CONFIG_FPGA_FLASH_WRITE) ? "enabled" : "disabled");
+	shell_print(sh, "Sequence includes SRAM/CF/UFM/Feature erase, 575 page writes, USERCODE,");
+	shell_print(sh, "Feature Row=0000000000000000, FEABITS=0x0620, verify, DONE and ISC_DISABLE.");
+	shell_print(sh, "No OTP/security opcodes. Application behavior is not proven by verification.");
 	return 0;
 }
-#endif /* defined(CONFIG_USB_DEVICE_STACK_NEXT) */
-
-static void interrupt_handler(const struct device *dev, void *user_data)
+static int cmd_program(const struct shell *sh, size_t argc, char **argv)
 {
-	ARG_UNUSED(user_data);
-
-	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
-		if (!rx_throttled && uart_irq_rx_ready(dev)) {
-			int recv_len, rb_len;
-			uint8_t buffer[64];
-			size_t len = MIN(ring_buf_space_get(&ringbuf),
-					 sizeof(buffer));
-
-			if (len == 0) {
-				/* Throttle because ring buffer is full */
-				uart_irq_rx_disable(dev);
-				rx_throttled = true;
-				continue;
-			}
-
-			recv_len = uart_fifo_read(dev, buffer, len);
-			if (recv_len < 0) {
-				LOG_ERR("Failed to read UART FIFO");
-				recv_len = 0;
-			};
-
-			rb_len = ring_buf_put(&ringbuf, buffer, recv_len);
-			if (rb_len < recv_len) {
-				LOG_ERR("Drop %u bytes", recv_len - rb_len);
-			}
-
-			LOG_DBG("tty fifo -> ringbuf %d bytes", rb_len);
-			if (rb_len) {
-				uart_irq_tx_enable(dev);
-			}
-		}
-
-		if (uart_irq_tx_ready(dev)) {
-			uint8_t buffer[64];
-			int rb_len, send_len;
-
-			rb_len = ring_buf_get(&ringbuf, buffer, sizeof(buffer));
-			if (!rb_len) {
-				LOG_DBG("Ring buffer empty, disable TX IRQ");
-				uart_irq_tx_disable(dev);
-				continue;
-			}
-
-			if (rx_throttled) {
-				uart_irq_rx_enable(dev);
-				rx_throttled = false;
-			}
-
-			send_len = uart_fifo_fill(dev, buffer, rb_len);
-			if (send_len < rb_len) {
-				LOG_ERR("Drop %d bytes", rb_len - send_len);
-			}
-
-			LOG_DBG("ringbuf -> tty fifo %d bytes", send_len);
-		}
+	if (!IS_ENABLED(CONFIG_FPGA_FLASH_WRITE)) {
+		shell_error(sh, "Flash writes disabled in this build; first-write approval is required.");
+		return -EACCES;
 	}
+	if (strcmp(argv[1], VME_SHA256)) {
+		shell_error(sh, "Supply the full SHA256 printed by fpga info to confirm this exact image.");
+		return -EINVAL;
+	}
+	int result = vme_check(vme_image, sizeof(vme_image));
+	if (!result) result = identify(sh);
+	if (result) return result;
+	shell_print(sh, "Starting approved VME erase/program/verify; do not interrupt power.");
+	result = vme_run(vme_image, sizeof(vme_image), &fpga_io);
+	shell_print(sh, "Programming %s (%d), DONE=%d. Reboot MCU before another attempt.",
+		    result ? "FAILED" : "VERIFIED", result, fpga_done());
+	return result;
 }
+SHELL_STATIC_SUBCMD_SET_CREATE(fpga_commands,
+	SHELL_CMD_ARG(info, NULL, "Image and programming scope", cmd_info, 1, 0),
+	SHELL_CMD_ARG(id, NULL, "Read-only IDCODE and chain check", cmd_id, 1, 0),
+	SHELL_CMD_ARG(program, NULL, "Program reviewed image: <full SHA256>", cmd_program, 2, 0),
+	SHELL_SUBCMD_SET_END);
+SHELL_CMD_REGISTER(fpga, &fpga_commands, "Bridge FPGA programmer", NULL);
 
 int main(void)
 {
-	int ret;
+	static const struct gpio_dt_spec buttons[] = {
+		GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
+		GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
+	};
 
-	if (!device_is_ready(uart_dev)) {
-		LOG_ERR("CDC ACM device not ready");
-		return 0;
-	}
-
-#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
-		ret = enable_usb_device_next();
-#else
-		ret = usb_enable(NULL);
-#endif
-
-	if (ret != 0) {
-		LOG_ERR("Failed to enable USB");
-		return 0;
-	}
-
-	ring_buf_init(&ringbuf, sizeof(ring_buffer), ring_buffer);
-
-	LOG_INF("Wait for DTR");
-
-#if defined(CONFIG_USB_DEVICE_STACK_NEXT)
-	k_sem_take(&dtr_sem, K_FOREVER);
-#else
-	while (true) {
-		uint32_t dtr = 0U;
-
-		uart_line_ctrl_get(uart_dev, UART_LINE_CTRL_DTR, &dtr);
-		if (dtr) {
-			break;
-		} else {
-			/* Give CPU resources to low priority threads. */
-			k_sleep(K_MSEC(100));
+	/* Apply the DT pull-ups without interrupts, callbacks, or button actions. */
+	for (unsigned i = 0; i < ARRAY_SIZE(buttons); i++) {
+		int err = gpio_is_ready_dt(&buttons[i]) ?
+			gpio_pin_configure_dt(&buttons[i], GPIO_INPUT) : -ENODEV;
+		if (err) {
+			printk("Button %u input initialization failed: %d\n", i, err);
+			return err;
 		}
 	}
-#endif
-
-	LOG_INF("DTR set");
-
-	/* They are optional, we use them to test the interrupt endpoint */
-	ret = uart_line_ctrl_set(uart_dev, UART_LINE_CTRL_DCD, 1);
-	if (ret) {
-		LOG_WRN("Failed to set DCD, ret code %d", ret);
-	}
-
-	ret = uart_line_ctrl_set(uart_dev, UART_LINE_CTRL_DSR, 1);
-	if (ret) {
-		LOG_WRN("Failed to set DSR, ret code %d", ret);
-	}
-
-	/* Wait 100ms for the host to do all settings */
-	k_msleep(100);
-
-#ifndef CONFIG_USB_DEVICE_STACK_NEXT
-	print_baudrate(uart_dev);
-#endif
-	uart_irq_callback_set(uart_dev, interrupt_handler);
-
-	/* Enable rx interrupts */
-	uart_irq_rx_enable(uart_dev);
-
-	return 0;
+	return usb_enable(NULL);
 }

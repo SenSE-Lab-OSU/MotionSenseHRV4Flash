@@ -1,9 +1,10 @@
-# Copyright (c) 2023 Nordic Semiconductor ASA
-# SPDX-License-Identifier: Apache-2.0
+mainmenu "Bridge FPGA programmer"
 
-# Source common USB sample options used to initialize new experimental USB
-# device stack. The scope of these options is limited to USB samples in project
-# tree, you cannot use them in your own application.
-source "samples/subsys/usb/common/Kconfig.sample_usbd"
+config FPGA_FLASH_WRITE
+	bool "Allow explicitly requested FPGA Flash programming"
+	default n
+	help
+	  Enable only after approval of the reviewed VME operation sequence.
+	  Programming still requires the explicit USB shell command and image digest.
 
 source "Kconfig.zephyr"

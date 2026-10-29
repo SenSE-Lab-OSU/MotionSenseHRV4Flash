@@ -17,8 +17,8 @@ zephyr_udc0: &usbd {
 
 &usbreg { status = "okay"; };
 
-/* SPI3 owns FPGA_CS_N; storage chip selects retain their boot holds. */
-&fpga_cs_high { status = "disabled"; };
+/* CONFIG_SPI=n leaves SPIM3 to the application HAL. Keep the node enabled
+ * so Nordic pinctrl includes SPIM pin routing; retain the CS boot hog. */
 &spi3 { status = "okay"; };
 &fpga {
 	status = "okay";

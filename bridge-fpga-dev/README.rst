@@ -36,13 +36,18 @@ function mean that high is not proof the application is running.
 Flash-write support is enabled in this MCU image. To execute the reviewed
 sequence, the operator must explicitly invoke::
 
-  fpga program 023bb9c5f7fe5bd078577e4fc96d88da4503c2aa241f398e38e6006cfbf14b2f
+  fpga program
 
 This rechecks file CRC, device ID and chain before executing the VME. One attempt
 is allowed per MCU boot. Errors do not trigger an automatic erase, programming
 retry, PROGRAM_N pulse, or added REFRESH instruction. Keep power stable during
 the operation. Do not infer application operation or power-cycle persistence
 from a VERIFIED message; those are separate hardware tests, currently deferred.
+
+Programming output reports identification, start, failure details, and final
+verification status. Expected busy-poll retries and scan progress are silent;
+polling exhaustion and verification failures remain errors. Image SHA256 is
+checked at build time; no digest argument is required at the shell.
 
 Image replacement
 -----------------

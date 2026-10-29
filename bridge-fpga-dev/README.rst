@@ -49,6 +49,36 @@ verification status. Expected busy-poll retries and scan progress are silent;
 polling exhaustion and verification failures remain errors. Image SHA256 is
 checked at build time; no digest argument is required at the shell.
 
+Application SPI WHOAMI
+---------------------
+
+After programming FPGA logic that implements the WHOAMI protocol, run::
+
+  fpga whoami
+
+Expected output::
+
+  SPI transfer: <measured> us (includes driver and CS delays)
+  FPGA WHOAMI: 0x10AC — PASS
+
+Elapsed time brackets the synchronous SPI API call using the Nordic timing
+subsystem's 16 MHz TIMER2 (62.5 ns timer resolution). It includes driver setup,
+CS delays, interrupt handling, and scheduling, but excludes shell output and
+the final defensive CS-high write. It is not an electrical CS-low measurement.
+TIMER2 is reserved for this measurement and runs only during the command.
+
+Each invocation sends exactly ``0F 00 00`` in one full-duplex SPI3 transaction
+at 8 MHz, mode 0, MSB first, with 8-bit words. GPIO CS (P0.22) stays low across
+all 24 clocks, with a 1 us setup delay and 1 us delay before CS deassertion.
+The response is ``xx 10 AC``; the
+command-byte response is ignored. Mismatches report the actual and expected
+values and all three raw RX bytes. Transfer errors/timeouts return failure to
+the shell, and CS is returned high after completion or abort. The managed
+driver's synchronous completion timeout uses a 200 ms tolerance.
+
+This tests the FPGA application's SPI interface only, runs only on request,
+and does not change FPGA Flash or configuration.
+
 Image replacement
 -----------------
 
@@ -76,8 +106,8 @@ The shared board DT is checked against ``bridge-docs/BRIDGE.EDF``:
 * TDO P1.07, IRQ P1.08, DONE P1.10 and shared IO P1.13/P1.14 are MCU inputs.
 * PROGRAM_N P1.09 is open drain, active low, initialized released. JTAG_EN is
   pulled high externally; no MCU enable pin exists.
-* SPI3 remains available at P0.19/.20/.21, CS P0.22, but the programmer sends no
-  SPI traffic. BTN_A/P1.11 and BTN_B/P1.12 are initialized at boot as inputs
+* SPI3 uses SCLK/MOSI/MISO at P0.19/.20/.21, CS P0.22 for ``fpga whoami``.
+  JTAG programming sends no SPI traffic. BTN_A/P1.11 and BTN_B/P1.12 are initialized at boot as inputs
   with the DT pull-ups, without interrupts or application actions; LED gates
   and 5 V enable stay low.
 

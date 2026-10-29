@@ -20,7 +20,10 @@ zephyr_udc0: &usbd {
 /* SPI3 owns FPGA_CS_N; storage chip selects retain their boot holds. */
 &fpga_cs_high { status = "disabled"; };
 &spi3 { status = "okay"; };
-&fpga { status = "okay"; };
+&fpga {
+	status = "okay";
+	spi-max-frequency = <8000000>;
+};
 
 /* Expose BTN_A/BTN_B without input handlers or application actions. */
 &{/buttons} { status = "okay"; };

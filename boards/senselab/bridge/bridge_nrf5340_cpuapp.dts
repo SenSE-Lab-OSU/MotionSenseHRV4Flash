@@ -75,7 +75,13 @@
 	};
 	bridge_cs_high: cs-high {
 		gpio-hog;
-		gpios = <12 GPIO_ACTIVE_HIGH>, <13 GPIO_ACTIVE_HIGH>, <22 GPIO_ACTIVE_HIGH>;
+		gpios = <12 GPIO_ACTIVE_HIGH>, <13 GPIO_ACTIVE_HIGH>;
+		output-high;
+	};
+	/* Disable this hog when SPI3 takes ownership of FPGA_CS_N. */
+	fpga_cs_high: fpga-cs-high {
+		gpio-hog;
+		gpios = <22 GPIO_ACTIVE_HIGH>;
 		output-high;
 	};
 };
@@ -153,9 +159,13 @@
 		/* Provisional limit; SPI framing/mode awaits the FPGA protocol. */
 		spi-max-frequency = <1000000>;
 		irq-gpios = <&gpio1 8 GPIO_ACTIVE_LOW>;
-		program-gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+		/* External pullup: release PROGRAM_N rather than driving it high. */
+		program-gpios = <&gpio1 9 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
 		done-gpios = <&gpio1 10 GPIO_ACTIVE_HIGH>;
 		io-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>, <&gpio1 14 GPIO_ACTIVE_HIGH>;
+		/* GPIO JTAG: TCK idle low, TMS/TDI idle high, TDO input.
+		 * JTAG_EN is hard-pulled high; it has no MCU control pin.
+		 */
 		tck-gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
 		tms-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
 		tdi-gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;

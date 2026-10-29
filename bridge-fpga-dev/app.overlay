@@ -1,0 +1,20 @@
+/*
+ * Copyright (c) 2021 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Native USB; the sample currently owns this CDC endpoint for echo. */
+zephyr_udc0: &usbd {
+	status = "okay";
+	cdc_acm_uart0: cdc-acm-uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&usbreg { status = "okay"; };
+
+/* SPI3 owns FPGA_CS_N; storage chip selects retain their boot holds. */
+&fpga_cs_high { status = "disabled"; };
+&spi3 { status = "okay"; };
+&fpga { status = "okay"; };

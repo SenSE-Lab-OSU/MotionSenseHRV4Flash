@@ -1,21 +1,31 @@
-description: Bridge MachXO2 SPI endpoint and GPIO JTAG wiring; no driver yet
+description: |
+  Bridge LCMXO2-256HC SPI endpoint and GPIO JTAG programming interface.
+  GPIO properties are consumed by application firmware; enabling this node
+  alone does not configure the GPIOs or program the FPGA.
 compatible: "senselab,bridge-fpga"
 include: spi-device.yaml
 properties:
   irq-gpios:
     type: phandle-array
+    description: Active-low FPGA interrupt, MCU input
   program-gpios:
     type: phandle-array
+    description: Active-low open-drain PROGRAM_N; initialize inactive (released)
   done-gpios:
     type: phandle-array
+    description: Configuration DONE, MCU input with external pullup
   io-gpios:
     type: phandle-array
     description: Shared FPGA IO0 and IO1, keep as inputs until ownership is agreed
   tck-gpios:
     type: phandle-array
+    description: JTAG clock output; initialize low
   tms-gpios:
     type: phandle-array
+    description: JTAG mode output; initialize high
   tdi-gpios:
     type: phandle-array
+    description: JTAG data output; initialize high
   tdo-gpios:
     type: phandle-array
+    description: JTAG data input

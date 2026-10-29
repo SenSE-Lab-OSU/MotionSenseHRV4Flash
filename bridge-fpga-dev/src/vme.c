@@ -40,7 +40,7 @@ static const uint8_t *image;
 static size_t image_size, cursor;
 static jmp_buf escape;
 static uint64_t deadline;
-static unsigned scans, comparisons, mismatches;
+static unsigned scans, comparisons;
 static unsigned first_bad, expected_bit, actual_bit;
 static uint8_t instruction;
 static int used;
@@ -83,7 +83,8 @@ void ispVMDelay(unsigned short delay)
 	checkpoint();
 }
 
-void vme_out_char(unsigned char c) { char s[2] = {c, 0}; port->message(s); }
+/* Vendor file comments are informational; keep programming output concise. */
+void vme_out_char(unsigned char c) { (void)c; }
 void vme_out_hex(unsigned char c) { char s[3]; snprintf(s, sizeof(s), "%02X", c); port->message(s); }
 void vme_out_string(char *s) { port->message(s); }
 
@@ -183,11 +184,6 @@ static void scan_begin(void)
 	}
 	++scans;
 	if (g_usDataType & TDO_DATA) ++comparisons;
-	if (scans == 1 || scans % 128 == 0) {
-		snprintf(line, sizeof(line), "VME progress: scan=%u file=%u/%u IR=%02x\n",
-			 scans, (unsigned)cursor, (unsigned)image_size, instruction);
-		port->message(line);
-	}
 	if (port->scan) port->scan(!!(g_usDataType & SIR_DATA), g_usiDataSize,
 		g_usDataType & TDI_DATA ? g_pucInData : NULL,
 		g_usDataType & TDO_DATA ? g_pucOutData : NULL,
@@ -196,13 +192,14 @@ static void scan_begin(void)
 
 static void scan_end(int result)
 {
-	if (result < 0) {
+	/* A busy response inside the VME polling loop is expected; exhaustion
+	 * remains an error reported by poll_exhausted(). */
+	if (result < 0 && !(instruction == 0xf0 && (g_usDataType & LHEAP_IN))) {
 		char line[160];
-		++mismatches;
 		snprintf(line, sizeof(line), "TDO mismatch scan=%u IR=%02x bits=%u first-bit=%u expected=%u actual=%u%s\n",
 			 scans, instruction, g_usiDataSize, first_bad, expected_bit, actual_bit,
 			 g_usDataType & LHEAP_IN ? " (poll may retry)" : "");
-		if (mismatches < 8 || mismatches % 100 == 0) port->message(line);
+		port->message(line);
 	}
 }
 
@@ -252,9 +249,11 @@ int vme_run(const uint8_t *data, size_t size, const struct vme_io *io)
 		port->write(VME_TMS | VME_TDI, 1);
 	}
 	for (unsigned i = 0; i < 11; i++) release(buffers[i].ptr);
-	char line[128];
-	snprintf(line, sizeof(line), "VME final: result=%d scans=%u comparison-scans=%u mismatched-scans=%u\n",
-		 result, scans, comparisons, mismatches);
-	port->message(line);
+	if (result) {
+		char line[96];
+		snprintf(line, sizeof(line), "VME failed: result=%d scan=%u file=%u/%u IR=%02x\n",
+			 result, scans, (unsigned)cursor, (unsigned)image_size, instruction);
+		port->message(line);
+	}
 	return result;
 }

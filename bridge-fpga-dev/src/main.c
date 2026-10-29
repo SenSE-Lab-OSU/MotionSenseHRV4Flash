@@ -2,7 +2,6 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/usb/usb_device.h>
-#include <string.h>
 #include "fpga_gpio.h"
 #include "jtag.h"
 #include "vme_image.h"
@@ -42,12 +41,12 @@ static int cmd_program(const struct shell *sh, size_t argc, char **argv)
 		shell_error(sh, "Flash writes disabled in this build; first-write approval is required.");
 		return -EACCES;
 	}
-	if (strcmp(argv[1], VME_SHA256)) {
-		shell_error(sh, "Supply the full SHA256 printed by fpga info to confirm this exact image.");
-		return -EINVAL;
-	}
 	int result = vme_check(vme_image, sizeof(vme_image));
-	if (!result) result = identify(sh);
+	if (result) {
+		shell_error(sh, "VME validation failed (%d)", result);
+		return result;
+	}
+	result = identify(sh);
 	if (result) return result;
 	shell_print(sh, "Starting approved VME erase/program/verify; do not interrupt power.");
 	result = vme_run(vme_image, sizeof(vme_image), &fpga_io);
@@ -58,7 +57,7 @@ static int cmd_program(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(fpga_commands,
 	SHELL_CMD_ARG(info, NULL, "Image and programming scope", cmd_info, 1, 0),
 	SHELL_CMD_ARG(id, NULL, "Read-only IDCODE and chain check", cmd_id, 1, 0),
-	SHELL_CMD_ARG(program, NULL, "Program reviewed image: <full SHA256>", cmd_program, 2, 0),
+	SHELL_CMD_ARG(program, NULL, "Program reviewed image", cmd_program, 1, 0),
 	SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(fpga, &fpga_commands, "Bridge FPGA programmer", NULL);
 

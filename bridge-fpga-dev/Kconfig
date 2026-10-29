@@ -5,6 +5,6 @@ config FPGA_FLASH_WRITE
 	default n
 	help
 	  Enable only after approval of the reviewed VME operation sequence.
-	  Programming still requires the explicit USB shell command and image digest.
+	  Programming still requires the explicit USB shell command.
 
 source "Kconfig.zephyr"

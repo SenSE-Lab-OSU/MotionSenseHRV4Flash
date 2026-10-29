@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-/* Native USB; the sample currently owns this CDC endpoint for echo. */
+/* Native USB command and diagnostic shell. */
+/ {
+	chosen { zephyr,shell-uart = &cdc_acm_uart0; };
+};
 zephyr_udc0: &usbd {
 	status = "okay";
 	cdc_acm_uart0: cdc-acm-uart0 {
@@ -18,3 +21,6 @@ zephyr_udc0: &usbd {
 &fpga_cs_high { status = "disabled"; };
 &spi3 { status = "okay"; };
 &fpga { status = "okay"; };
+
+/* Expose BTN_A/BTN_B without input handlers or application actions. */
+&{/buttons} { status = "okay"; };

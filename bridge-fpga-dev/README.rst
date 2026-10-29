@@ -58,13 +58,13 @@ After programming FPGA logic that implements the WHOAMI protocol, run::
 
 Expected output::
 
-  SPI transfer: <measured> us (includes driver and CS delays)
+  SPI transfer: <measured> us (polling, includes CS delays)
   FPGA WHOAMI: 0x10AC — PASS
 
-Elapsed time brackets the synchronous SPI API call using the Nordic timing
-subsystem's 16 MHz TIMER2 (62.5 ns timer resolution). It includes driver setup,
-CS delays, interrupt handling, and scheduling, but excludes shell output and
-the final defensive CS-high write. It is not an electrical CS-low measurement.
+Elapsed time brackets the polling HAL transfer using the Nordic timing
+subsystem's 16 MHz TIMER2 (62.5 ns timer resolution). It includes DMA setup,
+CS delays, cleanup and any unrelated interrupt preemption, but excludes shell
+output. It is not an electrical CS-low measurement.
 TIMER2 is reserved for this measurement and runs only during the command.
 
 Each invocation sends exactly ``0F 00 00`` in one full-duplex SPI3 transaction
@@ -73,8 +73,16 @@ all 24 clocks, with a 1 us setup delay and 1 us delay before CS deassertion.
 The response is ``xx 10 AC``; the
 command-byte response is ignored. Mismatches report the actual and expected
 values and all three raw RX bytes. Transfer errors/timeouts return failure to
-the shell, and CS is returned high after completion or abort. The managed
-driver's synchronous completion timeout uses a 200 ms tolerance.
+the shell, and CS is returned high after completion or abort. END is polled
+with a 1 ms timeout. On timeout, STOP is requested and STOPPED is polled for
+at most another 1 ms. If STOPPED never arrives, CS is released, subsequent
+transfers are blocked until MCU reboot, and persistent DMA buffers are retained;
+the peripheral is not disabled before STOPPED.
+
+The Zephyr SPI driver is disabled, giving the application exclusive SPIM3
+ownership. EasyDMA moves the three bytes without a SPIM interrupt or semaphore
+wait. Other interrupts remain enabled. Pin routing comes from the board pinctrl
+and CS definitions; initialization holds CS high and SCLK low.
 
 This tests the FPGA application's SPI interface only, runs only on request,
 and does not change FPGA Flash or configuration.

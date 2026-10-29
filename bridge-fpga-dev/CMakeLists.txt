@@ -14,4 +14,4 @@ add_custom_command(OUTPUT ${VME_HEADER}
   DEPENDS ${VME_FILE} reviewed-vme.sha256 tools/embed_vme.py
   VERBATIM)
 target_include_directories(app PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_sources(app PRIVATE src/main.c src/vme.c src/jtag.c src/fpga_gpio.c ${VME_HEADER})
+target_sources(app PRIVATE src/main.c src/vme.c src/jtag.c src/fpga_gpio.c src/fpga_spi.c ${VME_HEADER})

@@ -66,7 +66,7 @@ uint8_t badDataCounterCh1 = 0, badDataCounterCh2 = 0;
 uint32_t chLED_upperBound = 390000;
 uint32_t chLED_lowerBound = 200000;
 uint32_t chLED_target = 300000;
-uint8_t ppg_brightness_check_counter = 0;
+uint32_t ppg_brightness_check_counter = 0;
 float32_t std_ppgThreshold = 150;
 
 
@@ -307,6 +307,10 @@ void ppg_config()
     adapt_counterCh1 = 0;
     adapt_counterCh2 = 0;
     ppg_brightness_check_counter = 0;
+    runningMeanCh1a = 0.0f;
+    runningMeanCh1b = 0.0f;
+    runningMeanCh2a = 0.0f;
+    runningMeanCh2b = 0.0f;
     badDataCounterCh1 = 0;
     badDataCounterCh2 = 0;
     adapt_Ch1 = 1;
@@ -614,12 +618,6 @@ void read_ppg_fifo_buffer(struct k_work *item)
 
   uint8_t tag;
 
-  ppg_brightness_check_counter++;
-  if (ppg_brightness_check_counter > timeWindow)
-  {
-    ppg_brightness_check_counter = 0;
-  }
-
   uint8_t sampleCount[5] = {0};
 
   // Reading the total number of PPG samples first
@@ -636,6 +634,12 @@ void read_ppg_fifo_buffer(struct k_work *item)
   if (number_of_samples == 0) {
     LOG_DBG("PPG FIFO has no complete frame yet: %u items", sampleCount[2]);
     return;
+  }
+
+  ppg_brightness_check_counter++;
+  if (ppg_brightness_check_counter > timeWindow)
+  {
+    ppg_brightness_check_counter = 0;
   }
 
   uint8_t partial_fifo_items = sampleCount[2] % 4;

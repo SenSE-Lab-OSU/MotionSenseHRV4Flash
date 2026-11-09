@@ -203,6 +203,12 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
     
   LOG_INF("USB Status: %d", status);
 
+  // CONNECTED/DISCONNECTED are raised on VBUS detect/remove, so update the charging bit right away
+  // instead of waiting for the next battery_maintenance() pass.
+  if (status == USB_DC_CONNECTED || status == USB_DC_DISCONNECTED){
+    update_charging_state();
+  }
+
 }
 
 static void write_uuid_file(void)

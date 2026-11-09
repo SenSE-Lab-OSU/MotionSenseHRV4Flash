@@ -695,57 +695,79 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 }
 
 // dynamic bad block detection for chips whose factory bad block marks have been erased.
-// Destructive: for every block it erases, writes a test pattern, reads it back, and
-// flags the block if the erase or program reports a failure (E_Fail/P_Fail) or the
-// readback returns uncorrectable ECC or mismatched data. Only run this on a flash
-// with no data on it (e.g. right after a full chip erase). The block is erased again
-// afterwards so the flash is left empty.
+// Destructive: for every block it erases, programs every page with a test pattern, then
+// reads every page back, and flags the block if the erase or any program reports a
+// failure (E_Fail/P_Fail) or any readback returns uncorrectable ECC or mismatched data.
+// All pages are programmed before any are read, so a page disturbed by programming its
+// neighbours is caught too, and each page's pattern carries its own page number, so a
+// write that lands on the wrong page shows up as a mismatch.
+// Only run this on a flash with no data on it (e.g. right after a full chip erase). The
+// block is erased again afterwards so the flash is left empty.
+// Testing every page is slow (on the order of a few hours for all 4 flashes at 8 MHz SPI),
+// but this is only meant to run once per device.
 static uint8_t dyn_bb_pattern[4096];
 static uint8_t dyn_bb_readback[4096];
+
+static void dyn_bb_fill_pattern(uint32_t page){
+	memset(dyn_bb_pattern, 0xA5, sizeof(dyn_bb_pattern));
+	memcpy(dyn_bb_pattern, &page, sizeof(page));
+}
 
 int dynamic_detect_bad_blocks(const struct device* dev){
 	static_scan_in_progress = true;
 	int bad_blocks = 0;
 	int total_blocks = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 
-	memset(dyn_bb_pattern, 0xA5, sizeof(dyn_bb_pattern));
-
 	LOG_INF("dynamic bad block scan start, %d blocks", total_blocks);
 	for (int block = 0; block < total_blocks; block++){
+		// the full scan takes hours, so show it's still alive
+		if (block % 256 == 0){
+			LOG_INF("dyn scan: block %d of %d, %d bad so far", block, total_blocks, bad_blocks);
+		}
 		uint32_t first_page = convert_block_to_page(0, block);
-		// selects the right flash and die, and returns the die-local page address
-		off_t addr = convert_page_to_address(dev, first_page);
 		bool block_bad = false;
 
-		int status = spi_nand_block_erase(dev, addr);
-		if (status != 0){
-			LOG_WRN("dyn scan: erase fail stat %d block %d", status, block);
+		// Everything goes through the multi_nand layer, so the scan sees exactly what the rest
+		// of the system sees: the bad-block simulation applies, and erase/program failures are
+		// classified by nand_op_result(). Only a definite fail counts here - an unknown status
+		// (SPI error, unreadable status register) is left to the readback to settle.
+		if (multi_nand_block_erase(dev, first_page) == FLASH_ERASE_FAILURE){
+			LOG_WRN("dyn scan: erase fail block %d", block);
 			block_bad = true;
 		}
 
-		if (!block_bad){
-			status = spi_nand_page_write(dev, addr, dyn_bb_pattern, sizeof(dyn_bb_pattern));
-			if (status != 0){
-				LOG_WRN("dyn scan: program fail stat %d block %d", status, block);
+		// pages within a block have to be programmed in ascending order
+		for (uint32_t p = 0; p < NAND_PAGES_PER_ERASE_BLOCK && !block_bad; p++){
+			dyn_bb_fill_pattern(first_page + p);
+			if (multi_nand_page_write(dev, first_page + p, dyn_bb_pattern,
+						  sizeof(dyn_bb_pattern)) == FLASH_PROGRAM_FAILURE){
+				LOG_WRN("dyn scan: program fail block %d page %u", block, p);
 				block_bad = true;
 			}
 		}
 
-		if (!block_bad){
+		for (uint32_t p = 0; p < NAND_PAGES_PER_ERASE_BLOCK && !block_bad; p++){
+			dyn_bb_fill_pattern(first_page + p);
 			memset(dyn_bb_readback, 0, sizeof(dyn_bb_readback));
-			int ret = spi_nand_page_read(dev, addr, dyn_bb_readback);
+			int ret = multi_nand_page_read(dev, first_page + p, dyn_bb_readback);
 			if (ret == FLASH_TOO_MANY_ECC_ERROR){
-				LOG_WRN("dyn scan: uncorrectable ECC block %d", block);
+				LOG_WRN("dyn scan: uncorrectable ECC block %d page %u", block, p);
 				block_bad = true;
 			}
-			else if (ret != 0 || memcmp(dyn_bb_pattern, dyn_bb_readback, sizeof(dyn_bb_pattern)) != 0){
-				LOG_WRN("dyn scan: readback mismatch block %d", block);
+			// the data is the real answer, so an unclear status alone doesn't fail the page
+			else if (memcmp(dyn_bb_pattern, dyn_bb_readback, sizeof(dyn_bb_pattern)) != 0){
+				LOG_WRN("dyn scan: readback mismatch block %d page %u (stat %d)", block, p, ret);
 				block_bad = true;
 			}
 		}
 
-		// leave the block erased so the filesystem still sees it as free space
-		spi_nand_block_erase(dev, addr);
+		// leave the block erased so the filesystem still sees it as free space. A block that
+		// can't be erased afterwards is bad too, and multi_nand_block_erase has already
+		// recorded it, so count it here to keep the total honest.
+		if (multi_nand_block_erase(dev, first_page) == FLASH_ERASE_FAILURE){
+			LOG_WRN("dyn scan: final erase fail block %d", block);
+			block_bad = true;
+		}
 
 		if (block_bad){
 			bad_blocks++;
@@ -798,15 +820,40 @@ int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* b
 	return ret;
 }
 
+/* Turns what spi_nand_page_write / spi_nand_block_erase return into a result. They
+ * return the raw status register, which also carries the ECC bits of the last read and
+ * the write-enable latch, so only the operation's own fail bit means it failed. A
+ * negative value is an SPI transfer error from before the operation ran, and 253
+ * (status read failed) or 255 (bus read back all ones) say nothing about the
+ * operation, so those come back as errors without implicating the block.
+ */
+static int nand_op_result(int raw, uint8_t fail_bit, int fail_code){
+	if (raw < 0){
+		return raw;
+	}
+	if (raw == 253 || raw == 255){
+		return -EIO;
+	}
+	if (raw & fail_bit){
+		return fail_code;
+	}
+	return 0;
+}
+
 // write counterpart to multi_nand_page_read: takes a physical page number spanning
 // all 4 flashes, selects the right flash/die and writes. A program failure (P_Fail)
 // marks the block bad, mirroring the read path.
+// Returns 0, FLASH_PROGRAM_FAILURE, or a negative error when the status is unknown.
 int multi_nand_page_write(const struct device* dev, uint32_t page_number, const void* buffer, size_t size){
 	off_t addr = convert_page_to_address(dev, page_number);
-	int ret = spi_nand_page_write(dev, addr, buffer, size);
-	if (ret != 0){
-		LOG_ERR("program fail stat %d at sect %d", ret, page_number);
+	int ret = nand_op_result(spi_nand_page_write(dev, addr, buffer, size),
+				 SPI_NAND_STATUS_P_FAIL, FLASH_PROGRAM_FAILURE);
+	if (ret == FLASH_PROGRAM_FAILURE){
+		LOG_ERR("program fail at sect %d", page_number);
 		register_bad_block(page_number);
+	}
+	else if (ret != 0){
+		LOG_WRN("program status unknown (%d) at sect %d", ret, page_number);
 	}
 	return ret;
 }
@@ -814,12 +861,17 @@ int multi_nand_page_write(const struct device* dev, uint32_t page_number, const 
 // erase counterpart to multi_nand_page_read/write: takes a physical page number
 // spanning all 4 flashes, selects the right flash/die and erases the block that page
 // belongs to. An erase failure (E_Fail) marks the block bad, like the write path.
+// Returns 0, FLASH_ERASE_FAILURE, or a negative error when the status is unknown.
 int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
 	off_t addr = convert_page_to_address(dev, page_number);
-	int ret = spi_nand_block_erase(dev, addr);
-	if (ret != 0){
-		LOG_WRN("erase fail stat %d at sect %d", ret, page_number);
+	int ret = nand_op_result(spi_nand_block_erase(dev, addr),
+				 SPI_NAND_STATUS_E_FAIL, FLASH_ERASE_FAILURE);
+	if (ret == FLASH_ERASE_FAILURE){
+		LOG_WRN("erase fail at sect %d", page_number);
 		register_bad_block(page_number);
+	}
+	else if (ret != 0){
+		LOG_WRN("erase status unknown (%d) at sect %d", ret, page_number);
 	}
 	return ret;
 }
@@ -1256,7 +1308,7 @@ int spi_init(const struct device *dev)
 	// restores the bad block table and runs the one-time manufacturer bad block
 	// scan; both are persisted through the settings subsystem
 	
-	//bad_block_storage_init(dev);
+	bad_block_storage_init(dev);
 	
 
 	set_flash(dev, 0);

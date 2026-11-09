@@ -1,4 +1,9 @@
+#include <zephyr/kernel.h>
 #include <zephyr/drivers/disk.h>
+
+/* Held by anything that drives the flash SPI bus. The NOR and NAND share pins, and the
+ * NAND flash/die selection is global, so two users at once corrupt each other. */
+extern struct k_mutex disk_access_mutex;
 
 extern bool VerifyWrites;
 extern bool CheckDuplicateAccess;

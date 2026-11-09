@@ -563,19 +563,24 @@ static void run_bad_block_scan(bool dynamic)
   }
 
   reset_lock = true;
+  // keep USB mass storage (still up with CONFIG_USB_ALWAYS_ON) off the flash bus for the
+  // whole scan. Its reads share pins with the NAND and switch the selected flash/die,
+  // which makes healthy blocks fail readback. Host reads just stall until the reset.
+  k_mutex_lock(&disk_access_mutex, K_FOREVER);
   erase_bad_blocks_arr();
 
+  LOG_INF("Running manufacturer bad block scan...");
+
+	detect_manufacturer_bad_blocks(flash_device);
+
   if (dynamic){
-    LOG_WRN("Running dynamic bad block scan, this erases all data...");
+    LOG_WRN("Running dynamic bad block scan, this erases all bad block marks...");
     dynamic_detect_bad_blocks(flash_device);
-    bad_block_scan_done = true;
-    save_bad_blocks_arr();
+    
   }
-  else {
-    LOG_INF("Running manufacturer bad block scan...");
-    // storage init already does the scan, the save and the flag in the right order
-    bad_block_storage_init(flash_device);
-  }
+  bad_block_scan_done = true;
+  save_bad_blocks_arr();
+  k_mutex_unlock(&disk_access_mutex);
 
   print_bad_block_info();
   LOG_INF("Bad block scan complete! Resetting");
@@ -619,7 +624,9 @@ uint16_t offset, uint8_t flags){
     if (val == 200 || val == 201){
       
       run_bad_block_scan(val == 201);
-      NVIC_SystemReset();
+      if (val == 201){
+        NVIC_SystemReset();
+      }
     }
     #endif
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.

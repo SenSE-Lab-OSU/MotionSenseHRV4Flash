@@ -215,8 +215,10 @@ int bad_block_storage_init(const struct device *dev)
 		return rc;
 	}
 
-	if (bad_block_scan_done) {
-		LOG_INF("manufacturer bad block scan already done, skipping");
+	if (bad_block_scan_done || !IS_ENABLED(CONFIG_BAD_BLOCK_SCAN_AT_START)) {
+		if (bad_block_scan_done){
+			LOG_INF("manufacturer bad block scan already done, skipping");
+		}
 		print_bad_block_info();
 		return 0;
 	}

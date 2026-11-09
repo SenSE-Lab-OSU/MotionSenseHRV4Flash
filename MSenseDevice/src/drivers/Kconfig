@@ -67,6 +67,11 @@ config BAD_BLOCK_SAVING_RUNTIME
     prompt "Allows bad blocks to be registered in a memory array dynamically whenever the ECC flags it and not only during bad block detection"
     default n
 
+menuconfig BAD_BLOCK_SCAN_AT_START
+    bool
+    prompt "Allows a bad block scan to start on device startup, if a scan has not been completed yet."
+    default n
+
 menuconfig RAW_NAND_BAD_BLOCK_SIMULATION
     bool "Simulate bad blocks at the pages registered with add_bad_page()"
     default n

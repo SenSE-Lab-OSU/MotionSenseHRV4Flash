@@ -204,6 +204,12 @@ void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
     
   LOG_INF("USB Status: %d", status);
 
+  // CONNECTED/DISCONNECTED are raised on VBUS detect/remove, so update the charging bit right away
+  // instead of waiting for the next battery_maintenance() pass.
+  if (status == USB_DC_CONNECTED || status == USB_DC_DISCONNECTED){
+    update_charging_state();
+  }
+
 }
 
 static void write_uuid_file(void)
@@ -497,11 +503,10 @@ int main(void)
   
   
   
-
+  k_sleep(K_SECONDS(1));
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  //create_test_files(400);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
@@ -513,7 +518,7 @@ int main(void)
   #endif
 
 
-  k_sleep(K_SECONDS(2));
+  
   
 
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));

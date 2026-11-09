@@ -307,7 +307,7 @@ void reset_log_file(){
 void sensor_write_to_file(const void* data, size_t size, enum sensor_type sensor){
 	struct fs_mount_t* mp = &fs_mnt;
 	MotionSenseFile* MSenseFile;
-	if (storage_percent_full >= 99){
+	if (storage_percent_full >= 98){
 		LOG_WRN("Storage is getting full, aborting write");
 		return;
 	}

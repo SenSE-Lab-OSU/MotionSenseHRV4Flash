@@ -91,9 +91,7 @@ static int check_duplicate_sector_write(const struct disk_info* disk, int sector
 
 	if (!multi_nand_page_is_erased(disk->dev, sector_num)){
 		LOG_WRN("error: attempted duplicate write for sector %i", sector_num);
-		#ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
-		register_bad_block(sector_num);
-		#endif
+		// a page that already holds data is a rewrite, not a bad block, so nothing is registered
 		duplicate_sector_writes++;
 		return -1;
 	}
@@ -358,7 +356,13 @@ static int disk_nand_access_ioctl(struct disk_info *disk, uint8_t cmd, void *buf
     switch (cmd) {
 	case DISK_IOCTL_GET_SECTOR_COUNT:
 		uint32_t sectors = dev_flash_size(dev) / dev_page_size(dev);
-		
+		// get_sector_offset() pushes data up one block for every bad block below it, so
+		// hold back enough sectors at the end that a full table still lands on real pages.
+		// FatFs only reads this at format time, so a device has to be reformatted to see it.
+		if (IS_ENABLED(CONFIG_RAW_NAND_BAD_BLOCK_SAVING)){
+			sectors -= bad_block_detect_limit * NAND_PAGES_PER_ERASE_BLOCK;
+		}
+
 		LOG_INF("sect aval: %i", sectors);
 		(*(uint32_t *)buf) = sectors;
 		break;

@@ -24,7 +24,7 @@
 #include "spi_nand.h"
 #include "jesd216.h"
 #include "flash_priv.h"
-#include "bad_page.h"
+#include "bad_block.h"
 
 int erase_file_table();
 
@@ -80,6 +80,10 @@ int current_erases = 0;
 int ECC_corrections = 0;
 int ECC_err = 0;
 
+int spi_err = 0;
+int bad_write = 0;
+int bad_erase = 0;
+int bad_register = 0;
 
 // die select for each flash
 int current_die[4] = {0};
@@ -180,7 +184,10 @@ static inline void delay_until_exit_dpd_ok(const struct device *const dev)
 #endif /* DT_INST_NODE_HAS_PROP(0, has_dpd) */
 }
 
-
+void print_ecc_status_info(){
+	LOG_INF("tot ECC corrections %d, tot ECC errors %d", ECC_corrections, ECC_err);
+	LOG_INF("bad write %d, bad erase %d, spi_fail %d", bad_write, bad_erase, bad_register);
+}
 
 uint32_t convert_block_to_page(uint32_t page, uint32_t block){
 	return page + (block * NAND_PAGES_PER_ERASE_BLOCK);
@@ -529,16 +536,33 @@ static void release_device(const struct device *dev)
  *
  * @return the non-negative value of the status register, or an error code.
  */
+/* Status register (0xC0) failure bits */
+#define SPI_NAND_STATUS_E_FAIL	BIT(2)	/* 0x04, erase fail */
+#define SPI_NAND_STATUS_P_FAIL	BIT(3)	/* 0x08, program fail */
+
 uint8_t spi_rdsr(const struct device *dev)
 {
 	uint8_t status = get_status(dev);
 	if (status > 3){
 	LOG_WRN("status register: %d", status);
-	}
-	if (status == 255){
-		LOG_ERR("err bad register reading");
-	}
 	
+		if (status == 255){
+			LOG_ERR("err bad register reading");
+			bad_register++;
+		}
+		else {
+			// 0xff is a failed read, so only trust the individual bits otherwise
+			if (status & SPI_NAND_STATUS_P_FAIL){
+				LOG_ERR("program fail flagged in status register");
+				bad_write++;
+			}
+			if (status & SPI_NAND_STATUS_E_FAIL){
+				LOG_ERR("erase fail flagged in status register");
+				bad_erase++;
+			}
+		}
+	}
+
 	return status;
 }
 
@@ -571,6 +595,7 @@ int spi_unlock_memory(const struct device* dev){
 
 // static bad block detection which attempts to figure out whether there were bad blocks set by the manufacturer via a bad block marking.
 int detect_manufacturer_bad_blocks(const struct device* dev){
+	static_scan_in_progress = true;
 	const struct spi_flash_config *cfg = dev->config;
 	int bad_blocks = 0;
 	// bad-block mark is the first spare-area byte (byte 4096) of the first page of each block
@@ -649,7 +674,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 				{
 					bad_blocks++;
 					uint32_t actual_sector = convert_address_to_sector(page_addr);
-					register_bad_sector(actual_sector);
+					register_bad_block(actual_sector);
 					LOG_WRN("bad block mark %02x at flash %d die %d block %d", dest, flash, die, x);
 				}
 			}
@@ -665,70 +690,95 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 	{
 		LOG_WRN("bad block count > 0");
 	}
+	static_scan_in_progress = false;
 	return bad_blocks;
 }
 
 // dynamic bad block detection for chips whose factory bad block marks have been erased.
-// Destructive: for every block it erases, writes a test pattern, reads it back, and
-// flags the block if the erase or program reports a failure (E_Fail/P_Fail) or the
-// readback returns uncorrectable ECC or mismatched data. Only run this on a flash
-// with no data on it (e.g. right after a full chip erase). The block is erased again
-// afterwards so the flash is left empty.
+// Destructive: for every block it erases, programs every page with a test pattern, then
+// reads every page back, and flags the block if the erase or any program reports a
+// failure (E_Fail/P_Fail) or any readback returns uncorrectable ECC or mismatched data.
+// All pages are programmed before any are read, so a page disturbed by programming its
+// neighbours is caught too, and each page's pattern carries its own page number, so a
+// write that lands on the wrong page shows up as a mismatch.
+// Only run this on a flash with no data on it (e.g. right after a full chip erase). The
+// block is erased again afterwards so the flash is left empty.
+// Testing every page is slow (on the order of a few hours for all 4 flashes at 8 MHz SPI),
+// but this is only meant to run once per device.
 static uint8_t dyn_bb_pattern[4096];
 static uint8_t dyn_bb_readback[4096];
 
+static void dyn_bb_fill_pattern(uint32_t page){
+	memset(dyn_bb_pattern, 0xA5, sizeof(dyn_bb_pattern));
+	memcpy(dyn_bb_pattern, &page, sizeof(page));
+}
+
 int dynamic_detect_bad_blocks(const struct device* dev){
+	static_scan_in_progress = true;
 	int bad_blocks = 0;
 	int total_blocks = (dev_flash_size(dev) / dev_page_size(dev)) / 64;
 
-	memset(dyn_bb_pattern, 0xA5, sizeof(dyn_bb_pattern));
-
 	LOG_INF("dynamic bad block scan start, %d blocks", total_blocks);
 	for (int block = 0; block < total_blocks; block++){
+		// the full scan takes hours, so show it's still alive
+		if (block % 256 == 0){
+			LOG_INF("dyn scan: block %d of %d, %d bad so far", block, total_blocks, bad_blocks);
+		}
 		uint32_t first_page = convert_block_to_page(0, block);
-		// selects the right flash and die, and returns the die-local page address
-		off_t addr = convert_page_to_address(dev, first_page);
 		bool block_bad = false;
 
-		int status = spi_nand_block_erase(dev, addr);
-		if (status != 0){
-			LOG_WRN("dyn scan: erase fail stat %d block %d", status, block);
+		// Everything goes through the multi_nand layer, so the scan sees exactly what the rest
+		// of the system sees: the bad-block simulation applies, and erase/program failures are
+		// classified by nand_op_result(). Only a definite fail counts here - an unknown status
+		// (SPI error, unreadable status register) is left to the readback to settle.
+		if (multi_nand_block_erase(dev, first_page) == FLASH_ERASE_FAILURE){
+			LOG_WRN("dyn scan: erase fail block %d", block);
 			block_bad = true;
 		}
 
-		if (!block_bad){
-			status = spi_nand_page_write(dev, addr, dyn_bb_pattern, sizeof(dyn_bb_pattern));
-			if (status != 0){
-				LOG_WRN("dyn scan: program fail stat %d block %d", status, block);
+		// pages within a block have to be programmed in ascending order
+		for (uint32_t p = 0; p < NAND_PAGES_PER_ERASE_BLOCK && !block_bad; p++){
+			dyn_bb_fill_pattern(first_page + p);
+			if (multi_nand_page_write(dev, first_page + p, dyn_bb_pattern,
+						  sizeof(dyn_bb_pattern)) == FLASH_PROGRAM_FAILURE){
+				LOG_WRN("dyn scan: program fail block %d page %u", block, p);
 				block_bad = true;
 			}
 		}
 
-		if (!block_bad){
+		for (uint32_t p = 0; p < NAND_PAGES_PER_ERASE_BLOCK && !block_bad; p++){
+			dyn_bb_fill_pattern(first_page + p);
 			memset(dyn_bb_readback, 0, sizeof(dyn_bb_readback));
-			int ret = spi_nand_page_read(dev, addr, dyn_bb_readback);
+			int ret = multi_nand_page_read(dev, first_page + p, dyn_bb_readback);
 			if (ret == FLASH_TOO_MANY_ECC_ERROR){
-				LOG_WRN("dyn scan: uncorrectable ECC block %d", block);
+				LOG_WRN("dyn scan: uncorrectable ECC block %d page %u", block, p);
 				block_bad = true;
 			}
-			else if (ret != 0 || memcmp(dyn_bb_pattern, dyn_bb_readback, sizeof(dyn_bb_pattern)) != 0){
-				LOG_WRN("dyn scan: readback mismatch block %d", block);
+			// the data is the real answer, so an unclear status alone doesn't fail the page
+			else if (memcmp(dyn_bb_pattern, dyn_bb_readback, sizeof(dyn_bb_pattern)) != 0){
+				LOG_WRN("dyn scan: readback mismatch block %d page %u (stat %d)", block, p, ret);
 				block_bad = true;
 			}
 		}
 
-		// leave the block erased so the filesystem still sees it as free space
-		spi_nand_block_erase(dev, addr);
+		// leave the block erased so the filesystem still sees it as free space. A block that
+		// can't be erased afterwards is bad too, and multi_nand_block_erase has already
+		// recorded it, so count it here to keep the total honest.
+		if (multi_nand_block_erase(dev, first_page) == FLASH_ERASE_FAILURE){
+			LOG_WRN("dyn scan: final erase fail block %d", block);
+			block_bad = true;
+		}
 
 		if (block_bad){
 			bad_blocks++;
-			register_bad_sector(first_page);
+			register_bad_block(first_page);
 		}
 	}
 
 	set_die(dev, 0);
 	set_flash(dev, 0);
 	LOG_INF("dynamic bad block scan done, %d bad blocks", bad_blocks);
+	static_scan_in_progress = false;
 	return bad_blocks;
 }
 
@@ -746,18 +796,105 @@ int spi_nand_parameter_page_read(const struct device* dev, void* dest){
 }
 
 // since spi_nand_page_read only works on one flash, we have to do work to make it work 
+// takes a physical page number spanning all 4 flashes, selects the right flash/die
+// and reads. Bad block remapping belongs to the FTL above this layer, not here: the
+// caller passes the page it actually wants touched.
 int multi_nand_page_read(const struct device* dev, uint32_t page_number, void* buffer){
 	int ret;
 	if (current_reads % 5000 == 1000){
-		print_bad_sect_info();
+		print_bad_block_info();
+		print_ecc_status_info();
 	}
-	int non_corrupt_sector = get_sector_offset(page_number);
-	off_t addr = convert_page_to_address(dev, non_corrupt_sector);
-	ret = spi_nand_page_read(dev, addr, buffer);
+	off_t addr = convert_page_to_address(dev, page_number);
+	// folds away entirely when the simulation Kconfig is off
+	if (IS_ENABLED(CONFIG_RAW_NAND_BAD_BLOCK_SIMULATION) &&
+	    is_simulated_bad_page(page_number)){
+		ret = spi_nand_page_read_bad_sim(dev, addr, buffer);
+	}
+	else {
+		ret = spi_nand_page_read(dev, addr, buffer);
+	}
 	if (ret == FLASH_TOO_MANY_ECC_ERROR){
-		register_bad_sector(non_corrupt_sector);
+		register_bad_block(page_number);
 	}
 	return ret;
+}
+
+/* Turns what spi_nand_page_write / spi_nand_block_erase return into a result. They
+ * return the raw status register, which also carries the ECC bits of the last read and
+ * the write-enable latch, so only the operation's own fail bit means it failed. A
+ * negative value is an SPI transfer error from before the operation ran, and 253
+ * (status read failed) or 255 (bus read back all ones) say nothing about the
+ * operation, so those come back as errors without implicating the block.
+ */
+static int nand_op_result(int raw, uint8_t fail_bit, int fail_code){
+	if (raw < 0){
+		return raw;
+	}
+	if (raw == 253 || raw == 255){
+		return -EIO;
+	}
+	if (raw & fail_bit){
+		return fail_code;
+	}
+	return 0;
+}
+
+// write counterpart to multi_nand_page_read: takes a physical page number spanning
+// all 4 flashes, selects the right flash/die and writes. A program failure (P_Fail)
+// marks the block bad, mirroring the read path.
+// Returns 0, FLASH_PROGRAM_FAILURE, or a negative error when the status is unknown.
+int multi_nand_page_write(const struct device* dev, uint32_t page_number, const void* buffer, size_t size){
+	off_t addr = convert_page_to_address(dev, page_number);
+	int ret = nand_op_result(spi_nand_page_write(dev, addr, buffer, size),
+				 SPI_NAND_STATUS_P_FAIL, FLASH_PROGRAM_FAILURE);
+	if (ret == FLASH_PROGRAM_FAILURE){
+		LOG_ERR("program fail at sect %d", page_number);
+		register_bad_block(page_number);
+	}
+	else if (ret != 0){
+		LOG_WRN("program status unknown (%d) at sect %d", ret, page_number);
+	}
+	return ret;
+}
+
+// erase counterpart to multi_nand_page_read/write: takes a physical page number
+// spanning all 4 flashes, selects the right flash/die and erases the block that page
+// belongs to. An erase failure (E_Fail) marks the block bad, like the write path.
+// Returns 0, FLASH_ERASE_FAILURE, or a negative error when the status is unknown.
+int multi_nand_block_erase(const struct device* dev, uint32_t page_number){
+	off_t addr = convert_page_to_address(dev, page_number);
+	int ret = nand_op_result(spi_nand_block_erase(dev, addr),
+				 SPI_NAND_STATUS_E_FAIL, FLASH_ERASE_FAILURE);
+	if (ret == FLASH_ERASE_FAILURE){
+		LOG_WRN("erase fail at sect %d", page_number);
+		register_bad_block(page_number);
+	}
+	else if (ret != 0){
+		LOG_WRN("erase status unknown (%d) at sect %d", ret, page_number);
+	}
+	return ret;
+}
+
+static uint8_t page_erased_buffer[4096];
+
+/* True if every byte of the page still reads as erased. Deliberately free of any
+ * side effects: a written page is not a bad one, so recording bad blocks is left
+ * to the caller. Used by the custom FTL's duplicate write guard and by
+ * dhara_nand_is_free().
+ */
+bool multi_nand_page_is_erased(const struct device* dev, uint32_t page_number){
+	int ret = multi_nand_page_read(dev, page_number, page_erased_buffer);
+	if (ret != 0){
+		// a page we cannot read cleanly is not one we can safely program into
+		return false;
+	}
+	for (int x = 0; x < 4096; x++){
+		if (page_erased_buffer[x] != 0xff){
+			return false;
+		}
+	}
+	return true;
 }
 
 int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
@@ -791,6 +928,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 
 	res = spi_nand_access(dev, &pread_cinstr_cfg);
 	if (res != 0) {
+		spi_err++;
 		LOG_WRN("read transfer error: %x", res);
 		goto out;
 	}
@@ -798,6 +936,7 @@ int spi_nand_page_read(const struct device* dev, off_t page_addr, void* dest){
 
 	res = spi_nand_access(dev, &cread_cinstr_cfg);
 	if (res != 0 || wait_res != 0) {
+		spi_err++;
 		LOG_WRN("buffer transfer error: %x", res);
 		goto out;
 	}
@@ -864,6 +1003,7 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	res = spi_nand_access(dev, &pl_cinstr_cfg);
 	if (res != 0) {
 		LOG_WRN("load error: %x", res);
+		spi_err++;
 		release_device(dev);
 		return res;
 	}
@@ -875,6 +1015,7 @@ int spi_nand_page_write(const struct device* dev, off_t page_address, const void
 	res = spi_nand_access(dev, &pe_cinstr_cfg);
 	if (res != 0){
 		LOG_WRN("lfm_start: %x", res);
+		spi_err++;
 		release_device(dev);
 		return res;
 	}
@@ -968,7 +1109,7 @@ int spi_nand_whole_chip_erase(const struct device* dev){
 
 // resets the bad block storage.
 int spi_nand_multi_chip_reset_bad_block(const struct device* dev){
-	int ret = erase_bad_sectors_arr();
+	int ret = erase_bad_blocks_arr();
 	if (ret != 0){
 		LOG_ERR("fail to erase bad sect");
 	}
@@ -982,7 +1123,7 @@ int spi_nand_multi_chip_erase(const struct device* dev){
 		set_flash(dev, i);
 		spi_nand_whole_chip_erase(dev);
 		LOG_INF("chip %i erased.", i + 1);
-		k_sleep(K_MSEC(500));
+		k_sleep(K_MSEC(200));
 	}
 	set_flash(dev, 0);
 	LOG_INF("erasing file table (nor)");
@@ -1164,11 +1305,11 @@ int spi_init(const struct device *dev)
 		ret = spi_configure(dev, cfg);
 
 	}
-	// restores the bad sector table and runs the one-time manufacturer bad block
+	// restores the bad block table and runs the one-time manufacturer bad block
 	// scan; both are persisted through the settings subsystem
-	if (IS_ENABLED(CONFIG_SETTINGS)){
-	//bad_sector_storage_init(dev);
-	}
+	
+	bad_block_storage_init(dev);
+	
 
 	set_flash(dev, 0);
 

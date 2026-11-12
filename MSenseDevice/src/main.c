@@ -10,6 +10,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include "drivers/nand/nand_disk.h"
 #include <nrfx.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
@@ -31,7 +32,7 @@
 
 
 
-LOG_MODULE_REGISTER(main);
+LOG_MODULE_REGISTER(main, 3);
 
 
 
@@ -202,6 +203,12 @@ static int settings_runtime_load(void)
 void usb_status_cb(enum usb_dc_status_code status, const uint8_t *param){
     
   LOG_INF("USB Status: %d", status);
+
+  // CONNECTED/DISCONNECTED are raised on VBUS detect/remove, so update the charging bit right away
+  // instead of waiting for the next battery_maintenance() pass.
+  if (status == USB_DC_CONNECTED || status == USB_DC_DISCONNECTED){
+    update_charging_state();
+  }
 
 }
 
@@ -496,11 +503,10 @@ int main(void)
   
   
   
-
+  k_sleep(K_SECONDS(1));
   // Setup our Flash Filesystem
   setup_disk();
   k_sleep(K_SECONDS(1));
-  //create_test_files(400);
   #ifdef CONFIG_DEBUG  
   #if CONFIG_DISK_DRIVER_RAW_NAND
     set_read_only(true);
@@ -512,7 +518,7 @@ int main(void)
   #endif
 
 
-  k_sleep(K_SECONDS(2));
+  
   
 
   gpio0_device = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -601,10 +607,12 @@ int main(void)
     }
 
     if (global_update % 5 == 0){
-      battery_maintenance();
-      get_current_unix_time();
-      LOG_INF("state: %d", k_work_busy_get(&accel_work_item.work));
+      uint64_t current_time_value = get_current_unix_time();
+      LOG_INF("status update, time %llu", current_time_value);
       LOG_INF("connected: %d, collecting: %d", connectedFlag, collecting_data);
+      battery_maintenance();
+      print_flash_status_info();
+      
     }
 
     if (!connectedFlag){

@@ -8,11 +8,17 @@
 #include <sys/types.h>
 #include <zephyr/device.h>
 
+/* Max entries in the bad block table. Also sizes the sectors nand_disk.c holds back
+ * at the end of the disk, so get_sector_offset() always has real pages to shift into.
+ */
+#define bad_block_detect_limit 100
 
 /* Persisted through the settings subsystem so the manufacturer bad-block scan
  * only ever runs on the very first boot of a device.
  */
 extern bool bad_block_scan_done;
+
+extern bool static_scan_in_progress;
 
 /* Number of entries currently live in the bad block table. */
 extern int total_bad_blocks;

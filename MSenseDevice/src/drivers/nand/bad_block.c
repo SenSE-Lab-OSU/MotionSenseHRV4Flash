@@ -32,9 +32,9 @@ LOG_MODULE_REGISTER(spi_nand_bad_block, CONFIG_FLASH_LOG_LEVEL);
 /* Table size in entries of 4 bytes. Both backends cap this: the settings backend by
  * the NVS per-entry limit of (sector_size - 4 * ate_size), 4064 bytes or 1016
  * entries on a 4096 byte page, and the NOR backend by one erase sector minus the
- * header, which the BUILD_ASSERT below checks.
+ * header, which the BUILD_ASSERT below checks. bad_block_detect_limit itself is
+ * defined in bad_block.h, since nand_disk.c sizes its end-of-disk reserve from it.
  */
-#define bad_block_detect_limit 200
 
 #ifdef CONFIG_RAW_NAND_BAD_BLOCK_SAVING
 
@@ -63,7 +63,7 @@ uint32_t bad_blocks[bad_block_detect_limit] = {0};
  * the whole table back to NVS on each hit would rewrite the same value hundreds
  * of times, so the scan defers the write and saves once when it finishes.
  */
-static bool static_scan_in_progress;
+bool static_scan_in_progress = false;
 
 
 #ifdef CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_NOR
@@ -215,8 +215,13 @@ int bad_block_storage_init(const struct device *dev)
 		return rc;
 	}
 
-	if (bad_block_scan_done) {
-		LOG_INF("manufacturer bad block scan already done, skipping");
+	if (bad_block_scan_done || !IS_ENABLED(CONFIG_BAD_BLOCK_SCAN_AT_START)) {
+		if (bad_block_scan_done){
+			LOG_INF("manufacturer bad block scan already done, skipping");
+		}
+		else {
+			LOG_WRN("bad block scan not yet done, recommend doing via bluetooth command.");
+		}
 		print_bad_block_info();
 		return 0;
 	}
@@ -433,7 +438,7 @@ int mark_bad_block(uint32_t sector_num){
 int register_bad_block(uint32_t sector_num){
 	// after the first boot scan the table is treated as the fixed factory bad
 	// block list, unless runtime registration is explicitly enabled
-	if (!bad_block_scan_done || IS_ENABLED(CONFIG_BAD_BLOCK_SAVING_RUNTIME)){
+	if (static_scan_in_progress || IS_ENABLED(CONFIG_BAD_BLOCK_SAVING_RUNTIME)){
 		LOG_INF("registering bad block sect %u", sector_num);
 		return mark_bad_block(sector_num);
 	}
@@ -470,6 +475,10 @@ bool is_block_bad(uint32_t sector_num){
  * match either and the walk can stop there.
  */
 int get_sector_offset(int sector_num){
+	// the file table lives on the NOR, so a bad NAND block under it must not move it
+	if (sector_num < file_table_sector_num){
+		return sector_num;
+	}
 	for (int x = 0; x < total_bad_blocks; x++){
 		if (bad_blocks[x] > (uint32_t)sector_num){
 			break;

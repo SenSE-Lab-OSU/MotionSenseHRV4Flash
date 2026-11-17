@@ -80,8 +80,8 @@ static const struct gpio_dt_spec icm20948_fsync =
 	GPIO_DT_SPEC_GET(ICM20948_NODE, fsync_gpios);
 
 static struct gpio_callback icm20948_int_callback;
-static struct k_mutex icm20948_io_lock;
-static struct k_mutex icm20948_sample_lock;
+static K_MUTEX_DEFINE(icm20948_io_lock);
+static K_MUTEX_DEFINE(icm20948_sample_lock);
 static struct icm20948_accel_sample icm20948_latest_sample;
 static uint8_t icm20948_spi_tx[ICM20948_FIFO_READ_BUFFER_BYTES];
 static uint8_t icm20948_spi_rx[ICM20948_FIFO_READ_BUFFER_BYTES];

@@ -563,10 +563,7 @@ static void run_bad_block_scan(bool dynamic)
   }
 
   reset_lock = true;
-  // keep USB mass storage (still up with CONFIG_USB_ALWAYS_ON) off the flash bus for the
-  // whole scan. Its reads share pins with the NAND and switch the selected flash/die,
-  // which makes healthy blocks fail readback. Host reads just stall until the reset.
-  k_mutex_lock(&disk_access_mutex, K_FOREVER);
+  // disk_access_mutex is already held by bt_reset(), which keeps USB off the bus
   erase_bad_blocks_arr();
 
   LOG_INF("Running manufacturer bad block scan...");
@@ -580,7 +577,6 @@ static void run_bad_block_scan(bool dynamic)
   }
   bad_block_scan_done = true;
   save_bad_blocks_arr();
-  k_mutex_unlock(&disk_access_mutex);
 
   print_bad_block_info();
   LOG_INF("Bad block scan complete! Resetting");
@@ -609,6 +605,13 @@ uint16_t offset, uint8_t flags){
   LOG_INF("entered code: %i", val);
   if ((val == 68 || val == 121 || val == 132 || val == 200 || val == 201) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
+    // Hold the disk lock from here until the reboot, so USB mass storage (still up with
+    // CONFIG_USB_ALWAYS_ON) can't touch the flash bus during the filesystem shutdown,
+    // the erase, or a scan. Its reads switch the selected flash/die, which would send
+    // erases to the wrong die or fail healthy blocks in a scan. Host reads just stall.
+    // Every path below ends in a reset, so this is never unlocked. The mutex is
+    // recursive, so the filesystem shutdown can still go through disk_access.
+    k_mutex_lock(&disk_access_mutex, K_FOREVER);
     LOG_INF("disconnecting bluetooth.. \n");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     bt_le_adv_stop();

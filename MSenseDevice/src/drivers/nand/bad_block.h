@@ -32,6 +32,11 @@ int bad_block_storage_init(const struct device *dev);
 int save_bad_blocks_arr();
 int load_bad_blocks_arr();
 int erase_bad_blocks_arr();
+
+/* Clears the scan done flag (persisted) but keeps the table. Used when something
+ * goes wrong that the stored table may not account for, e.g. a block failing erase.
+ */
+int clear_bad_block_scan_done();
 int register_bad_block(uint32_t sector_num);
 
 /* Unconditional form of register_bad_block(), for callers that already know the

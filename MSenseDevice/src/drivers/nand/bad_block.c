@@ -255,6 +255,19 @@ int erase_bad_blocks_arr()
 	return ret;
 }
 
+/* Drops the scan done flag and keeps the table, so a later boot can see something
+ * went wrong. The flag rides in the header, so rewriting the table persists it.
+ */
+int clear_bad_block_scan_done()
+{
+	if (!bad_block_scan_done){
+		return 0;
+	}
+	bad_block_scan_done = false;
+	LOG_WRN("clearing bad block scan done flag");
+	return save_bad_blocks_arr();
+}
+
 #else /* CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_SETTINGS */
 
 /* Only the live entries are persisted, so a device with a handful of bad blocks
@@ -381,6 +394,24 @@ int erase_bad_blocks_arr()
 	return ret;
 }
 
+/* Drops the scan done flag and keeps the table, so a later boot can see something
+ * went wrong. The flag has its own key here, separate from the table.
+ */
+int clear_bad_block_scan_done()
+{
+	if (!bad_block_scan_done){
+		return 0;
+	}
+	bad_block_scan_done = false;
+	LOG_WRN("clearing bad block scan done flag");
+	int ret = settings_save_one(BAD_BLOCK_SCAN_DONE_KEY, &bad_block_scan_done,
+				    sizeof(bad_block_scan_done));
+	if (ret != 0){
+		LOG_ERR("fail to clear bad block scan flag: %d", ret);
+	}
+	return ret;
+}
+
 #endif /* CONFIG_RAW_NAND_BAD_BLOCK_STORAGE_NOR */
 
 void print_bad_block_info()
@@ -503,6 +534,7 @@ bool is_block_bad(uint32_t sector_num){return false;}
 int save_bad_blocks_arr(){return 0;}
 int load_bad_blocks_arr(){return 0;}
 int erase_bad_blocks_arr(){return 0;}
+int clear_bad_block_scan_done(){return 0;}
 void print_bad_block_info(){}
 int get_sector_offset(int sector_num){return sector_num;}
 

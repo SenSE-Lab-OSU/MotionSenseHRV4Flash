@@ -601,6 +601,13 @@ void ppg_bluetooth_preprocessing_raw(uint32_t *led1A, uint32_t *led1B, uint32_t 
 
 uint32_t ppg_packet_counter = 0;
 
+/* An occasional empty FIFO read is normal timing jitter, but a run of them means the
+ * sensor isn't producing data. Without a warning that only shows up as a PPG file
+ * that stops growing, so warn every this many empty reads in a row.
+ */
+#define PPG_EMPTY_READ_WARN 32
+static uint32_t ppg_empty_reads = 0;
+
 
 void read_ppg_fifo_buffer(struct k_work *item)
 {
@@ -637,9 +644,16 @@ void read_ppg_fifo_buffer(struct k_work *item)
   int number_of_samples = sampleCount[2] / 4;
 
   if (number_of_samples == 0) {
-    LOG_DBG("PPG FIFO has no complete frame yet: %u items", sampleCount[2]);
+    ppg_empty_reads++;
+    if ((ppg_empty_reads % PPG_EMPTY_READ_WARN) == 0) {
+      LOG_WRN("PPG FIFO empty for %u reads in a row (%u items)", ppg_empty_reads, sampleCount[2]);
+    }
+    else {
+      LOG_DBG("PPG FIFO has no complete frame yet: %u items", sampleCount[2]);
+    }
     return;
   }
+  ppg_empty_reads = 0;
 
   uint8_t partial_fifo_items = sampleCount[2] % 4;
   if (partial_fifo_items != 0)

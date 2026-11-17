@@ -621,7 +621,7 @@ int detect_manufacturer_bad_blocks(const struct device* dev){
 				current_reads++;
 				// LOG_DBG("reading bytes at address %d", page_addr);
 				nrfx_err_t res = 0;
-				uint8_t dest = 0xFF;
+				uint8_t dest = 0x00;
 
 				uint8_t addr_buf[] = {
 					page_addr >> 16,
@@ -1082,15 +1082,27 @@ int spi_nand_chip_erase(const struct device* device) {
 	block_count /= NAND_PAGES_PER_ERASE_BLOCK;
 	//block_count = 4096;
 	LOG_INF("chip erase start %i bl", block_count);
+	bool erase_failed = false;
 	for (int current_block = 0; current_block <= block_count; current_block++){
 		block_address = convert_block_to_singledie_address(current_block);
 		status = spi_nand_block_erase(device, block_address);
+		// only E_FAIL means the erase failed: the status also carries ECC and write
+		// enable bits, and 253/255 say nothing about the block
+		if (nand_op_result(status, SPI_NAND_STATUS_E_FAIL, FLASH_ERASE_FAILURE) == FLASH_ERASE_FAILURE){
+			LOG_ERR("erase fail block %d", current_block);
+			erase_failed = true;
+		}
 		if (status != 0){
 			LOG_WRN("err block erase %d: %i", current_block, status);
 			continue;
 		}
 	}
-	LOG_INF("chip erase done, stat, %i", status); 
+	// a block that won't erase may not be in the stored table, so drop the scan done
+	// flag to record that something went wrong
+	if (erase_failed){
+		clear_bad_block_scan_done();
+	}
+	LOG_INF("chip erase done, stat, %i", status);
 	return status;
 }
 

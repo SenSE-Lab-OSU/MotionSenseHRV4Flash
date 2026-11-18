@@ -10,6 +10,9 @@
  * software stand-in for PSA.
  */
 
+// Only built when file system encryption is on, since it needs the PSA crypto options.
+#ifdef CONFIG_MSENSE_FS_ENCRYPTION
+
 #include "fs_crypt.h"
 
 #include <errno.h>
@@ -222,3 +225,5 @@ int fs_crypt_decrypt(uint8_t *buf, size_t len, uint64_t sector)
 	}
 	return xts_crypt(data_key_id, tweak_key_id, buf, len, sector, false);
 }
+
+#endif /* CONFIG_MSENSE_FS_ENCRYPTION */

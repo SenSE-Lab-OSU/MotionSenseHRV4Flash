@@ -98,6 +98,33 @@ config USB_WRITABLE
 		for this to truly work, we must be using a file system driver that supports reading and writing, 
 		like flash area (NOR) or dhara (NAND)
 
+config MSENSE_FS_ENCRYPTION
+	bool "Encrypt file system data with hardware AES (CryptoCell-312, src/fs_crypt.c)"
+	default n
+	# AES on the CryptoCell-312 through PSA. Bluetooth keeps using TinyCrypt.
+	select NRF_SECURITY
+	select MBEDTLS_PSA_CRYPTO_C
+	select PSA_CRYPTO_DRIVER_CC3XX
+	select PSA_WANT_KEY_TYPE_AES
+	select PSA_WANT_AES_KEY_SIZE_128
+	select PSA_WANT_ALG_ECB_NO_PADDING
+	# psa_crypto_init() also brings up the random number generator
+	select PSA_WANT_GENERATE_RANDOM
+	select MBEDTLS_ENABLE_HEAP
+	help
+		Builds src/fs_crypt.c, loads the file system encryption key and self-tests the
+		crypto hardware at boot. Off by default while the encryption work is in
+		progress, so none of the crypto stack is built unless this is set.
+
+# select can't turn a symbol off or set a number, so these two only change the
+# default when encryption is on. This file is read before Zephyr's Kconfig, so its
+# defaults take priority; prj.conf can still override them.
+config PSA_CRYPTO_DRIVER_OBERON
+	default n if MSENSE_FS_ENCRYPTION
+
+config MBEDTLS_HEAP_SIZE
+	default 8192 if MSENSE_FS_ENCRYPTION
+
 config MSENSE_USB_SECURITY
 	bool "Configures USB security mode, which requires a password in order to enable to usb behavior. Not Currently Implemented."
 	default n

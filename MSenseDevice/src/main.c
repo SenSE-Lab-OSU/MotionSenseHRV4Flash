@@ -22,6 +22,9 @@
 #include "common.h"
 #include "BLEService.h"
 #include "device_identity.h"
+#ifdef CONFIG_MSENSE_FS_ENCRYPTION
+#include "fs_crypt_key.h"
+#endif
 #include "zephyrfilesystem.h"
 #include <zephyr/shell/shell.h>
 #include <zephyr/bluetooth/bluetooth.h>
@@ -500,6 +503,17 @@ int main(void)
 	if (identity_err) {
 		LOG_ERR("Unable to initialize factory device identity: %d", identity_err);
 	}
+
+#ifdef CONFIG_MSENSE_FS_ENCRYPTION
+	// Load the file system encryption key and self-test the crypto hardware.
+	// The disk driver does not encrypt yet, so a failure here is only logged.
+	int crypt_err = fs_crypt_init(fs_crypt_dev_data_key, fs_crypt_dev_tweak_key);
+	if (crypt_err) {
+		LOG_ERR("fs_crypt init failed: %d", crypt_err);
+	} else {
+		LOG_INF("fs_crypt ready, hardware AES self-test passed");
+	}
+#endif
   
   
   

@@ -1,5 +1,15 @@
 # ECG filesystem-cleanup HIL
 
+## Required concurrency coverage
+
+For concurrency or lifecycle changes, also follow the
+[ECG/PPG concurrency protocol](../../../docs/hil-concurrency-protocol.md).
+The accelerometer regression requires observed blocking and handoff on both
+real driver mutexes (cases C1/C2), plus data progress and stop/restart. The
+runners below do not implement those hooks or prove those acquisitions; report
+that coverage separately as NOT RUN until executed. A successful smoke or soak
+run alone does not satisfy the concurrency protocol.
+
 This production-like ECG test runs two normal collection sessions without a
 reboot, then validates only files newly created by each session. It exercises
 the logger work item's first initialization and its reuse after stop/start. It

@@ -1,5 +1,12 @@
 # PPG production functional HIL
 
+For concurrency or lifecycle changes, also follow the
+[ECG/PPG concurrency protocol](../../../docs/hil-concurrency-protocol.md),
+selecting applicable shared-object, stop/drain, backpressure and transition
+cases C3-C6. The runners below do not deterministically force or prove those
+interleavings. Record their coverage separately; ordinary functional/endurance
+PASS is not proof of blocking, handoff, or recovery from late worker failures.
+
 ## Extended streaming endurance HIL
 
 `run_extended_streaming_hil.py` runs a destructive-at-start, production-image

@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include "error.h"
 
+
+
 const char *dhara_strerror(dhara_error_t err)
 {
 	static const char *const messages[DHARA_E_MAX] = {

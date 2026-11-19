@@ -5,7 +5,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usb_device.h>
-#include "drivers/jdec_nor/custom_qspi.h"
 
 #include "ppgSensor.h"
 #include "imuSensor.h"
@@ -25,9 +24,12 @@
 #error "IMU_RTC_TICK_HZ must divide the 32768 Hz RTC clock exactly"
 #endif
 
-#if CONFIG_DISK_DRIVER_RAW_NAND
+// either disk driver exposes the same nand_disk.h surface, and spi_nand.h is what
+// pulls in the zephyr flash API used by the chip erase path below
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
 #include "drivers/nand/spi_nand.h"
 #include "drivers/nand/nand_disk.h"
+#include "drivers/nand/bad_block.h"
 #endif
 
 
@@ -387,7 +389,7 @@ void reset_device(bool reset_bad_blocks){
   if (device_is_ready(flash_device)){
     LOG_INF("flash dev eraseing... \n");
     reset_lock = true;
-    #if CONFIG_DISK_DRIVER_RAW_NAND
+    #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
     if (reset_bad_blocks){
       LOG_WRN("Erasing bad block table...");
       spi_nand_multi_chip_reset_bad_block(flash_device);
@@ -544,6 +546,44 @@ void storage_clear_led();
 
 
 
+#if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
+/* Re-runs a bad block scan on request from the reset characteristic. The stored
+ * table is cleared first: register_bad_block() only records while the one time scan
+ * flag is down, so without that a rescan would find blocks and then discard them.
+ *
+ * The dynamic scan is destructive. It erases and rewrites every block to find the
+ * ones that fail, so it is only meaningful on a chip with no data on it.
+ */
+static void run_bad_block_scan(bool dynamic)
+{
+  const struct device* flash_device = DEVICE_DT_GET(DT_ALIAS(spi_flash0));
+  if (!device_is_ready(flash_device)){
+    LOG_ERR("flash device not ready, skipping bad block scan");
+    return;
+  }
+
+  reset_lock = true;
+  // disk_access_mutex is already held by bt_reset(), which keeps USB off the bus
+  erase_bad_blocks_arr();
+
+  LOG_INF("Running manufacturer bad block scan...");
+
+	detect_manufacturer_bad_blocks(flash_device);
+
+  if (dynamic){
+    LOG_WRN("Running dynamic bad block scan, this erases all bad block marks...");
+    dynamic_detect_bad_blocks(flash_device);
+    
+  }
+  bad_block_scan_done = true;
+  save_bad_blocks_arr();
+
+  print_bad_block_info();
+  LOG_INF("Bad block scan complete! Resetting");
+  k_sleep(K_SECONDS(2));
+}
+#endif
+
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
@@ -563,8 +603,15 @@ uint16_t offset, uint8_t flags){
   // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
-  if ((val == 68 || val == 121 || val == 132) && !collecting_data){
+  if ((val == 68 || val == 121 || val == 132 || val == 200 || val == 201) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
+    // Hold the disk lock from here until the reboot, so USB mass storage (still up with
+    // CONFIG_USB_ALWAYS_ON) can't touch the flash bus during the filesystem shutdown,
+    // the erase, or a scan. Its reads switch the selected flash/die, which would send
+    // erases to the wrong die or fail healthy blocks in a scan. Host reads just stall.
+    // Every path below ends in a reset, so this is never unlocked. The mutex is
+    // recursive, so the filesystem shutdown can still go through disk_access.
+    k_mutex_lock(&disk_access_mutex, K_FOREVER);
     LOG_INF("disconnecting bluetooth.. \n");
     bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     bt_le_adv_stop();
@@ -574,6 +621,17 @@ uint16_t offset, uint8_t flags){
     
     storage_clear_led();
     k_sleep(K_SECONDS(1));
+    #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
+    // 200 rescans for the factory bad block marks, 201 runs the destructive scan.
+    // Both rebuild the bad block table rather than clearing user data.
+    if (val == 200 || val == 201){
+      
+      run_bad_block_scan(val == 201);
+      if (val == 201){
+        NVIC_SystemReset();
+      }
+    }
+    #endif
     // 68 is for a whole reset, meaning we clear the flash memory of all data too.
     if (val == 68 || val == 132){
       reset_device(val == 132);

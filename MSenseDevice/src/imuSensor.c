@@ -582,6 +582,9 @@ void getIMUID(){
       uint8_t txLen=2,rxLen=2;
       spiReadWriteIMU(tx_buffer, txLen, rx_buffer, rxLen);
       LOG_INF("Chip ID from motion sensor=%x\n",rx_buffer[1]);
+      if (rx_buffer == 0){
+        LOG_ERR("Invalid IMU Chip ID");
+      }
 }
 
 void motionSensitivitySampling_config(void){

@@ -10,6 +10,7 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/bluetooth/services/bas.h>
+#include <hal/nrf_usbreg.h>
 #include <zephyr/../../drivers/sensor/ti/bq274xx/bq274xx.h> // screw you zephyr 
 #include "batterymonitordt.h"
 #include "BLEService.h"
@@ -56,6 +57,25 @@ void bq274xx_show_values(const char *type, struct sensor_value value)
 	else
 	{
 		printk("%s: %d.%06d\n", type, value.val1, value.val2);
+	}
+}
+
+/* VBUSDETECT in the USB regulator is valid whether or not the USB stack is enabled,
+ so this works even when security_lock keeps usb_enable() from being called. */
+bool vbus_present(void)
+{
+	return (nrf_usbreg_status_get(NRF_USBREGULATOR) & NRF_USBREG_STATUS_VBUSDETECT_MASK) != 0;
+}
+
+/* Called from the periodic battery update and from the USB status callback on plug/unplug. */
+void update_charging_state(void)
+{
+	bool current_battery_charging = vbus_present();
+	if (current_battery_charging != battery_charging)
+	{
+		// set the flag before notifying, status_reg_ble_notification() copies the current flag values
+		battery_charging = current_battery_charging;
+		status_reg_ble_notification();
 	}
 }
 
@@ -137,17 +157,14 @@ void dt_update_battery(const struct device *dev, bool extra_debug)
 
 	bt_bas_set_battery_level(battery_level);
 
+	// gauge DSG flag is only logged for comparison now, the charging status bit comes from VBUS.
 	uint16_t flags_value;
 	const struct device *battery_device = DEVICE_DT_GET(DT_INST(0, ti_bq274xx));
-	bq274xx_cmd_reg_read(battery_device, 0x06, &flags_value);
-	bool current_battery_charging = !(flags_value & 1);
-	if (current_battery_charging != battery_charging)
-	{
-		status_reg_ble_notification();
-	}
-	battery_charging = current_battery_charging;
-	printk("register status: %hu \n", flags_value);
-	printk("is charging: %d \n", battery_charging);
+	bq274xx_cmd_reg_read(battery_device, BQ274XX_COMMAND_FLAGS, &flags_value);
+	printk("register status: %hu, gauge says charging: %d \n", flags_value, !(flags_value & 1));
+
+	update_charging_state();
+	printk("is charging (vbus): %d \n", battery_charging);
 
 	if (extra_debug)
 	{

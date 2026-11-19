@@ -75,6 +75,8 @@ extern int battery_level;
 
 
 void dt_update_battery(const struct device *dev, bool extra_debug);
+bool vbus_present(void);
+void update_charging_state(void);
 
 
 

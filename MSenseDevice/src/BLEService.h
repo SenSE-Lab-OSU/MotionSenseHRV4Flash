@@ -173,6 +173,7 @@ void ppgData_notify(struct k_work *item);
 
 void start_stop_device_collection(uint8_t val);
 void reset_device(bool reset_bad_blocks);
+void ppg_enter_ship_mode(void);
 
 #ifdef CONFIG_MSENSE3_BLUETOOTH_DATA_UPDATES
 void ppg_send(struct bt_conn *conn, const uint8_t *data, uint16_t len);

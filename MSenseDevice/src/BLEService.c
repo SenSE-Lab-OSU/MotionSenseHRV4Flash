@@ -584,6 +584,8 @@ static void run_bad_block_scan(bool dynamic)
 }
 #endif
 
+#define PPG_SHIP_MODE_RESET_CODE 69U
+
 static ssize_t bt_reset(struct bt_conn* conn, const struct bt_gatt_attr* attr, const void* buff, uint16_t len, 
 uint16_t offset, uint8_t flags){
   LOG_INF("Attribute write, handle: %u, conn: %p, length %i", attr->handle,
@@ -603,7 +605,11 @@ uint16_t offset, uint8_t flags){
   // check the bluetooth value entered for the correct code.
   uint8_t val = *((uint8_t *)buff);
   LOG_INF("entered code: %i", val);
-  if ((val == 68 || val == 121 || val == 132 || val == 200 || val == 201) && !collecting_data){
+  if (val == PPG_SHIP_MODE_RESET_CODE && vbus_present()) {
+    return len;
+  }
+  if ((val == 68 || val == PPG_SHIP_MODE_RESET_CODE || val == 121 ||
+       val == 132 || val == 200 || val == 201) && !collecting_data){
     LOG_INF("Correct Code Entered, Resetting Device");
     // Hold the disk lock from here until the reboot, so USB mass storage (still up with
     // CONFIG_USB_ALWAYS_ON) can't touch the flash bus during the filesystem shutdown,
@@ -618,7 +624,10 @@ uint16_t offset, uint8_t flags){
     connectedFlag=false;
     shutdown_filesystem();
 
-    
+    if (val == PPG_SHIP_MODE_RESET_CODE) {
+      ppg_enter_ship_mode();
+      return len;
+    }
     storage_clear_led();
     k_sleep(K_SECONDS(1));
     #if CONFIG_DISK_DRIVER_RAW_NAND || CONFIG_DISK_DRIVER_DHARA
@@ -882,7 +891,7 @@ void status_reg_ble_notification(){
     ble_status_register_send[x] = *status_registers[x];
   }
   const struct bt_gatt_attr *attr = &status_service.attrs[4];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+  if(connectedFlag && bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending status reg...");
     int ret = bt_gatt_notify(my_connection, attr, ble_status_register_send, sizeof(ble_status_register_send));
     if (ret != 0){
@@ -895,7 +904,7 @@ int storage_ble_notification(uint8_t* data, uint8_t len){
   // if there is no notification, then we technically have an error.
   int ret = -1;
   const struct bt_gatt_attr *attr = &status_service.attrs[2];
-  if(bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
+  if(connectedFlag && bt_gatt_is_subscribed(my_connection, attr, BT_GATT_CCC_NOTIFY)) {
     LOG_INF("sending ennmo...");
     int ret = bt_gatt_notify(my_connection, attr, data, len);
     if (ret != 0){

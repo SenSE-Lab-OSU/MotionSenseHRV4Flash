@@ -12,6 +12,8 @@
 #include <zephyr/drivers/sensor.h>
 #include "drivers/nand/nand_disk.h"
 #include <nrfx.h>
+#include <hal/nrf_power.h>
+#include <hal/nrf_usbreg.h>
 #include <nrfx_timer.h>
 #include <nrfx_uarte.h>
 #include <zephyr/logging/log.h>
@@ -492,10 +494,49 @@ void storage_clear_led(){
   gpio_pin_set(gpio0_device, LED1_PIN, 1);
 }
 
+/* GPREGRET[1] survives a software reset. Only bit 0 belongs to ship mode. */
+#define SHIP_MODE_GPREGRET 1
+#define SHIP_MODE_FLAG BIT(0)
+
+void ppg_enter_ship_mode(void)
+{
+  ppg_sleep();
+  motion_sleep();
+  uint32_t flags = nrf_power_gpregret_get(NRF_POWER, SHIP_MODE_GPREGRET);
+  nrf_power_gpregret_set(NRF_POWER, SHIP_MODE_GPREGRET, flags | SHIP_MODE_FLAG);
+  NVIC_SystemReset();
+}
+
+static void wait_in_ship_mode(void)
+{
+  uint32_t flags = nrf_power_gpregret_get(NRF_POWER, SHIP_MODE_GPREGRET);
+  if (!(flags & SHIP_MODE_FLAG)) {
+    return;
+  }
+
+  static const struct gpio_dt_spec outputs[] = {
+    GPIO_DT_SPEC_GET(LED_NODE, gpios),
+    GPIO_DT_SPEC_GET(LED1_NODE, gpios),
+    GPIO_DT_SPEC_GET(PPG_POWER_NODE, gpios),
+  };
+  for (size_t i = 0; i < ARRAY_SIZE(outputs); i++) {
+    gpio_pin_configure_dt(&outputs[i], GPIO_OUTPUT_INACTIVE);
+  }
+
+  /* USBDETECTED latches an attachment even if VBUS drops between checks. */
+  while (!vbus_present() &&
+         !nrf_usbreg_event_check(NRF_USBREGULATOR, NRF_USBREG_EVENT_USBDETECTED)) {
+    k_sleep(K_SECONDS(1));
+  }
+  nrf_power_gpregret_set(NRF_POWER, SHIP_MODE_GPREGRET, flags & ~SHIP_MODE_FLAG);
+  NVIC_SystemReset();
+}
+
 int main(void)
 {
 	int identity_err;
 
+  wait_in_ship_mode();
   printk("Starting Application... \n");
   LOG_INF("Starting Logging...\n");
 
